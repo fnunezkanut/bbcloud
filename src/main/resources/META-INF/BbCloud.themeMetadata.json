@@ -1,0 +1,11 @@
+{
+  "name": "bbcloud",
+  "fixed": false,
+  "ui": [
+    {
+      "key": "BbCloud.Review.CommentLineIndicator",
+      "description": "Purple indicator for lines with pull request comments",
+      "since": "[2026.2]"
+    }
+  ]
+}

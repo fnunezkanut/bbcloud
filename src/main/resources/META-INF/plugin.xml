@@ -1,0 +1,87 @@
+<idea-plugin>
+    <id>com.github.fnunezkanut.bbcloud</id>
+    <name>Bitbucket Cloud PR Review</name>
+    <vendor>fnunezkanut</vendor>
+    <description><![CDATA[
+        Bitbucket Cloud integration for IntelliJ IDEA.
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>Git4Idea</depends>
+    <depends>org.intellij.plugins.markdown</depends>
+    <!-- VCS classes (ChangesUtil, SimpleAsyncChangesBrowser, ComplexPathVirtualFileSystem, dvcs repo) moved into this plugin in 2026.3. -->
+    <depends optional="true" config-file="bbcloud-platform-vcs.xml">com.intellij.platform.vcs</depends>
+
+    <resource-bundle>messages.BbCloudBundle</resource-bundle>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <applicationService
+                serviceImplementation="com.github.fnunezkanut.bbcloud.review.BbCloudPullRequestViewedThreads"/>
+        <applicationService
+                serviceImplementation="com.github.fnunezkanut.bbcloud.git.BbCloudWorktreeService"/>
+        <applicationService
+                serviceImplementation="com.github.fnunezkanut.bbcloud.ui.pullrequest.decline.BbCloudPullRequestDeclineCoordinator"/>
+        <applicationService
+                serviceImplementation="com.github.fnunezkanut.bbcloud.settings.BbCloudSettings"/>
+        <applicationService
+                serviceInterface="com.github.fnunezkanut.bbcloud.credentials.BbCloudCredentialStore"
+                serviceImplementation="com.github.fnunezkanut.bbcloud.credentials.PasswordSafeBbCloudCredentialStore"/>
+        <notificationGroup id="BbCloud"
+                           displayType="BALLOON"
+                           key="notification.group.bbcloud"/>
+        <iconMapper mappingFile="BbCloudIconMappings.json"/>
+        <toolWindow id="Bitbucket Cloud PR Review"
+                    secondary="true"
+                    icon="/icons/prToolWindow.svg"
+                    anchor="bottom"
+                    factoryClass="com.github.fnunezkanut.bbcloud.toolwindow.BbCloudToolWindowFactory"/>
+        <projectService serviceImplementation="com.github.fnunezkanut.bbcloud.review.BbCloudPullRequestReviewState"/>
+        <projectService serviceImplementation="com.github.fnunezkanut.bbcloud.review.BbCloudPullRequestViewedFiles"/>
+        <projectService serviceImplementation="com.github.fnunezkanut.bbcloud.review.BbCloudWorktreePullRequestContext"/>
+        <projectService serviceImplementation="com.github.fnunezkanut.bbcloud.review.WorktreeTodoBannerViewModel"/>
+        <projectService serviceImplementation="com.github.fnunezkanut.bbcloud.review.WorktreePullRequestPageReloader"/>
+        <postStartupActivity implementation="com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.BbCloudPullRequestEditorStartupActivity"/>
+        <postStartupActivity implementation="com.github.fnunezkanut.bbcloud.review.BbCloudWorktreePullRequestContextStartupActivity"/>
+        <projectService serviceImplementation="com.github.fnunezkanut.bbcloud.ui.diff.BbCloudPullRequestDiffCommentService"/>
+        <projectService serviceImplementation="com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.BbCloudPullRequestEditorOpener"/>
+        <projectService serviceImplementation="com.github.fnunezkanut.bbcloud.ui.pullrequest.create.BbCloudNewPullRequestEditorOpener"/>
+        <projectService serviceImplementation="com.github.fnunezkanut.bbcloud.ui.BbCloudToolWindowPanel"/>
+        <projectConfigurable
+                parentId="tools"
+                instance="com.github.fnunezkanut.bbcloud.settings.BbCloudToolsConfigurable"
+                id="com.github.fnunezkanut.bbcloud.settings.BbCloudToolsConfigurable"
+                key="configurable.tools.displayName"
+                bundle="messages.BbCloudBundle"/>
+        <virtualFileSystem
+                key="bbcloudpr"
+                implementationClass="com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.BbCloudPullRequestVirtualFileSystem"/>
+        <fileEditorProvider
+                implementationClass="com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.BbCloudPullRequestFileEditorProvider"/>
+        <fileEditorProvider
+                implementationClass="com.github.fnunezkanut.bbcloud.ui.pullrequest.create.BbCloudNewPullRequestFileEditorProvider"/>
+        <editorTabTitleProvider
+                implementationClass="com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.BbCloudPullRequestEditorTabTitleProvider"/>
+        <fileType name="Bitbucket Cloud PR Review Overview"
+                  implementationClass="com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.BbCloudPullRequestFileType"
+                  fieldName="INSTANCE"/>
+        <fileType name="Bitbucket Cloud New PR"
+                  implementationClass="com.github.fnunezkanut.bbcloud.ui.pullrequest.create.BbCloudNewPullRequestFileType"
+                  fieldName="INSTANCE"/>
+        <editorNotificationProvider
+                implementation="com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.BbCloudPullRequestReviewBarProvider"/>
+        <editorNotificationProvider
+                implementation="com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.BbCloudWorktreePrViewBlueBarEditorNotificationProvider"/>
+        <treeStructureProvider
+                implementation="com.github.fnunezkanut.bbcloud.ui.pullrequest.projectView.BbCloudPullRequestTreeStructureProvider"/>
+        <postStartupActivity
+                implementation="com.github.fnunezkanut.bbcloud.ui.pullrequest.projectView.BbCloudPullRequestProjectViewRefreshStartupActivity"/>
+    </extensions>
+
+    <actions>
+        <action id="BbCloud.PullRequest.AddReviewComment"
+                class="com.github.fnunezkanut.bbcloud.ui.diff.PullRequestAddReviewCommentAction">
+            <add-to-group group-id="EditorGutterPopupMenu" anchor="first"/>
+            <add-to-group group-id="EditorPopupMenu" anchor="first"/>
+        </action>
+    </actions>
+</idea-plugin>
