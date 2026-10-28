@@ -66,6 +66,22 @@ class PullRequestConversationViewModelTest {
         }
     }
 
+    @Test
+    fun `fileExists - should be true for a path that has not been resolved yet`() {
+        // GIVEN
+        val viewModel = PullRequestConversationViewModel(
+            pullRequestId = { 273L },
+            commentEditor = mockk(relaxed = true),
+            isLocalFile = { _, _ -> false }
+        )
+
+        // WHEN
+        val result = viewModel.fileExists(path = "src/Main.kt")
+
+        // THEN
+        result shouldBe true
+    }
+
     private fun emptyConversation(): PullRequestConversation {
         return PullRequestConversation(
             threads = emptyList(),

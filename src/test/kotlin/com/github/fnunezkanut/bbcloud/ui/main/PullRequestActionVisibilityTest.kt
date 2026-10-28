@@ -13,47 +13,99 @@ import org.junit.jupiter.api.Test
 @Tag("unit")
 class PullRequestActionVisibilityTest {
     @Test
-    fun `visibleActions - should show merge approve mark as draft and decline for open ready pull request`() {
+    fun `visibleActions - should show merge approve request changes mark as draft and decline for open ready pull request`() {
         // WHEN
-        val actions = PullRequestActionVisibility.visibleActions(state = PullRequestState.Open, isDraft = false, isApprovedByCurrentUser = false)
+        val actions = PullRequestActionVisibility.visibleActions(
+            state = PullRequestState.Open,
+            isDraft = false,
+            isApprovedByCurrentUser = false,
+            isChangesRequestedByCurrentUser = false
+        )
 
         // THEN
-        actions shouldBe listOf(PullRequestAction.Merge, PullRequestAction.Approve, PullRequestAction.MarkAsDraft, PullRequestAction.Decline)
+        actions shouldBe listOf(
+            PullRequestAction.Merge,
+            PullRequestAction.Approve,
+            PullRequestAction.RequestChanges,
+            PullRequestAction.MarkAsDraft,
+            PullRequestAction.Decline
+        )
     }
 
     @Test
     fun `visibleActions - should show unapprove when current user already approved`() {
         // WHEN
-        val actions = PullRequestActionVisibility.visibleActions(state = PullRequestState.Open, isDraft = false, isApprovedByCurrentUser = true)
+        val actions = PullRequestActionVisibility.visibleActions(
+            state = PullRequestState.Open,
+            isDraft = false,
+            isApprovedByCurrentUser = true,
+            isChangesRequestedByCurrentUser = false
+        )
 
         // THEN
-        actions shouldBe listOf(PullRequestAction.Merge, PullRequestAction.Unapprove, PullRequestAction.MarkAsDraft, PullRequestAction.Decline)
+        actions shouldBe listOf(
+            PullRequestAction.Merge,
+            PullRequestAction.Unapprove,
+            PullRequestAction.RequestChanges,
+            PullRequestAction.MarkAsDraft,
+            PullRequestAction.Decline
+        )
     }
 
     @Test
-    fun `visibleActions - should hide merge and review actions and show mark as ready for open draft pull request`() {
+    fun `visibleActions - should show remove changes request when current user already requested changes`() {
         // WHEN
-        val actions = PullRequestActionVisibility.visibleActions(state = PullRequestState.Open, isDraft = true, isApprovedByCurrentUser = false)
+        val actions = PullRequestActionVisibility.visibleActions(
+            state = PullRequestState.Open,
+            isDraft = false,
+            isApprovedByCurrentUser = false,
+            isChangesRequestedByCurrentUser = true
+        )
+
+        // THEN
+        actions shouldBe listOf(
+            PullRequestAction.Merge,
+            PullRequestAction.Approve,
+            PullRequestAction.RemoveChangesRequest,
+            PullRequestAction.MarkAsDraft,
+            PullRequestAction.Decline
+        )
+    }
+
+    @Test
+    fun `visibleActions - should hide approve actions and show request changes for open draft pull request`() {
+        // WHEN
+        val actions = PullRequestActionVisibility.visibleActions(
+            state = PullRequestState.Open,
+            isDraft = true,
+            isApprovedByCurrentUser = false,
+            isChangesRequestedByCurrentUser = false
+        )
 
         // THEN
         assertSoftly {
             actions shouldNotContain PullRequestAction.Merge
             actions shouldNotContain PullRequestAction.Approve
             actions shouldNotContain PullRequestAction.Unapprove
-            actions shouldBe listOf(PullRequestAction.MarkAsReady, PullRequestAction.Decline)
+            actions shouldBe listOf(PullRequestAction.RequestChanges, PullRequestAction.MarkAsReady, PullRequestAction.Decline)
         }
     }
 
     @Test
-    fun `visibleActions - should hide review actions even when draft pull request is approved by current user`() {
+    fun `visibleActions - should hide approve actions but show remove changes request for draft pull request with changes requested`() {
         // WHEN
-        val actions = PullRequestActionVisibility.visibleActions(state = PullRequestState.Open, isDraft = true, isApprovedByCurrentUser = true)
+        val actions = PullRequestActionVisibility.visibleActions(
+            state = PullRequestState.Open,
+            isDraft = true,
+            isApprovedByCurrentUser = true,
+            isChangesRequestedByCurrentUser = true
+        )
 
         // THEN
         assertSoftly {
             actions shouldNotContain PullRequestAction.Approve
             actions shouldNotContain PullRequestAction.Unapprove
-            actions shouldBe listOf(PullRequestAction.MarkAsReady, PullRequestAction.Decline)
+            actions shouldBe listOf(PullRequestAction.RemoveChangesRequest, PullRequestAction.MarkAsReady, PullRequestAction.Decline)
         }
     }
 
@@ -67,16 +119,33 @@ class PullRequestActionVisibilityTest {
             closedStates.forEach { state ->
                 flags.forEach { isDraft ->
                     flags.forEach { isApproved ->
-                        // WHEN
-                        val actions = PullRequestActionVisibility.visibleActions(state = state, isDraft = isDraft, isApprovedByCurrentUser = isApproved)
+                        flags.forEach { isChangesRequested ->
+                            // WHEN
+                            val actions = PullRequestActionVisibility.visibleActions(
+                                state = state,
+                                isDraft = isDraft,
+                                isApprovedByCurrentUser = isApproved,
+                                isChangesRequestedByCurrentUser = isChangesRequested
+                            )
 
-                        // THEN
-                        withClue("state=$state, isDraft=$isDraft, isApproved=$isApproved") {
-                            actions.shouldBeEmpty()
+                            // THEN
+                            withClue("state=$state, isDraft=$isDraft, isApproved=$isApproved, isChangesRequested=$isChangesRequested") {
+                                actions.shouldBeEmpty()
+                            }
                         }
                     }
                 }
             }
+        }
+    }
+
+    @Test
+    fun `isDottedOutline - should dot only the changes requested action`() {
+        // WHEN / THEN
+        assertSoftly {
+            PullRequestActionVisibility.isDottedOutline(PullRequestAction.RemoveChangesRequest) shouldBe true
+            PullRequestActionVisibility.isDottedOutline(PullRequestAction.RequestChanges) shouldBe false
+            PullRequestActionVisibility.isDottedOutline(PullRequestAction.Approve) shouldBe false
         }
     }
 }

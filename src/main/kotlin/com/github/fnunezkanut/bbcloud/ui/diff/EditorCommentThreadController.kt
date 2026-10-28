@@ -50,6 +50,10 @@ internal class EditorCommentThreadController(
     override val currentUserAvatarUrl: String?
         get() = context.binding?.currentUserAvatarUrl ?: context.currentUserAvatarUrl
 
+    /** Read from the shared context on every access, so the inline cards follow the same snapshot as the comments they show. */
+    override val mentions: Map<String, String>
+        get() = context.mentionNames
+
     override val embeddedInEditor: Boolean
         get() = true
 
@@ -163,6 +167,11 @@ internal class EditorCommentThreadController(
         LOG.info("User opened $path from embedded comment in pull request #$pullRequestIdValue")
         val file = PullRequestCommentFileOpener.resolve(project = projectValue, inlinePath = path) ?: return
         PullRequestCommentFileOpener.open(project = projectValue, file = file, fileLine = line)
+    }
+
+    /** The inlay is drawn inside the file it comments on, so that file always exists. */
+    override fun fileExists(path: String): Boolean {
+        return true
     }
 
     override fun copyPath(path: String) {

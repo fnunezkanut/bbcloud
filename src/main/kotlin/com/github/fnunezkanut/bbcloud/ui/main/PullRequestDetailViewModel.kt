@@ -113,7 +113,8 @@ class PullRequestDetailViewModel(
         val actions = PullRequestActionVisibility.visibleActions(
             state = details.summary.state,
             isDraft = details.summary.isDraft,
-            isApprovedByCurrentUser = details.isApprovedByCurrentUser
+            isApprovedByCurrentUser = details.isApprovedByCurrentUser,
+            isChangesRequestedByCurrentUser = details.isChangesRequestedByCurrentUser
         )
         val mergeTooltip = when {
             PullRequestAction.Merge !in actions -> null
@@ -121,15 +122,26 @@ class PullRequestDetailViewModel(
             mergeChecksState == MergeChecksState.Blocked -> BbCloudBundle.message("main.branch.action.merge.blocked")
             else -> null
         }
-        val disabledActions = if (mergeTooltip == null) {
-            emptySet()
-        } else {
-            setOf(PullRequestAction.Merge)
+        val changesRequestActions = actions.filter { action ->
+            action == PullRequestAction.RequestChanges || action == PullRequestAction.RemoveChangesRequest
         }
-        val actionTooltips = if (mergeTooltip == null) {
-            emptyMap()
-        } else {
-            mapOf(PullRequestAction.Merge to mergeTooltip)
+        val disabledActions = buildSet {
+            if (mergeTooltip != null) {
+                add(PullRequestAction.Merge)
+            }
+            if (details.isAuthoredByCurrentUser) {
+                addAll(changesRequestActions)
+            }
+        }
+        val actionTooltips = buildMap {
+            if (mergeTooltip != null) {
+                put(PullRequestAction.Merge, mergeTooltip)
+            }
+            if (details.isAuthoredByCurrentUser) {
+                changesRequestActions.forEach { action ->
+                    put(action, BbCloudBundle.message("main.branch.action.requestChanges.ownPullRequest"))
+                }
+            }
         }
         state.value = state.value.copy(
             actions = actions,

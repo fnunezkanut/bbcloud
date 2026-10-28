@@ -129,6 +129,22 @@ class OkHttpBitbucketPullRequestClient(private val httpClient: OkHttpClient = sh
         }
     }
 
+    override suspend fun getUser(uuid: String, apiToken: String): ActivityUser? {
+        return withContext(Dispatchers.IO) {
+            val url = BitbucketPullRequestResponseParser.buildUserUrl(uuid = uuid)
+            LOG.info("Looking up mentioned account via GET $url")
+            val user = fetchBody(url = url, apiToken = apiToken)?.let { body ->
+                parseOrNull(url = url) { BitbucketPullRequestResponseParser.parseUser(responseBody = body) }
+            }
+            if (user == null) {
+                LOG.info("GET $url returned no usable user; the mention will show as unknown")
+            } else {
+                LOG.info("GET $url resolved mentioned account to a display name")
+            }
+            user
+        }
+    }
+
     override suspend fun listOpenPullRequestsReviewedBy(
         workspace: String,
         repoSlug: String,
@@ -229,7 +245,7 @@ class OkHttpBitbucketPullRequestClient(private val httpClient: OkHttpClient = sh
                 nextUrl = page.nextUrl
             }
             val isTruncated = nextUrl != null
-            LOG.debug("Parsed ${members.size} workspace members across $pagesFetched pages for $workspace (truncated=$isTruncated)")
+            LOG.info("Parsed ${members.size} workspace members across $pagesFetched pages for $workspace (truncated=$isTruncated)")
             WorkspaceMembers(members = members, isTruncated = isTruncated)
         }
     }
@@ -662,6 +678,16 @@ class OkHttpBitbucketPullRequestClient(private val httpClient: OkHttpClient = sh
             PullRequestAction.Unapprove -> {
                 builder
                     .url(BitbucketPullRequestResponseParser.buildApproveUrl(workspace = workspace, repoSlug = repoSlug, pullRequestId = pullRequest.id))
+                    .delete()
+            }
+            PullRequestAction.RequestChanges -> {
+                builder
+                    .url(BitbucketPullRequestResponseParser.buildRequestChangesUrl(workspace = workspace, repoSlug = repoSlug, pullRequestId = pullRequest.id))
+                    .post(EMPTY_JSON_BODY.toRequestBody(JSON_MEDIA_TYPE))
+            }
+            PullRequestAction.RemoveChangesRequest -> {
+                builder
+                    .url(BitbucketPullRequestResponseParser.buildRequestChangesUrl(workspace = workspace, repoSlug = repoSlug, pullRequestId = pullRequest.id))
                     .delete()
             }
             PullRequestAction.MarkAsDraft, PullRequestAction.MarkAsReady -> {

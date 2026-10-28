@@ -28,6 +28,35 @@ class PullRequestTimelineBuilderTest {
     )
 
     @Nested
+    inner class MentionTests {
+        @Test
+        fun `buildConversation - should carry the resolved mentions onto the conversation unchanged`() {
+            // GIVEN
+            val mentions = mapOf("11111111-1111-1111-1111-111111111111" to "Anna")
+
+            // WHEN
+            val conversation = PullRequestTimelineBuilder.buildConversation(
+                comments = PagedItems(items = emptyList(), isTruncated = false),
+                currentUserUuid = null,
+                currentUserAvatarUrl = null,
+                mentions = mentions
+            )
+
+            // THEN
+            conversation.mentions shouldBe mentions
+        }
+
+        @Test
+        fun `buildConversation - should default to no mentions`() {
+            // WHEN
+            val conversation = buildConversation()
+
+            // THEN
+            conversation.mentions shouldBe emptyMap()
+        }
+    }
+
+    @Nested
     inner class StateTests {
         @Test
         fun `buildActivityFeed - should add the opened entry from the summary`() {

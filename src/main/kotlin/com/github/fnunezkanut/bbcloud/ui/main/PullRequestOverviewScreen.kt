@@ -51,37 +51,50 @@ import org.jetbrains.jewel.ui.icons.AllIconsKeys
 
 private val CARD_GAP = 8.dp
 
-/** The Jewel Overview tab: the description and four existing cards in a golden-ratio split. */
+/**
+ * The Jewel Overview tab: the description with the history feed beneath it on the left, and four existing cards on the
+ * right, in a golden-ratio split. The left column scrolls as one, so a long description and a long history do not
+ * fight over the height.
+ */
 @Composable
-fun PullRequestOverviewScreen(viewModel: PullRequestOverviewViewModel) {
+fun PullRequestOverviewScreen(viewModel: PullRequestOverviewViewModel, historyViewModel: PullRequestHistoryViewModel) {
     val state by viewModel.state
     Row(
         modifier = Modifier.fillMaxSize(),
         horizontalArrangement = Arrangement.spacedBy(CARD_GAP)
     ) {
-        Column(
+        VerticallyScrollableContainer(
             modifier = Modifier
                 .weight(GOLDEN_RATIO_LEFT)
                 .fillMaxHeight()
         ) {
-            TitledCardBox(title = null) {
-                Column(modifier = Modifier.fillMaxSize()) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(bottom = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = state.description.title,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.weight(1f)
-                        )
-                        if (state.description.isEditable && !state.description.isEditing) {
-                            EditDescriptionButton(onClick = viewModel::onEditDescription)
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(CARD_GAP)
+            ) {
+                TitledCardBox(title = null) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = state.description.title,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.weight(1f)
+                            )
+                            if (state.description.isEditable && !state.description.isEditing) {
+                                EditDescriptionButton(onClick = viewModel::onEditDescription)
+                            }
                         }
+                        DescriptionBody(viewModel = viewModel)
                     }
-                    DescriptionBody(viewModel = viewModel)
+                }
+                // The feed renders its own bold "History" title, so the card carries no title of its own.
+                TitledCardBox {
+                    PullRequestHistoryFeedScreen(viewModel = historyViewModel)
                 }
             }
         }
@@ -133,9 +146,8 @@ private fun DescriptionBody(viewModel: PullRequestOverviewViewModel) {
         if (markdown.isNullOrBlank()) {
             state.description.emptyMessage?.let { message -> MessageText(text = message) }
         } else {
-            VerticallyScrollableContainer(modifier = Modifier.fillMaxSize()) {
-                MarkdownDescription(markdown = markdown)
-            }
+            // The left column of the Overview tab scrolls, so the description sizes to its content here.
+            MarkdownDescription(markdown = markdown)
         }
         return
     }
@@ -146,6 +158,7 @@ private fun DescriptionBody(viewModel: PullRequestOverviewViewModel) {
         viewModel = composerViewModel,
         avatarIcon = viewModel.avatarIconFor(null),
         showsCollapsedField = false,
+        showsDottedBorder = true,
         onCollapsed = viewModel::onCancelDescriptionEdit
     )
 }
@@ -440,7 +453,7 @@ private fun TasksViewContent(tasks: TasksSectionState, viewModel: PullRequestOve
                 onCheckedChange = { resolved -> viewModel.onTaskResolvedChanged(row.id, resolved) },
                 enabled = row.enabled
             )
-            Text(text = row.content)
+            SelectableText(text = row.content)
         }
     }
     if (!tasks.isEditable) {

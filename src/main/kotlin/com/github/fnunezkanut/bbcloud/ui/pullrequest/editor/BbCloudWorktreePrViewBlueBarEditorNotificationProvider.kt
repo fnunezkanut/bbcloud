@@ -4,6 +4,7 @@ import com.github.fnunezkanut.bbcloud.config.BbCloudConfigurationService
 import com.github.fnunezkanut.bbcloud.project.PullRequestWorktreeProject
 import com.github.fnunezkanut.bbcloud.review.WorktreeTodoBannerViewModel
 import com.github.fnunezkanut.bbcloud.ui.pullrequest.create.BbCloudNewPullRequestVirtualFile
+import com.intellij.diff.editor.DiffViewerVirtualFile
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.fileEditor.FileEditor
 import com.intellij.openapi.project.DumbAware
@@ -29,6 +30,12 @@ class BbCloudWorktreePrViewBlueBarEditorNotificationProvider :
         // above it even when the project itself is a plugin-managed worktree.
         if (file is BbCloudNewPullRequestVirtualFile) {
             LOG.debug("Blue bar skipped: the file is the new pull request form")
+            return null
+        }
+        // The diff views get the blue bar inside the diff through PullRequestDiffBarsDiffExtension, so an editor
+        // notification above the diff tab would show a second bar.
+        if (file is DiffViewerVirtualFile) {
+            LOG.debug("Blue bar skipped: the diff view gets the blue bar from the diff extension")
             return null
         }
         val projectBasePath = project.basePath

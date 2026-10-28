@@ -1,6 +1,7 @@
 package com.github.fnunezkanut.bbcloud.ui.main
 
 import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import com.github.fnunezkanut.bbcloud.BbCloudBundle
 import com.github.fnunezkanut.bbcloud.bitbucket.CommentChange
@@ -12,10 +13,14 @@ import com.github.fnunezkanut.bbcloud.review.BbCloudPullRequestViewedThreads
 import com.github.fnunezkanut.bbcloud.review.PullRequestThreadFingerprint
 import com.github.fnunezkanut.bbcloud.review.PullRequestViewedThreadKey
 import com.intellij.collaboration.ui.codereview.comment.CommentInputActionsComponentFactory
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.project.Project
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.datetime.TimeZone
 import javax.swing.Icon
 import kotlin.time.Clock
@@ -30,9 +35,16 @@ import kotlin.time.Clock
 class PullRequestConversationViewModel(
     private val pullRequestId: () -> Long?,
     private val commentEditor: CommentEditor,
-    private val avatarCache: AuthorAvatarCache = AuthorAvatarCache(avatarSize = CONVERSATION_AVATAR_SIZE)
+    private val avatarCache: AuthorAvatarCache = AuthorAvatarCache(avatarSize = CONVERSATION_AVATAR_SIZE),
+    private val isLocalFile: (Project, String) -> Boolean = { project, path ->
+        PullRequestCommentFileOpener.resolve(project = project, inlinePath = path) != null
+    }
 ) : CommentThreadCardHost {
     val state: MutableState<PullRequestConversationUiState> = mutableStateOf(initialState())
+
+    /** Whether each inline comment path of the rendered conversation still exists locally; filled off the UI thread. */
+    private val fileExistence = mutableStateMapOf<String, Boolean>()
+    private var fileExistenceRequestId = 0
 
     override val currentUserUuid: String?
         get() = state.value.currentUserUuid
@@ -42,6 +54,8 @@ class PullRequestConversationViewModel(
         get() = state.value.avatarRevision
     override val openComposer: ConversationComposerTarget?
         get() = state.value.openComposer
+    override val mentions: Map<String, String>
+        get() = state.value.mentions
 
     private val viewedThreads by lazy { BbCloudPullRequestViewedThreads.getInstance() }
     private var coroutineScope: CoroutineScope? = null
@@ -77,6 +91,7 @@ class PullRequestConversationViewModel(
             groups = groups,
             currentUserUuid = conversation.currentUserUuid,
             currentUserAvatarUrl = conversation.currentUserAvatarUrl,
+            mentions = conversation.mentions,
             scrollRequest = newScrollRequest(force = !inPlaceRefresh && !isSamePullRequest)
         )
         LOG.debug("Rendered ${conversation.threads.size} conversation threads for pull request #$currentPullRequestId")
@@ -85,6 +100,39 @@ class PullRequestConversationViewModel(
             coroutineScope = coroutineScope,
             onLoaded = { bumpAvatarRevision() }
         )
+        refreshFileExistence(conversation = conversation, coroutineScope = coroutineScope)
+    }
+
+    /**
+     * Resolves which inline comment files still exist, off the UI thread, and publishes the result on the UI thread. The
+     * composable only reads the published map, so it never runs a read action while it draws. Results of an older call
+     * are dropped, so a slower refresh cannot overwrite a newer one.
+     */
+    private fun refreshFileExistence(conversation: PullRequestConversation, coroutineScope: CoroutineScope) {
+        val currentProject = project()
+        val paths = conversation.threads
+            .flatMap { thread -> listOf(thread.root) + thread.replies }
+            .mapNotNull { comment -> comment.inlinePath }
+            .distinct()
+        fileExistenceRequestId++
+        val requestId = fileExistenceRequestId
+        if (currentProject == null || paths.isEmpty()) {
+            fileExistence.clear()
+            return
+        }
+        coroutineScope.launch {
+            val existence = withContext(Dispatchers.IO) {
+                paths.associateWith { path -> isLocalFile(currentProject, path) }
+            }
+            ApplicationManager.getApplication().invokeLater {
+                if (requestId != fileExistenceRequestId) {
+                    return@invokeLater
+                }
+                LOG.debug("Pull request #${pullRequestId()} has ${existence.count { entry -> !entry.value }} inline comment file(s) missing locally")
+                fileExistence.clear()
+                fileExistence.putAll(existence)
+            }
+        }
     }
 
     /** Shows the newest entry again when the Conversation tab is re-selected. */
@@ -96,6 +144,8 @@ class PullRequestConversationViewModel(
     fun reset() {
         coroutineScope = null
         displayedPullRequestId = null
+        fileExistenceRequestId++
+        fileExistence.clear()
         state.value = initialState()
     }
 
@@ -153,6 +203,11 @@ class PullRequestConversationViewModel(
         val currentProject = project() ?: return
         val file = PullRequestCommentFileOpener.resolve(project = currentProject, inlinePath = path) ?: return
         PullRequestCommentFileOpener.open(project = currentProject, file = file, fileLine = line)
+    }
+
+    /** Paths that are not resolved yet count as existing, so the file link does not flicker to the PR icon on load. */
+    override fun fileExists(path: String): Boolean {
+        return fileExistence[path] ?: true
     }
 
     override fun copyPath(path: String) {

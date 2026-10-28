@@ -58,8 +58,9 @@ private val ICON_TEXT_GAP = 4.dp
  * The coloured-outline action button the plugin uses for its primary, secondary, and destructive actions.
  *
  * The outline follows the theme: it is drawn with the colour the caller supplies while the button is enabled, and with
- * the theme-aware disabled colour, as a dotted line, while it is disabled. Hovering the button fills it with a faint
- * wash of the outline colour.
+ * the theme-aware disabled colour, as a dotted line, while it is disabled. [dotted] draws the outline as a dotted line
+ * in the caller's colour even while the button is enabled, to mark a state that is already active. Hovering the button
+ * fills it with a faint wash of the outline colour.
  */
 @Composable
 internal fun BbCloudOutlinedActionButton(
@@ -68,7 +69,8 @@ internal fun BbCloudOutlinedActionButton(
     outlineColor: Color,
     enabled: Boolean,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    dotted: Boolean = false
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val hovered by interactionSource.collectIsHoveredAsState()
@@ -101,7 +103,7 @@ internal fun BbCloudOutlinedActionButton(
                     color = outline,
                     style = Stroke(
                         width = strokeWidth,
-                        pathEffect = if (enabled) {
+                        pathEffect = if (enabled && !dotted) {
                             null
                         } else {
                             PathEffect.dashPathEffect(floatArrayOf(DASH_LENGTH.toPx(), DASH_GAP.toPx()))

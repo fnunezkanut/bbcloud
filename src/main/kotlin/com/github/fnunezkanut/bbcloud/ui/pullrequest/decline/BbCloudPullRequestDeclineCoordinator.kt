@@ -31,9 +31,12 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.cancellation.CancellationException
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 
 internal data class PullRequestDeclineRequest(
     val project: Project,
@@ -370,7 +373,9 @@ internal class PullRequestDeclineOrchestrator(
  */
 internal class ClosedPullRequestWorktreeCleanupOrchestrator(
     private val scope: CoroutineScope,
-    private val cleanupOrchestrator: WorktreeProjectCleanupOrchestrator
+    private val cleanupOrchestrator: WorktreeProjectCleanupOrchestrator,
+    private val cleanupModal: CleanupModal = ProgressCleanupModal,
+    private val modalAutoCloseTimeout: Duration = MODAL_AUTO_CLOSE_TIMEOUT
 ) {
     /**
      * Runs the whole closed-PR cleanup on the application scope so it outlives the editor session being closed. The
@@ -399,16 +404,20 @@ internal class ClosedPullRequestWorktreeCleanupOrchestrator(
             }
             onCompleted(completion)
         }
-        // Shows the project-scoped modal for the duration; dismissing it (for example when the project closes) does not
-        // stop the cleanup job above.
+        // Shows the project-scoped modal for at most [modalAutoCloseTimeout]; dismissing it (for example when the project
+        // closes, the user cancels, or the timeout elapses) does not stop the cleanup job above.
         scope.launch {
             try {
-                withModalProgress(
-                    owner = ModalTaskOwner.project(request.project),
-                    title = BbCloudBundle.message("main.branch.closed.cleanup.modalTitle"),
-                    cancellation = TaskCancellation.cancellable()
-                ) {
-                    cleanupJob.join()
+                cleanupModal.show(project = request.project) {
+                    val settled = withTimeoutOrNull(modalAutoCloseTimeout) {
+                        cleanupJob.join()
+                    }
+                    if (settled == null) {
+                        LOG.info(
+                            "Closed pull request #${request.pullRequestId} cleanup modal auto-closed after " +
+                                "$modalAutoCloseTimeout while work continues"
+                        )
+                    }
                 }
             } catch (exception: CancellationException) {
                 LOG.debug("Closed pull request #${request.pullRequestId} cleanup modal was dismissed while work continues")
@@ -493,6 +502,27 @@ internal class ClosedPullRequestWorktreeCleanupOrchestrator(
     companion object {
         private val LOG = logger<ClosedPullRequestWorktreeCleanupOrchestrator>()
         private const val NOTIFICATION_GROUP_ID = "BbCloud"
+
+        /** How long the cleanup modal stays visible; it bounds only the modal, never the cleanup job itself. */
+        internal val MODAL_AUTO_CLOSE_TIMEOUT: Duration = 10.seconds
+    }
+}
+
+/** Shows a blocking progress modal for the duration of [block]; seam so tests need not open a real dialog. */
+internal fun interface CleanupModal {
+    suspend fun show(project: Project, block: suspend () -> Unit)
+}
+
+/** Production [CleanupModal] backed by the platform's project-scoped modal progress. */
+internal object ProgressCleanupModal : CleanupModal {
+    override suspend fun show(project: Project, block: suspend () -> Unit) {
+        withModalProgress(
+            owner = ModalTaskOwner.project(project),
+            title = BbCloudBundle.message("main.branch.closed.cleanup.modalTitle"),
+            cancellation = TaskCancellation.cancellable()
+        ) {
+            block()
+        }
     }
 }
 

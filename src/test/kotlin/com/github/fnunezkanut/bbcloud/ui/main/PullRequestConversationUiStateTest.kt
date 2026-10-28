@@ -36,7 +36,7 @@ class PullRequestConversationUiStateTest {
             // THEN
             assertSoftly {
                 groups.size shouldBe 2
-                groups.map { group -> group.day } shouldBe listOf(ActivityDay.Today, ActivityDay.Earlier(LocalDate.parse("2026-09-28")))
+                groups.map { group -> group.day } shouldBe listOf(HistoryDay.Today, HistoryDay.Earlier(LocalDate.parse("2026-09-28")))
                 groups.map { group -> group.entries.size } shouldBe listOf(1, 1)
             }
         }

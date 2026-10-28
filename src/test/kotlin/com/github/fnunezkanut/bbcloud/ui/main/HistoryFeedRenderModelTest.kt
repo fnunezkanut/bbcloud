@@ -15,7 +15,7 @@ import org.junit.jupiter.api.Test
 import kotlin.time.Instant
 
 @Tag("unit")
-class ActivityFeedRenderModelTest {
+class HistoryFeedRenderModelTest {
     private val date = Instant.parse("2026-09-30T10:00:00Z")
 
     private fun opened(date: Instant = this.date): TimelineEntry.Opened {

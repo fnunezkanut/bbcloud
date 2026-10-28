@@ -101,6 +101,23 @@ object BitbucketPullRequestResponseParser {
         return "$BITBUCKET_API_BASE/user?fields=uuid,links.avatar.href"
     }
 
+    /**
+     * Builds the single-account lookup. [uuid] keeps its braces, because Bitbucket writes account keys that way and the
+     * path segment encoder escapes them; the Atlassian account id form is passed through unchanged.
+     */
+    fun buildUserUrl(uuid: String): String {
+        val url = "$BITBUCKET_API_BASE/users".toHttpUrl().newBuilder()
+            .addPathSegment(uuid)
+            .addQueryParameter(name = "fields", value = ACCOUNT_SUBFIELDS)
+            .build()
+        return url.toString()
+    }
+
+    /** Reads a single account; null when the account has no usable display name or the body is not an account. */
+    fun parseUser(responseBody: String): ActivityUser? {
+        return json.decodeFromString(AccountEntry.serializer(), responseBody).toActivityUser()
+    }
+
     fun buildPullRequestUrl(workspace: String, repoSlug: String, pullRequestId: Long): String {
         // If a fields filter is added here, it must include rendered.description.raw, rendered.description.html, and description.
         return "$BITBUCKET_API_BASE/repositories/$workspace/$repoSlug/pullrequests/$pullRequestId"
@@ -112,6 +129,10 @@ object BitbucketPullRequestResponseParser {
 
     fun buildApproveUrl(workspace: String, repoSlug: String, pullRequestId: Long): String {
         return buildPullRequestUrl(workspace = workspace, repoSlug = repoSlug, pullRequestId = pullRequestId) + "/approve"
+    }
+
+    fun buildRequestChangesUrl(workspace: String, repoSlug: String, pullRequestId: Long): String {
+        return buildPullRequestUrl(workspace = workspace, repoSlug = repoSlug, pullRequestId = pullRequestId) + "/request-changes"
     }
 
     fun buildDeclineUrl(workspace: String, repoSlug: String, pullRequestId: Long): String {
@@ -312,12 +333,17 @@ object BitbucketPullRequestResponseParser {
         val summary = entry.toSummary() ?: return null
         val isApproved = currentUserUuid != null &&
             entry.participants.any { participant -> participant.approved == true && participant.user?.uuid == currentUserUuid }
+        val isChangesRequested = currentUserUuid != null &&
+            entry.participants.any { participant -> participant.state == CHANGES_REQUESTED_STATE && participant.user?.uuid == currentUserUuid }
+        val authorUuid = entry.author?.uuid?.takeIf { it.isNotBlank() }
         return PullRequestDetails(
             summary = summary,
             isApprovedByCurrentUser = isApproved,
             reviewers = entry.reviewers.mapNotNull { reviewer -> reviewer.toReviewer(participants = entry.participants) },
-            authorUuid = entry.author?.uuid?.takeIf { it.isNotBlank() },
-            description = entry.descriptionMarkdown()
+            authorUuid = authorUuid,
+            description = entry.descriptionMarkdown(),
+            isChangesRequestedByCurrentUser = isChangesRequested,
+            isAuthoredByCurrentUser = currentUserUuid != null && authorUuid == currentUserUuid
         )
     }
 
@@ -575,7 +601,7 @@ object BitbucketPullRequestResponseParser {
     private const val RESOLVED_TASK_STATE = "RESOLVED"
     private const val UNRESOLVED_TASK_STATE = "UNRESOLVED"
 
-    private const val ACCOUNT_SUBFIELDS = "uuid,display_name,links.avatar.href"
+    private const val ACCOUNT_SUBFIELDS = "uuid,account_id,display_name,links.avatar.href"
 
     private val TASK_FIELDS = listOf(
         "next",
@@ -900,6 +926,8 @@ object BitbucketPullRequestResponseParser {
     @Serializable
     private data class AccountEntry(
         val uuid: String? = null,
+        @SerialName("account_id")
+        val accountId: String? = null,
         @SerialName("display_name")
         val displayName: String? = null,
         val nickname: String? = null,

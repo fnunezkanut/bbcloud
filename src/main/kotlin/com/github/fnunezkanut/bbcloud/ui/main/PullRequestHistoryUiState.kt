@@ -4,22 +4,22 @@ import com.github.fnunezkanut.bbcloud.bitbucket.ActivityFeedEntry
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestActivityFeed
 
 /**
- * The Compose state of the activity feed card of the Changes tab: the day-grouped entries plus the partial-failure
+ * The Compose state of the History card of the Overview tab: the day-grouped entries plus the partial-failure
  * and truncation notices of the feed.
  */
-data class PullRequestActivityUiState(
+data class PullRequestHistoryUiState(
     val title: String = "",
     val showPartialFailure: Boolean = false,
     val showTruncation: Boolean = false,
-    val groups: List<ActivityDayGroup> = emptyList(),
+    val groups: List<HistoryDayGroup> = emptyList(),
     val avatarRevision: Int = 0
 )
 
-internal data class ActivityFeedRenderModel(val showPartialFailure: Boolean, val showTruncation: Boolean, val entries: List<ActivityFeedEntry>)
+internal data class HistoryFeedRenderModel(val showPartialFailure: Boolean, val showTruncation: Boolean, val entries: List<ActivityFeedEntry>)
 
-internal fun computeRenderModel(feed: PullRequestActivityFeed?): ActivityFeedRenderModel? {
+internal fun computeRenderModel(feed: PullRequestActivityFeed?): HistoryFeedRenderModel? {
     if (feed == null) return null
-    return ActivityFeedRenderModel(
+    return HistoryFeedRenderModel(
         showPartialFailure = feed.hasPartialFailure,
         showTruncation = feed.isTruncated,
         entries = feed.entries

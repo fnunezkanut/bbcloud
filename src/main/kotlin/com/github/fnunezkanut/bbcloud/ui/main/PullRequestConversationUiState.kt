@@ -35,21 +35,23 @@ data class ConversationScrollRequest(val id: Int, val force: Boolean)
 data class PullRequestConversationUiState(
     val loadState: PullRequestConversationLoadState = PullRequestConversationLoadState.Loading,
     val isTruncated: Boolean = false,
-    val groups: List<ActivityDayGroup> = emptyList(),
+    val groups: List<HistoryDayGroup> = emptyList(),
     val currentUserUuid: String? = null,
     val currentUserAvatarUrl: String? = null,
     val avatarRevision: Int = 0,
     val updatingCommentIds: Set<Long> = emptySet(),
     val openComposer: ConversationComposerTarget? = null,
-    val scrollRequest: ConversationScrollRequest? = null
+    val scrollRequest: ConversationScrollRequest? = null,
+    /** Display names of the `@{account-key}` mentions, from [PullRequestConversation.mentions]. */
+    val mentions: Map<String, String> = emptyMap()
 )
 
 /**
  * Groups the comment threads of a conversation by the day they were written on, keeping the order of the threads, which
  * Bitbucket returns newest first.
  */
-internal fun groupConversationThreads(threads: List<TimelineEntry.CommentThread>, now: Instant, timeZone: TimeZone): List<ActivityDayGroup> {
-    return ActivityDayGroups.group(entries = threads, now = now, timeZone = timeZone)
+internal fun groupConversationThreads(threads: List<TimelineEntry.CommentThread>, now: Instant, timeZone: TimeZone): List<HistoryDayGroup> {
+    return HistoryDayGroups.group(entries = threads, now = now, timeZone = timeZone)
 }
 
 /** The comment threads of the state, flattened out of their day groups. */

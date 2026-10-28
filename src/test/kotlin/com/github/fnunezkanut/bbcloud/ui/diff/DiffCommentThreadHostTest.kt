@@ -6,6 +6,7 @@ import androidx.compose.ui.awt.UNSPECIFIED_DIMENSION_VALUE
 import com.intellij.collaboration.ui.layout.SizeRestrictedSingleComponentLayout
 import com.intellij.collaboration.ui.util.DimensionRestrictions
 import io.kotest.assertions.assertSoftly
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Tag
@@ -162,6 +163,69 @@ class DiffCommentThreadHostTest {
             val wrapper = JPanel(BorderLayout())
 
             liftInlayWrapperWidthCap(wrapper = wrapper) shouldBe false
+        }
+    }
+
+    @Nested
+    inner class InlayHeightOrFallback {
+        @Test
+        fun `inlayHeightOrFallback - should return the resolved height without reporting a failure`() {
+            // GIVEN a resolver that yields a measured height
+            var failures = 0
+
+            // WHEN the height is resolved
+            val height = inlayHeightOrFallback(
+                resolve = { 120 },
+                fallback = { 40 },
+                onFailure = { failures++ }
+            )
+
+            // THEN the measured height is returned and no failure is reported
+            assertSoftly {
+                height shouldBe 120
+                failures shouldBe 0
+            }
+        }
+
+        @Test
+        fun `inlayHeightOrFallback - should use the fallback when the resolver yields no value`() {
+            // GIVEN a resolver that has no height yet
+            val height = inlayHeightOrFallback(
+                resolve = { null },
+                fallback = { 40 },
+                onFailure = { throw AssertionError("no failure expected") }
+            )
+
+            // THEN the fallback height is returned
+            height shouldBe 40
+        }
+
+        @Test
+        fun `inlayHeightOrFallback - should report and replace an IllegalStateException with the fallback`() {
+            // GIVEN a measurement that throws the way ComposeContainer.actualizeSize does
+            var reported: IllegalStateException? = null
+
+            // WHEN the height is resolved
+            val height = inlayHeightOrFallback(
+                resolve = { throw IllegalStateException("Unable to actualize size of Compose content") },
+                fallback = { 40 },
+                onFailure = { exception -> reported = exception }
+            )
+
+            // THEN the fallback is returned and the exception is handed to the reporter
+            assertSoftly {
+                height shouldBe 40
+                reported?.message shouldBe "Unable to actualize size of Compose content"
+            }
+        }
+
+        @Test
+        fun `inlayHeightOrFallback - should propagate exceptions other than IllegalStateException`() {
+            // GIVEN a measurement that fails with an unrelated exception
+            val act = { inlayHeightOrFallback(resolve = { throw IllegalArgumentException("unexpected") }, fallback = { 40 }, onFailure = {}) }
+
+            // WHEN the height is resolved, THEN the unrelated exception is not swallowed
+            shouldThrow<IllegalArgumentException> { act() }
         }
     }
 }

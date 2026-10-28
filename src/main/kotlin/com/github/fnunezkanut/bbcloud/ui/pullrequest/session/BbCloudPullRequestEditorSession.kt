@@ -720,6 +720,13 @@ class BbCloudPullRequestEditorSession(
                 organizationUrl = url
             )
             val commentItems = comments?.items
+            val mentionNames = commentItems?.let { items ->
+                openPullRequestService.pullRequestMentionNames(
+                    projectBasePath = basePath,
+                    organizationUrl = url,
+                    comments = items
+                )
+            }.orEmpty()
             invokeOnEdt {
                 val completion = fileCommentCountsLoadState.complete(
                     pullRequestId = pullRequestId,
@@ -737,7 +744,8 @@ class BbCloudPullRequestEditorSession(
                     BbCloudWorktreePullRequestContext.getInstance(project).publishComments(
                         pullRequestId = pullRequestId,
                         comments = items,
-                        userUuid = userUuid
+                        userUuid = userUuid,
+                        mentionNames = mentionNames
                     )
                 }
                 val reviewState = BbCloudPullRequestReviewState.getInstance(project)

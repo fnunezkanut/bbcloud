@@ -1,6 +1,8 @@
 package com.github.fnunezkanut.bbcloud.bitbucket
 
+import com.github.fnunezkanut.bbcloud.BbCloudBundle
 import com.github.fnunezkanut.bbcloud.credentials.BbCloudCredentialStore
+import com.github.fnunezkanut.bbcloud.review.BbCloudUserDisplayNameCache
 import io.kotest.assertions.assertSoftly
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.nulls.shouldNotBeNull
@@ -577,6 +579,237 @@ class BbCloudOpenPullRequestServiceTest {
                 coVerify(exactly = 0) { client.listTasks(any(), any(), any(), any()) }
                 coVerify(exactly = 0) { client.listActivity(any(), any(), any(), any()) }
             }
+
+        @Test
+        fun `pullRequestOverview - should name a mention after the comment author without a lookup`(): Unit =
+            runBlocking {
+                // GIVEN
+                val client = overviewClient()
+                stubTimelineSources(client, comments = mentionComments(mentionedKey = annaKey, author = anna))
+                val service = mentionService(client = client, cache = BbCloudUserDisplayNameCache())
+
+                // WHEN
+                val overview = service.pullRequestOverview(projectBasePath = basePath, organizationUrl = organizationUrl, summary = summary)
+
+                // THEN
+                overview.conversation.shouldNotBeNull().mentions shouldBe mapOf(annaKey to "Anna")
+                coVerify(exactly = 0) { client.getUser(any(), any()) }
+            }
+
+        @Test
+        fun `pullRequestOverview - should prefer the comment author name over the workspace member name`(): Unit =
+            runBlocking {
+                // GIVEN
+                val client =
+                    overviewClient(members = membersOf(ReviewerCandidate(uuid = annaUuid, displayName = "Anna Member", nickname = null, avatarUrl = null)))
+                stubTimelineSources(client, comments = mentionComments(mentionedKey = annaKey, author = anna))
+                val service = mentionService(client = client, cache = BbCloudUserDisplayNameCache())
+
+                // WHEN
+                val overview = service.pullRequestOverview(projectBasePath = basePath, organizationUrl = organizationUrl, summary = summary)
+
+                // THEN
+                overview.conversation.shouldNotBeNull().mentions shouldBe mapOf(annaKey to "Anna")
+            }
+
+        @Test
+        fun `pullRequestOverview - should name a mention from the workspace members when no comment names the account`(): Unit =
+            runBlocking {
+                // GIVEN
+                val client = overviewClient(members = membersOf(ReviewerCandidate(uuid = benUuid, displayName = "Ben", nickname = null, avatarUrl = null)))
+                stubTimelineSources(client, comments = mentionComments(mentionedKey = benKey, author = anna))
+                val service = mentionService(client = client, cache = BbCloudUserDisplayNameCache())
+
+                // WHEN
+                val overview = service.pullRequestOverview(projectBasePath = basePath, organizationUrl = organizationUrl, summary = summary)
+
+                // THEN
+                overview.conversation.shouldNotBeNull().mentions shouldBe mapOf(benKey to "Ben")
+                coVerify(exactly = 0) { client.getUser(any(), any()) }
+            }
+
+        @Test
+        fun `pullRequestOverview - should look up an unknown mention and use the name Bitbucket returns`(): Unit =
+            runBlocking {
+                // GIVEN
+                val client = overviewClient()
+                stubTimelineSources(client, comments = mentionComments(mentionedKey = benKey, author = anna))
+                coEvery { client.getUser(uuid = benUuid, apiToken = "token") } returns ActivityUser(uuid = benUuid, displayName = "Ben", avatarUrl = null)
+                val service = mentionService(client = client, cache = BbCloudUserDisplayNameCache())
+
+                // WHEN
+                val overview = service.pullRequestOverview(projectBasePath = basePath, organizationUrl = organizationUrl, summary = summary)
+
+                // THEN
+                overview.conversation.shouldNotBeNull().mentions shouldBe mapOf(benKey to "Ben")
+                coVerify(exactly = 1) { client.getUser(uuid = benUuid, apiToken = "token") }
+            }
+
+        @Test
+        fun `pullRequestOverview - should look up an Atlassian account id without braces`(): Unit =
+            runBlocking {
+                // GIVEN
+                val accountId = "712020:00000000-0000-0000-0000-000000000000"
+                val client = overviewClient()
+                stubTimelineSources(client, comments = mentionComments(mentionedKey = accountId, author = anna))
+                coEvery { client.getUser(uuid = accountId, apiToken = "token") } returns
+                    ActivityUser(uuid = "{33333333-3333-3333-3333-333333333333}", displayName = "PR Ranger", avatarUrl = null)
+                val service = mentionService(client = client, cache = BbCloudUserDisplayNameCache())
+
+                // WHEN
+                val overview = service.pullRequestOverview(projectBasePath = basePath, organizationUrl = organizationUrl, summary = summary)
+
+                // THEN
+                overview.conversation.shouldNotBeNull().mentions shouldBe mapOf(accountId to "PR Ranger")
+                coVerify(exactly = 1) { client.getUser(uuid = accountId, apiToken = "token") }
+                coVerify(exactly = 0) { client.getUser(uuid = "{$accountId}", apiToken = "token") }
+            }
+
+        @Test
+        fun `pullRequestOverview - should label a mention that cannot be resolved as an unknown user`(): Unit =
+            runBlocking {
+                // GIVEN
+                val client = overviewClient()
+                stubTimelineSources(client, comments = mentionComments(mentionedKey = benKey, author = anna))
+                coEvery { client.getUser(uuid = benUuid, apiToken = "token") } returns null
+                val service = mentionService(client = client, cache = BbCloudUserDisplayNameCache())
+
+                // WHEN
+                val overview = service.pullRequestOverview(projectBasePath = basePath, organizationUrl = organizationUrl, summary = summary)
+
+                // THEN
+                overview.conversation.shouldNotBeNull().mentions shouldBe mapOf(benKey to BbCloudBundle.message("main.branch.history.unknownUser"))
+            }
+
+        @Test
+        fun `pullRequestOverview - should keep resolving mentions and load the conversation when the member listing fails`(): Unit =
+            runBlocking {
+                // GIVEN
+                val client = overviewClient(members = null)
+                stubTimelineSources(client, comments = mentionComments(mentionedKey = benKey, author = anna, extraKey = annaKey))
+                coEvery { client.getUser(uuid = benUuid, apiToken = "token") } returns ActivityUser(uuid = benUuid, displayName = "Ben", avatarUrl = null)
+                val service = mentionService(client = client, cache = BbCloudUserDisplayNameCache())
+
+                // WHEN
+                val overview = service.pullRequestOverview(projectBasePath = basePath, organizationUrl = organizationUrl, summary = summary)
+
+                // THEN
+                val conversation = overview.conversation.shouldNotBeNull()
+                conversation.threads.size shouldBe 1
+                conversation.mentions shouldBe mapOf(annaKey to "Anna", benKey to "Ben")
+            }
+
+        @Test
+        fun `pullRequestOverview - should look up each unknown account once across loads`(): Unit =
+            runBlocking {
+                // GIVEN
+                val client = overviewClient()
+                stubTimelineSources(client, comments = mentionComments(mentionedKey = benKey, author = anna))
+                coEvery { client.getUser(uuid = benUuid, apiToken = "token") } returns null
+                val cache = BbCloudUserDisplayNameCache()
+                val service = mentionService(client = client, cache = cache)
+
+                // WHEN the same conversation is loaded twice
+                service.pullRequestOverview(projectBasePath = basePath, organizationUrl = organizationUrl, summary = summary)
+                val second = service.pullRequestOverview(projectBasePath = basePath, organizationUrl = organizationUrl, summary = summary)
+
+                // THEN the negative result is cached, so the second load does not request the account again
+                second.conversation.shouldNotBeNull().mentions shouldBe mapOf(benKey to BbCloudBundle.message("main.branch.history.unknownUser"))
+                coVerify(exactly = 1) { client.getUser(uuid = benUuid, apiToken = "token") }
+            }
+
+        @Test
+        fun `pullRequestMentionNames - should return an empty map without calling Bitbucket when a mention only sits in code`(): Unit =
+            runBlocking {
+                // GIVEN
+                val client = overviewClient()
+                val comments = listOf(mentioningComment(id = 1, raw = "Use `@{$benKey}` to mention someone"))
+                val service = mentionService(client = client, cache = BbCloudUserDisplayNameCache())
+
+                // WHEN
+                val names = service.pullRequestMentionNames(projectBasePath = basePath, organizationUrl = organizationUrl, comments = comments)
+
+                // THEN
+                names shouldBe emptyMap()
+                coVerify(exactly = 0) { client.listWorkspaceMembers(any(), any()) }
+                coVerify(exactly = 0) { client.getUser(any(), any()) }
+            }
+
+        @Test
+        fun `pullRequestMentionNames - should resolve the names for the diff cards from the comment snapshot`(): Unit =
+            runBlocking {
+                // GIVEN
+                val client = overviewClient()
+                coEvery { client.getUser(uuid = benUuid, apiToken = "token") } returns ActivityUser(uuid = benUuid, displayName = "Ben", avatarUrl = null)
+                val comments = listOf(mentioningComment(id = 1, raw = "Hi @{$benKey}", author = anna))
+                val service = BbCloudOpenPullRequestService(
+                    credentialStore = storeWithToken("token"),
+                    pullRequestClient = client,
+                    readRemoteUrl = { "https://bitbucket.org/sample-workspace/sample-repo.git" },
+                    userNameCache = { BbCloudUserDisplayNameCache() }
+                )
+
+                // WHEN
+                val names = service.pullRequestMentionNames(projectBasePath = basePath, organizationUrl = organizationUrl, comments = comments)
+
+                // THEN
+                names shouldBe mapOf(benKey to "Ben")
+            }
+
+        private val annaUuid = "{11111111-1111-1111-1111-111111111111}"
+        private val annaKey = "11111111-1111-1111-1111-111111111111"
+        private val benUuid = "{22222222-2222-2222-2222-222222222222}"
+        private val benKey = "22222222-2222-2222-2222-222222222222"
+        private val anna = ActivityUser(uuid = annaUuid, displayName = "Anna", avatarUrl = null)
+
+        /** A client that answers the overview calls that are not under test; a null [members] simulates a failed member listing. */
+        private fun overviewClient(members: WorkspaceMembers? = WorkspaceMembers(members = emptyList(), isTruncated = false)): BitbucketPullRequestClient {
+            val client = mockk<BitbucketPullRequestClient>()
+            coEvery { client.countCommitsBehind(any(), any(), any(), any(), any()) } returns ItemCount(value = 0, isTruncated = false)
+            coEvery { client.listBuildStatuses(any(), any(), any(), any()) } returns emptyList()
+            coEvery { client.listMergeChecks(any(), any(), any(), any()) } returns emptyList()
+            coEvery { client.listTasks(any(), any(), any(), any()) } returns emptyList()
+            coEvery { client.listWorkspaceMembers(any(), any()) } returns members
+            return client
+        }
+
+        private fun membersOf(vararg members: ReviewerCandidate): WorkspaceMembers {
+            return WorkspaceMembers(members = members.toList(), isTruncated = false)
+        }
+
+        private fun mentionService(client: BitbucketPullRequestClient, cache: BbCloudUserDisplayNameCache): BbCloudOpenPullRequestService {
+            return BbCloudOpenPullRequestService(
+                credentialStore = storeWithToken("token"),
+                pullRequestClient = client,
+                readRemoteUrl = { "https://bitbucket.org/sample-workspace/sample-repo.git" },
+                userNameCache = { cache }
+            )
+        }
+
+        private fun mentionComments(mentionedKey: String, author: ActivityUser, extraKey: String? = null): PagedItems<PullRequestComment> {
+            val extra = extraKey?.let { key -> " and @{$key}" }.orEmpty()
+            return PagedItems(
+                items = listOf(mentioningComment(id = 1, raw = "Please review @{$mentionedKey}$extra", author = author)),
+                isTruncated = false
+            )
+        }
+
+        private fun mentioningComment(id: Long, raw: String, author: ActivityUser? = null): PullRequestComment {
+            return PullRequestComment(
+                id = id,
+                parentId = null,
+                createdOn = Instant.parse("2026-09-30T10:00:00Z"),
+                author = author,
+                html = "<p>Comment</p>",
+                inlinePath = null,
+                inlineLine = null,
+                inlineSide = null,
+                isResolved = false,
+                isDeleted = false,
+                isPending = false,
+                raw = raw
+            )
+        }
 
         private fun stubTimelineSources(
             client: BitbucketPullRequestClient,

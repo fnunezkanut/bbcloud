@@ -83,6 +83,78 @@ class BitbucketPullRequestDetailsParserTest {
         }
 
         @Test
+        fun `parsePullRequestDetails - should report changes requested when current user requested changes`() {
+            // GIVEN
+            val json = pullRequestJson(participants = changesRequestedParticipant(uuid = currentUserUuid))
+
+            // WHEN
+            val details = BitbucketPullRequestResponseParser.parsePullRequestDetails(responseBody = json, currentUserUuid = currentUserUuid)
+
+            // THEN
+            details?.isChangesRequestedByCurrentUser shouldBe true
+        }
+
+        @Test
+        fun `parsePullRequestDetails - should report no changes requested when another user requested changes`() {
+            // GIVEN
+            val json = pullRequestJson(participants = changesRequestedParticipant(uuid = otherUserUuid))
+
+            // WHEN
+            val details = BitbucketPullRequestResponseParser.parsePullRequestDetails(responseBody = json, currentUserUuid = currentUserUuid)
+
+            // THEN
+            details?.isChangesRequestedByCurrentUser shouldBe false
+        }
+
+        @Test
+        fun `parsePullRequestDetails - should report no changes requested when current user uuid unknown`() {
+            // GIVEN
+            val json = pullRequestJson(participants = changesRequestedParticipant(uuid = currentUserUuid))
+
+            // WHEN
+            val details = BitbucketPullRequestResponseParser.parsePullRequestDetails(responseBody = json, currentUserUuid = null)
+
+            // THEN
+            details?.isChangesRequestedByCurrentUser shouldBe false
+        }
+
+        @Test
+        fun `parsePullRequestDetails - should report authored by current user when author uuid matches`() {
+            // GIVEN
+            val json = pullRequestJson(participants = "")
+
+            // WHEN
+            val details = BitbucketPullRequestResponseParser.parsePullRequestDetails(responseBody = json, currentUserUuid = AUTHOR_UUID)
+
+            // THEN
+            details?.isAuthoredByCurrentUser shouldBe true
+        }
+
+        @Test
+        fun `parsePullRequestDetails - should report not authored by current user when another user authored it`() {
+            // GIVEN
+            val json = pullRequestJson(participants = "")
+
+            // WHEN
+            val details = BitbucketPullRequestResponseParser.parsePullRequestDetails(responseBody = json, currentUserUuid = currentUserUuid)
+
+            // THEN
+            details?.isAuthoredByCurrentUser shouldBe false
+        }
+
+        @Test
+        fun `parsePullRequestDetails - should report not authored when current user uuid unknown`() {
+            // GIVEN
+            val json = pullRequestJson(participants = "")
+
+            // WHEN
+            val details = BitbucketPullRequestResponseParser.parsePullRequestDetails(responseBody = json, currentUserUuid = null)
+
+            // THEN
+            details?.isAuthoredByCurrentUser shouldBe false
+        }
+
+        @Test
         fun `parsePullRequestDetails - should report not approved when current user is not a participant`() {
             // GIVEN
             val json = pullRequestJson(participants = participant(uuid = otherUserUuid, approved = true))
@@ -471,8 +543,21 @@ class BitbucketPullRequestDetailsParserTest {
         url shouldBe "https://api.bitbucket.org/2.0/repositories/my-workspace/examplerepo/pullrequests/273/approve"
     }
 
+    @Test
+    fun `buildRequestChangesUrl - should target the request-changes endpoint of the pull request`() {
+        // WHEN
+        val url = BitbucketPullRequestResponseParser.buildRequestChangesUrl(workspace = "my-workspace", repoSlug = "examplerepo", pullRequestId = 273)
+
+        // THEN
+        url shouldBe "https://api.bitbucket.org/2.0/repositories/my-workspace/examplerepo/pullrequests/273/request-changes"
+    }
+
     private fun participant(uuid: String, approved: Boolean): String {
         return """{ "user": { "uuid": "$uuid" }, "approved": $approved, "role": "REVIEWER" }"""
+    }
+
+    private fun changesRequestedParticipant(uuid: String): String {
+        return """{ "user": { "uuid": "$uuid" }, "approved": false, "state": "changes_requested", "role": "REVIEWER" }"""
     }
 
     private fun pullRequestJson(participants: String, reviewers: String = "", descriptionFields: String = ""): String {

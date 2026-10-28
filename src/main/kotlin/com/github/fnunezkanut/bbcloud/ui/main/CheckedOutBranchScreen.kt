@@ -49,7 +49,7 @@ internal fun CheckedOutBranchScreen(
     overviewViewModel: PullRequestOverviewViewModel,
     conversationViewModel: PullRequestConversationViewModel,
     changesViewModel: PullRequestChangesViewModel,
-    activityViewModel: PullRequestActivityViewModel,
+    historyViewModel: PullRequestHistoryViewModel,
     infoViewModel: PullRequestInfoViewModel,
     headerViewModel: PullRequestHeaderViewModel,
     configurationService: BbCloudConfigurationService,
@@ -79,12 +79,12 @@ internal fun CheckedOutBranchScreen(
         )
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             when (detailState.selectedTab) {
-                PullRequestDetailTab.Overview -> PullRequestOverviewScreen(viewModel = overviewViewModel)
-                PullRequestDetailTab.Conversation -> PullRequestConversationScreen(viewModel = conversationViewModel)
-                PullRequestDetailTab.Changes -> PullRequestChangesScreen(
-                    filesViewModel = changesViewModel,
-                    activityViewModel = activityViewModel
+                PullRequestDetailTab.Overview -> PullRequestOverviewScreen(
+                    viewModel = overviewViewModel,
+                    historyViewModel = historyViewModel
                 )
+                PullRequestDetailTab.Conversation -> PullRequestConversationScreen(viewModel = conversationViewModel)
+                PullRequestDetailTab.Changes -> PullRequestChangesScreen(filesViewModel = changesViewModel)
             }
         }
     }

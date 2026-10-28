@@ -43,6 +43,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.github.fnunezkanut.bbcloud.BbCloudBundle
 import com.github.fnunezkanut.bbcloud.ui.components.commentThreadContentBackground
+import com.github.fnunezkanut.bbcloud.ui.components.dottedBorder
+import com.github.fnunezkanut.bbcloud.ui.components.reviewBarPurple
 import com.github.fnunezkanut.bbcloud.ui.otherprojects.toComposeImageBitmap
 import kotlinx.coroutines.launch
 import org.jetbrains.jewel.foundation.theme.JewelTheme
@@ -62,6 +64,28 @@ import javax.swing.Icon
 
 private val COMPOSER_AVATAR_SIZE = 24.dp
 private val COMPOSER_EDITOR_MIN_HEIGHT = 80.dp
+
+/** The inner padding between the dotted border and the content of the composer, applied only when the border is shown. */
+private val COMPOSER_BORDER_PADDING = 8.dp
+
+/**
+ * The default cap of the editor height. Jewel `TextArea` scrolls internally and fails to measure against an unbounded
+ * maximum height, and inline diff hosts provide one through `wrapContentHeight(unbounded = true)`, so the cap is always
+ * finite. Drafts taller than the cap scroll inside the editor.
+ */
+internal val COMPOSER_EDITOR_MAX_HEIGHT = 320.dp
+
+/**
+ * Returns the finite editor height cap for [requested]. An unspecified or infinite request falls back to
+ * [COMPOSER_EDITOR_MAX_HEIGHT], and a finite request is never smaller than [COMPOSER_EDITOR_MIN_HEIGHT], so `heightIn`
+ * receives a valid range.
+ */
+internal fun composerEditorMaxHeight(requested: Dp): Dp {
+    if (!requested.value.isFinite()) {
+        return COMPOSER_EDITOR_MAX_HEIGHT
+    }
+    return maxOf(COMPOSER_EDITOR_MIN_HEIGHT, requested)
+}
 
 /** The styles the toolbar of the composer offers, in the order the toolbar shows them. */
 private val COMPOSER_TOOLBAR_STYLES = listOf(
@@ -86,6 +110,9 @@ private val composerActionButtonModifier = Modifier.pointerHoverIcon(PointerIcon
  *
  * The same composer serves the top level comment of the conversation and, with [showsCollapsedField] turned off, the
  * reply and the edit editor of a single thread.
+ *
+ * With [showsDottedBorder] turned on, the whole composer is outlined with a dotted purple border. It is off by default, so
+ * the reply and edit editors of a thread keep only the solid border of the thread card.
  */
 @Composable
 internal fun CommentComposerScreen(
@@ -93,7 +120,9 @@ internal fun CommentComposerScreen(
     avatarIcon: Icon,
     modifier: Modifier = Modifier,
     showsCollapsedField: Boolean = true,
+    showsDottedBorder: Boolean = false,
     avatarSize: Dp = COMPOSER_AVATAR_SIZE,
+    editorMaxHeight: Dp = COMPOSER_EDITOR_MAX_HEIGHT,
     onCollapsed: () -> Unit = {},
     onSubmitted: () -> Unit = {}
 ) {
@@ -101,7 +130,16 @@ internal fun CommentComposerScreen(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .background(commentThreadContentBackground()),
+            .background(commentThreadContentBackground())
+            .then(
+                if (showsDottedBorder) {
+                    Modifier
+                        .dottedBorder(color = reviewBarPurple())
+                        .padding(COMPOSER_BORDER_PADDING)
+                } else {
+                    Modifier
+                }
+            ),
         verticalAlignment = Alignment.Top
     ) {
         Image(
@@ -123,7 +161,12 @@ internal fun CommentComposerScreen(
                     )
                 }
             } else {
-                ExpandedCommentEditor(viewModel = viewModel, onCollapsed = onCollapsed, onSubmitted = onSubmitted)
+                ExpandedCommentEditor(
+                    viewModel = viewModel,
+                    onCollapsed = onCollapsed,
+                    onSubmitted = onSubmitted,
+                    editorMaxHeight = editorMaxHeight
+                )
             }
         }
     }
@@ -154,7 +197,7 @@ private fun CollapsedCommentField(placeholder: String, onClick: () -> Unit) {
 
 /** The expanded composer: the styling toolbar, the editor or its preview, and the submit and cancel actions. */
 @Composable
-private fun ExpandedCommentEditor(viewModel: CommentComposerViewModel, onCollapsed: () -> Unit, onSubmitted: () -> Unit) {
+private fun ExpandedCommentEditor(viewModel: CommentComposerViewModel, onCollapsed: () -> Unit, onSubmitted: () -> Unit, editorMaxHeight: Dp) {
     val state by viewModel.state
     val coroutineScope = rememberCoroutineScope()
     val submit: () -> Unit = {
@@ -169,7 +212,7 @@ private fun ExpandedCommentEditor(viewModel: CommentComposerViewModel, onCollaps
         if (state.isPreview) {
             CommentPreview(draft = viewModel.currentDraft())
         } else {
-            CommentEditorArea(viewModel = viewModel, onSubmit = submit)
+            CommentEditorArea(viewModel = viewModel, onSubmit = submit, editorMaxHeight = editorMaxHeight)
         }
         state.failureMessage?.let { message ->
             Text(
@@ -287,7 +330,7 @@ private fun CommentMarkdownStyle.toolbarIconKey(): IconKey {
  * honoured here as well, so the hint of the submit button stays accurate.
  */
 @Composable
-private fun CommentEditorArea(viewModel: CommentComposerViewModel, onSubmit: () -> Unit, editorMaxHeight: Dp = Dp.Unspecified) {
+private fun CommentEditorArea(viewModel: CommentComposerViewModel, onSubmit: () -> Unit, editorMaxHeight: Dp = COMPOSER_EDITOR_MAX_HEIGHT) {
     // The editor is driven by the view model's TextFieldState: it owns the text and the selection, and keeps the
     // selection across focus loss, so the styling toolbar wraps the text the user selected even after a button takes
     // the focus.
@@ -295,7 +338,7 @@ private fun CommentEditorArea(viewModel: CommentComposerViewModel, onSubmit: () 
         state = viewModel.editorState,
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = COMPOSER_EDITOR_MIN_HEIGHT, max = editorMaxHeight)
+            .heightIn(min = COMPOSER_EDITOR_MIN_HEIGHT, max = composerEditorMaxHeight(requested = editorMaxHeight))
             .onPreviewKeyEvent { keyEvent ->
                 if (keyEvent.type == KeyEventType.KeyDown &&
                     keyEvent.key == Key.Enter &&
@@ -316,11 +359,12 @@ private fun CommentEditorArea(viewModel: CommentComposerViewModel, onSubmit: () 
  * no action buttons. The new pull request form reuses this for its description field, so the description editor matches
  * the comment composer's write and preview experience.
  *
- * Jewel's `TextArea` scrolls internally and fails to measure against an unbounded height, so a caller placed inside a
- * vertically scrollable parent must pass a bounded [editorMaxHeight].
+ * Jewel's `TextArea` scrolls internally and fails to measure against an unbounded height, so the editor height is always
+ * capped; [editorMaxHeight] defaults to [COMPOSER_EDITOR_MAX_HEIGHT] and is coerced to a finite value by
+ * [composerEditorMaxHeight].
  */
 @Composable
-internal fun MarkdownDraftEditor(viewModel: CommentComposerViewModel, modifier: Modifier = Modifier, editorMaxHeight: Dp = Dp.Unspecified) {
+internal fun MarkdownDraftEditor(viewModel: CommentComposerViewModel, modifier: Modifier = Modifier, editorMaxHeight: Dp = COMPOSER_EDITOR_MAX_HEIGHT) {
     val state by viewModel.state
     Column(modifier = modifier.fillMaxWidth()) {
         CommentMarkdownToolbar(viewModel = viewModel)

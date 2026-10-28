@@ -111,6 +111,11 @@ class BbCloudWorktreePullRequestContext(private val project: Project, private va
     var comments: List<PullRequestComment> = emptyList()
         private set
 
+    /** Display names of the `@{account-key}` mentions in [comments], read by the inline comment cards. */
+    @Volatile
+    var mentionNames: Map<String, String> = emptyMap()
+        private set
+
     /** Avatar URL of the configured Bitbucket user, used by the file comment composer. */
     @Volatile
     var currentUserAvatarUrl: String? = null
@@ -197,6 +202,13 @@ class BbCloudWorktreePullRequestContext(private val project: Project, private va
                     projectBasePath = project.basePath,
                     organizationUrl = organizationUrl
                 )
+                val mentionNames = result?.items?.let { items ->
+                    openPullRequestService.pullRequestMentionNames(
+                        projectBasePath = project.basePath,
+                        organizationUrl = organizationUrl,
+                        comments = items
+                    )
+                }.orEmpty()
                 withContext(Dispatchers.EDT) {
                     val isCurrentBinding = binding?.pullRequestId == pullRequestId
                     if (isCurrentBinding && result != null) {
@@ -204,7 +216,8 @@ class BbCloudWorktreePullRequestContext(private val project: Project, private va
                             pullRequestId = pullRequestId,
                             comments = result.items,
                             avatarUrl = avatarUrl,
-                            userUuid = userUuid
+                            userUuid = userUuid,
+                            mentionNames = mentionNames
                         )
                         loadedCommentsPullRequestId = pullRequestId
                         EditorNotifications.getInstance(project).updateAllNotifications()
@@ -223,12 +236,20 @@ class BbCloudWorktreePullRequestContext(private val project: Project, private va
         }
     }
 
-    /** Publishes comments loaded by the editor session into the worktree snapshot. */
-    fun publishComments(pullRequestId: Long, comments: List<PullRequestComment>, avatarUrl: String? = null, userUuid: String? = null) {
+    /** Publishes comments loaded by the editor session into the worktree snapshot, together with the names of their mentions. */
+    fun publishComments(
+        pullRequestId: Long,
+        comments: List<PullRequestComment>,
+        avatarUrl: String? = null,
+        userUuid: String? = null,
+        mentionNames: Map<String, String> = emptyMap()
+    ) {
         if (binding?.pullRequestId != pullRequestId) {
             return
         }
+        val mentionNamesChanged = this.mentionNames != mentionNames
         this.comments = comments
+        this.mentionNames = mentionNames
         BbCloudPullRequestViewedThreads.getInstance().prune(
             workspaceSlug = configurationService.workspaceSlugOrNull().orEmpty(),
             pullRequestId = pullRequestId,
@@ -247,11 +268,11 @@ class BbCloudWorktreePullRequestContext(private val project: Project, private va
         if (reviewState.activePullRequestId != pullRequestId) {
             reviewState.bindPullRequest(pullRequestId = pullRequestId)
         }
-        if (reviewState.updateInlineComments(
-                pullRequestId = pullRequestId,
-                index = PullRequestInlineCommentIndex.from(comments = comments)
-            )
-        ) {
+        val inlineIndexChanged = reviewState.updateInlineComments(
+            pullRequestId = pullRequestId,
+            index = PullRequestInlineCommentIndex.from(comments = comments)
+        )
+        if (inlineIndexChanged || mentionNamesChanged) {
             com.github.fnunezkanut.bbcloud.ui.diff.BbCloudPullRequestDiffCommentService.getInstance(project)
                 .refreshOpenEditors()
         }
@@ -679,6 +700,7 @@ class BbCloudWorktreePullRequestContext(private val project: Project, private va
         }
         if (newBinding == null || newBinding.pullRequestId != loadedCommentsPullRequestId) {
             comments = emptyList()
+            mentionNames = emptyMap()
             loadedCommentsPullRequestId = null
             commentsRevision.value++
         }

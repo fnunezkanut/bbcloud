@@ -6,6 +6,7 @@ import com.github.fnunezkanut.bbcloud.review.BbCloudWorktreePullRequestContext
 import com.github.fnunezkanut.bbcloud.ui.diff.BbCloudPullRequestDiffCommentService
 import com.github.fnunezkanut.bbcloud.ui.main.PullRequestCommentFileOpener
 import com.intellij.diff.editor.DiffEditorViewerFileEditor
+import com.intellij.diff.editor.DiffViewerVirtualFile
 import com.intellij.diff.impl.DiffRequestProcessor
 import com.intellij.diff.tools.util.side.TwosideTextDiffViewer
 import com.intellij.diff.util.Side
@@ -46,6 +47,12 @@ class BbCloudPullRequestReviewBarProvider : EditorNotificationProvider {
     private val bars = WeakHashMap<FileEditor, PullRequestReviewBar>()
 
     override fun collectNotificationData(project: Project, file: VirtualFile): Function<in FileEditor, out JComponent?>? {
+        // The diff views get the review bar inside the diff through PullRequestDiffBarsDiffExtension. The path of a diff
+        // tab is its tab name, not the file it shows, so the path checks below cannot match a diff tab.
+        if (file is DiffViewerVirtualFile) {
+            LOG.debug("Review bar skipped: the diff view gets the review bar from the diff extension")
+            return null
+        }
         val projectBasePath = project.basePath
         if (projectBasePath == null) {
             LOG.debug("Review bar skipped: the project has no base path")

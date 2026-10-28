@@ -27,6 +27,7 @@ import com.github.fnunezkanut.bbcloud.git.BitbucketGitRemoteReader
 import com.github.fnunezkanut.bbcloud.git.WorktreeRemovalResult
 import com.github.fnunezkanut.bbcloud.git.WorktreeSetupResult
 import com.github.fnunezkanut.bbcloud.project.LocalRepositoryProjectOpener
+import com.github.fnunezkanut.bbcloud.project.ProjectPruneOutcome
 import com.github.fnunezkanut.bbcloud.project.PullRequestOpenCheck
 import com.github.fnunezkanut.bbcloud.project.PullRequestOpenCheckResult
 import com.github.fnunezkanut.bbcloud.project.PullRequestWorktreeListing
@@ -37,6 +38,7 @@ import com.github.fnunezkanut.bbcloud.project.WatchedProjectWorktreeRow
 import com.github.fnunezkanut.bbcloud.project.WatchedProjectsDiscoveryResult
 import com.github.fnunezkanut.bbcloud.project.WorktreePruneAction
 import com.github.fnunezkanut.bbcloud.project.WorktreePruneDecision
+import com.github.fnunezkanut.bbcloud.project.WorktreePruneSummary
 import com.github.fnunezkanut.bbcloud.ui.components.NotConfiguredContent
 import com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.BbCloudPendingEditorOpen
 import com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.BbCloudPullRequestEditorOpenQueue
@@ -61,7 +63,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.jetbrains.jewel.bridge.compose
 import java.nio.file.Path
-import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.swing.JComponent
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.coroutineScope as coroutineScopeBlock
@@ -91,8 +93,8 @@ class BbCloudOtherProjectsPanel(
         pullRequestClient = OkHttpBitbucketPullRequestClient()
     )
 
-    /** Prevents repeated prune requests for the same watched repository while its first request is running. */
-    private val prunesInProgress = ConcurrentHashMap.newKeySet<String>()
+    /** Prevents repeated prune requests for all watched projects while the first request is running. */
+    private val pruneAllInProgress = AtomicBoolean(false)
 
     // Three tab bodies
     private val myPrsViewModel = WorkspaceMyPullRequestsViewModel(
@@ -118,7 +120,7 @@ class BbCloudOtherProjectsPanel(
         onSyncRequestedCallback = { rescanWatchedProjects() },
         onOpenLocalProjectCallback = ::openLocalCheckoutProject,
         onOpenWorktreeCallback = ::openWatchedPrWorktree,
-        onPruneWorktreesCallback = ::prunePrWorktreesForRow
+        onPruneWorktreesCallback = ::pruneAllWatchedWorktrees
     )
 
     // Two separate workspace headers, one per tab root (My PRs and Assigned PRs)
@@ -1020,11 +1022,14 @@ class BbCloudOtherProjectsPanel(
         notification.notify(project)
     }
 
-    /** Removes a stale PR worktree folder and notifies the user, then refreshes the Watched Projects table. */
-    private fun prunePrWorktreesForRow(mapping: WatchedProjectMapping) {
+    /**
+     * Removes stale PR worktree folders of every watched project on the page, one project at a time, then notifies the
+     * user once with the aggregated outcome and refreshes the Watched Projects table.
+     */
+    private fun pruneAllWatchedWorktrees() {
         val organizationUrl = configurationService.organizationUrlOrNull()
         if (organizationUrl == null) {
-            LOG.info("Cannot prune PR worktrees for ${mapping.remoteRepoSlug}: no organization URL")
+            LOG.info("Cannot prune PR worktrees: no organization URL")
             showPruneNotification(
                 contentKey = "workspace.watchedProjects.prune.noOrgUrl",
                 type = NotificationType.WARNING
@@ -1033,158 +1038,174 @@ class BbCloudOtherProjectsPanel(
         }
         val workTreeDirectoryString = configurationService.workTreeDirectoryOrNull()
         if (workTreeDirectoryString == null) {
-            LOG.info("Cannot prune PR worktrees for ${mapping.remoteRepoSlug}: no worktree directory")
+            LOG.info("Cannot prune PR worktrees: no projects directory")
             return
         }
-        if (!prunesInProgress.add(mapping.remoteRepoSlug)) {
-            LOG.info("Ignoring duplicate PR worktree prune for ${mapping.remoteRepoSlug}")
+        if (!pruneAllInProgress.compareAndSet(false, true)) {
+            LOG.info("Ignoring duplicate PR worktree prune for all watched projects")
             return
         }
-        watchedProjectsViewModel.setPruneInProgress(
-            slug = mapping.remoteRepoSlug,
-            inProgress = true
-        )
+        watchedProjectsViewModel.setPruneInProgress(inProgress = true)
 
+        val workTreeDirectory = Path.of(workTreeDirectoryString)
+        val mappings = configurationService.watchedProjectsForCurrentWorkspaceWithLocalPaths()
+        LOG.debug("Pruning PR worktrees of ${mappings.size} watched project(s)")
         coroutineScope.launch {
             try {
-                val workTreeDirectory = Path.of(workTreeDirectoryString)
-                val sourceCheckoutPath = Path.of(mapping.localFolderPath)
-                val worktrees = withContext(Dispatchers.IO) {
-                    PullRequestWorktreeListing.worktreesForRepo(
+                val hasToken = configurationService.hasStoredToken()
+                val outcomes = mutableListOf<ProjectPruneOutcome>()
+                for (mapping in mappings) {
+                    outcomes += pruneWorktreesOfProject(
+                        mapping = mapping,
+                        organizationUrl = organizationUrl,
                         workTreeDirectory = workTreeDirectory,
-                        repoSlug = mapping.remoteRepoSlug
+                        hasToken = hasToken
                     )
                 }
-                LOG.debug("Found ${worktrees.size} PR worktree(s) to inspect for ${mapping.remoteRepoSlug}")
-                if (worktrees.isEmpty()) {
-                    ApplicationManager.getApplication().invokeLater {
-                        showPruneNotification(
-                            contentKey = "workspace.watchedProjects.prune.none",
-                            type = NotificationType.INFORMATION,
-                            contentArgs = listOf(mapping.remoteRepoSlug)
-                        )
-                        rescanWatchedProjects()
-                    }
-                    return@launch
-                }
-
-                // A missing token also makes the PR service return null. Check token presence first so that missing
-                // credentials are treated as unverifiable rather than as Bitbucket NotFound responses to prune.
-                if (!configurationService.hasStoredToken()) {
-                    LOG.info("Cannot verify PR worktrees for ${mapping.remoteRepoSlug}: no stored API token")
-                    ApplicationManager.getApplication().invokeLater {
-                        showPruneNotification(
-                            contentKey = "workspace.watchedProjects.prune.failedCheck",
-                            type = NotificationType.WARNING,
-                            contentArgs = listOf(mapping.remoteRepoSlug)
-                        )
-                        rescanWatchedProjects()
-                    }
-                    return@launch
-                }
-
-                val checkedWorktrees = withContext(Dispatchers.IO) {
-                    coroutineScopeBlock {
-                        worktrees.map { worktree ->
-                            async {
-                                worktree to checkWatchedPrStillOpen(
-                                    mapping = mapping,
-                                    organizationUrl = organizationUrl,
-                                    prNumber = worktree.prNumber
-                                )
-                            }
-                        }.awaitAll()
-                    }
-                }
-                val worktreesToRemove = checkedWorktrees.filter { (_, result) ->
-                    WorktreePruneDecision.actionFor(result) == WorktreePruneAction.Remove
-                }
-                val skippedCount = checkedWorktrees.count { (_, result) ->
-                    WorktreePruneDecision.actionFor(result) == WorktreePruneAction.Skip
-                }
-                var removedCount = 0
-                var failedCount = 0
-                worktreesToRemove.forEach { (worktree, _) ->
-                    when (
-                        val result = worktreeService.removeWorktree(
-                            sourceCheckoutRoot = sourceCheckoutPath,
-                            worktreePath = worktree.worktreePath,
-                            workTreeDirectory = workTreeDirectory
-                        )
-                    ) {
-                        WorktreeRemovalResult.Success -> {
-                            removedCount++
-                        }
-                        is WorktreeRemovalResult.Failed -> {
-                            failedCount++
-                            LOG.warn(
-                                "Could not remove PR worktree #${worktree.prNumber} for ${mapping.remoteRepoSlug}: ${result.output}",
-                                result.cause
-                            )
-                        }
-                    }
-                }
-
+                val summary = WorktreePruneSummary.from(outcomes = outcomes)
                 ApplicationManager.getApplication().invokeLater {
-                    if (worktreesToRemove.isEmpty()) {
-                        if (skippedCount > 0) {
-                            showPruneNotification(
-                                contentKey = "workspace.watchedProjects.prune.failedCheck",
-                                type = NotificationType.WARNING,
-                                contentArgs = listOf(mapping.remoteRepoSlug)
-                            )
-                        } else {
-                            showPruneNotification(
-                                contentKey = "workspace.watchedProjects.prune.none",
-                                type = NotificationType.INFORMATION,
-                                contentArgs = listOf(mapping.remoteRepoSlug)
-                            )
-                        }
-                    } else {
-                        if (failedCount > 0) {
-                            showPruneNotification(
-                                contentKey = "workspace.watchedProjects.prune.partial",
-                                type = NotificationType.WARNING,
-                                contentArgs = listOf(removedCount, failedCount, mapping.remoteRepoSlug)
-                            )
-                        } else {
-                            showPruneNotification(
-                                contentKey = "workspace.watchedProjects.prune.done",
-                                type = NotificationType.INFORMATION,
-                                contentArgs = listOf(removedCount, mapping.remoteRepoSlug)
-                            )
-                        }
-                        if (skippedCount > 0) {
-                            showPruneNotification(
-                                contentKey = "workspace.watchedProjects.prune.failedCheck",
-                                type = NotificationType.WARNING,
-                                contentArgs = listOf(mapping.remoteRepoSlug)
-                            )
-                        }
-                    }
+                    showPruneSummary(summary = summary)
                     rescanWatchedProjects()
                 }
             } catch (exception: CancellationException) {
                 throw exception
             } catch (exception: Exception) {
-                LOG.warn("PR worktree pruning failed for ${mapping.remoteRepoSlug}", exception)
+                LOG.warn("PR worktree pruning failed for all watched projects", exception)
                 ApplicationManager.getApplication().invokeLater {
                     showPruneNotification(
                         contentKey = "workspace.watchedProjects.prune.failedCheck",
-                        type = NotificationType.WARNING,
-                        contentArgs = listOf(mapping.remoteRepoSlug)
+                        type = NotificationType.WARNING
                     )
                     rescanWatchedProjects()
                 }
             } finally {
-                prunesInProgress.remove(mapping.remoteRepoSlug)
+                pruneAllInProgress.set(false)
                 ApplicationManager.getApplication().invokeLater {
-                    watchedProjectsViewModel.setPruneInProgress(
-                        slug = mapping.remoteRepoSlug,
-                        inProgress = false
-                    )
+                    watchedProjectsViewModel.setPruneInProgress(inProgress = false)
                 }
             }
+        }
+    }
+
+    /**
+     * Removes the stale PR worktree folders of one watched project and runs `git worktree prune` through
+     * [BbCloudWorktreeService.removeWorktree]. A failure of this project is logged and recorded as unverifiable, so the
+     * remaining projects of the batch still run.
+     */
+    private suspend fun pruneWorktreesOfProject(
+        mapping: WatchedProjectMapping,
+        organizationUrl: String,
+        workTreeDirectory: Path,
+        hasToken: Boolean
+    ): ProjectPruneOutcome {
+        val repoSlug = mapping.remoteRepoSlug
+        if (mapping.localFolderPath.isBlank()) {
+            LOG.info("Skipping PR worktree prune for $repoSlug: no local checkout path")
+            return ProjectPruneOutcome(repoSlug = repoSlug)
+        }
+        try {
+            val sourceCheckoutPath = Path.of(mapping.localFolderPath)
+            val worktrees = withContext(Dispatchers.IO) {
+                PullRequestWorktreeListing.worktreesForRepo(
+                    workTreeDirectory = workTreeDirectory,
+                    repoSlug = repoSlug
+                )
+            }
+            LOG.debug("Found ${worktrees.size} PR worktree(s) to inspect for $repoSlug")
+            if (worktrees.isEmpty()) {
+                return ProjectPruneOutcome(repoSlug = repoSlug)
+            }
+
+            // A missing token also makes the PR service return null. Check token presence first so that missing
+            // credentials are treated as unverifiable rather than as Bitbucket NotFound responses to prune.
+            if (!hasToken) {
+                LOG.info("Cannot verify PR worktrees for $repoSlug: no stored API token")
+                return ProjectPruneOutcome(repoSlug = repoSlug, unverifiableCount = worktrees.size)
+            }
+
+            val checkedWorktrees = withContext(Dispatchers.IO) {
+                coroutineScopeBlock {
+                    worktrees.map { worktree ->
+                        async {
+                            worktree to checkWatchedPrStillOpen(
+                                mapping = mapping,
+                                organizationUrl = organizationUrl,
+                                prNumber = worktree.prNumber
+                            )
+                        }
+                    }.awaitAll()
+                }
+            }
+            val worktreesToRemove = checkedWorktrees.filter { (_, result) ->
+                WorktreePruneDecision.actionFor(result) == WorktreePruneAction.Remove
+            }
+            val skippedCount = checkedWorktrees.count { (_, result) ->
+                WorktreePruneDecision.actionFor(result) == WorktreePruneAction.Skip
+            }
+            var removedCount = 0
+            var failedCount = 0
+            worktreesToRemove.forEach { (worktree, _) ->
+                when (
+                    val result = worktreeService.removeWorktree(
+                        sourceCheckoutRoot = sourceCheckoutPath,
+                        worktreePath = worktree.worktreePath,
+                        workTreeDirectory = workTreeDirectory
+                    )
+                ) {
+                    WorktreeRemovalResult.Success -> {
+                        removedCount++
+                    }
+                    is WorktreeRemovalResult.Failed -> {
+                        failedCount++
+                        LOG.warn(
+                            "Could not remove PR worktree #${worktree.prNumber} for $repoSlug: ${result.output}",
+                            result.cause
+                        )
+                    }
+                }
+            }
+            return ProjectPruneOutcome(
+                repoSlug = repoSlug,
+                removedCount = removedCount,
+                failedRemovalCount = failedCount,
+                unverifiableCount = skippedCount
+            )
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            LOG.warn("PR worktree pruning failed for $repoSlug", exception)
+            return ProjectPruneOutcome(repoSlug = repoSlug, unverifiableCount = 1)
+        }
+    }
+
+    /** Shows the aggregated outcome of pruning all watched projects as at most two notifications. */
+    private fun showPruneSummary(summary: WorktreePruneSummary) {
+        val nothingRemoved = summary.removed == 0 && summary.failedRemovals == 0
+        if (nothingRemoved) {
+            if (summary.unverifiable == 0) {
+                showPruneNotification(
+                    contentKey = "workspace.watchedProjects.prune.none",
+                    type = NotificationType.INFORMATION
+                )
+            }
+        } else if (summary.failedRemovals > 0) {
+            showPruneNotification(
+                contentKey = "workspace.watchedProjects.prune.partial",
+                type = NotificationType.WARNING,
+                contentArgs = listOf(summary.removed, summary.failedRemovals)
+            )
+        } else {
+            showPruneNotification(
+                contentKey = "workspace.watchedProjects.prune.done",
+                type = NotificationType.INFORMATION,
+                contentArgs = listOf(summary.removed, summary.projectsWithRemovals)
+            )
+        }
+        if (summary.unverifiable > 0) {
+            showPruneNotification(
+                contentKey = "workspace.watchedProjects.prune.failedCheck",
+                type = NotificationType.WARNING
+            )
         }
     }
 

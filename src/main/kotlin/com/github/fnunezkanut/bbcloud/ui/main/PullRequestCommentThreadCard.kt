@@ -82,6 +82,9 @@ interface CommentThreadCardHost {
     /** Persists whether the current user marked this thread viewed. */
     fun setThreadViewed(thread: TimelineEntry.CommentThread, viewed: Boolean)
 
+    /** Display names of the `@{account-key}` mentions in the comments, keyed by normalized account key; see `CommentMentionResolver`. */
+    val mentions: Map<String, String>
+
     fun avatarIconFor(url: String?): javax.swing.Icon
 
     fun isUpdating(commentId: Long): Boolean
@@ -101,6 +104,12 @@ interface CommentThreadCardHost {
     fun editInput(comment: PullRequestComment): CommentInput
 
     fun openFile(path: String, line: Int?)
+
+    /**
+     * Returns whether the file of an inline comment still exists locally. When it does not, the thread renders like a
+     * pull-request-level comment: the PR icon, with no file link and no copy button.
+     */
+    fun fileExists(path: String): Boolean
 
     fun copyPath(path: String)
 }
@@ -177,12 +186,12 @@ private fun CardLocationStrip(
             leadingContent = { Checkbox(checked = viewed, onCheckedChange = onViewedToggled) }
         )
         Row(verticalAlignment = Alignment.CenterVertically) {
-            val path = comment.inlinePath
+            val path = ConversationThreadRules.existingInlinePath(comment = comment) { candidate -> host.fileExists(path = candidate) }
             if (path == null) {
-                Tooltip(tooltip = { Text(text = BbCloudBundle.message("main.branch.activity.location.pr.tooltip")) }) {
+                Tooltip(tooltip = { Text(text = BbCloudBundle.message("main.branch.history.location.pr.tooltip")) }) {
                     Icon(
                         key = BbCloudPluginIcons.pr,
-                        contentDescription = BbCloudBundle.message("main.branch.activity.location.pr"),
+                        contentDescription = BbCloudBundle.message("main.branch.history.location.pr"),
                         modifier = Modifier.size(CARD_LOCATION_ICON_SIZE)
                     )
                 }
@@ -199,13 +208,13 @@ private fun CardLocationStrip(
                         }
                     )
                 }
-                Tooltip(tooltip = { Text(text = BbCloudBundle.message("main.branch.activity.location.copy.tooltip")) }) {
+                Tooltip(tooltip = { Text(text = BbCloudBundle.message("main.branch.history.location.copy.tooltip")) }) {
                     IconButton(
                         onClick = { host.copyPath(path = fullPath) }
                     ) {
                         Icon(
                             key = org.jetbrains.jewel.ui.icons.AllIconsKeys.Actions.Copy,
-                            contentDescription = BbCloudBundle.message("main.branch.activity.location.copy.tooltip")
+                            contentDescription = BbCloudBundle.message("main.branch.history.location.copy.tooltip")
                         )
                     }
                 }
@@ -272,9 +281,9 @@ private fun CardMetaBlock(comment: PullRequestComment, headlineKind: Conversatio
                 .padding(CARD_META_BODY_PADDING)
         ) {
             if (comment.isDeleted) {
-                Text(text = BbCloudBundle.message("main.branch.activity.comment.deleted"))
+                Text(text = BbCloudBundle.message("main.branch.history.comment.deleted"))
             } else {
-                MarkdownDescription(markdown = ConversationThreadRules.commentBodyMarkdown(comment))
+                MarkdownDescription(markdown = ConversationThreadRules.commentBodyMarkdown(comment = comment, mentions = host.mentions))
             }
         }
         if (host.openComposer?.kind == ConversationComposerKind.Edit && host.openComposer?.commentId == comment.id) {
@@ -292,8 +301,8 @@ private fun CardMetaBlock(comment: PullRequestComment, headlineKind: Conversatio
 @Composable
 private fun CardMetaHeadline(authorName: String, headlineKind: ConversationMetaHeadlineKind, date: kotlin.time.Instant, modifier: Modifier) {
     val actionKey = when (headlineKind) {
-        ConversationMetaHeadlineKind.CommentedOn -> "main.branch.activity.action.commented"
-        ConversationMetaHeadlineKind.RepliedOn -> "main.branch.activity.action.replied"
+        ConversationMetaHeadlineKind.CommentedOn -> "main.branch.history.action.commented"
+        ConversationMetaHeadlineKind.RepliedOn -> "main.branch.history.action.replied"
     }
     Row(
         modifier = modifier.fillMaxWidth(),

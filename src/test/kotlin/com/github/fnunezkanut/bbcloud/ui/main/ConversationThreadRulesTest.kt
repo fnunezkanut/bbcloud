@@ -205,6 +205,51 @@ class ConversationThreadRulesTest {
     }
 
     @Nested
+    inner class CommentBodyMentionTests {
+        private val mentions = mapOf("11111111-1111-1111-1111-111111111111" to "Anna")
+
+        @Test
+        fun `commentBodyMarkdown - should resolve mentions in the Markdown source`() {
+            // GIVEN
+            val root = comment(author = reviewer, isResolved = false, raw = "Thanks @{11111111-1111-1111-1111-111111111111}")
+
+            // WHEN
+            val result = ConversationThreadRules.commentBodyMarkdown(comment = root, mentions = mentions)
+
+            // THEN
+            result shouldBe "Thanks **@Anna**"
+        }
+
+        @Test
+        fun `commentBodyMarkdown - should resolve mentions in the html fallback`() {
+            // GIVEN
+            val root = comment(
+                author = reviewer,
+                isResolved = false,
+                html = "<p>Thanks @{11111111-1111-1111-1111-111111111111}</p>"
+            )
+
+            // WHEN
+            val result = ConversationThreadRules.commentBodyMarkdown(comment = root, mentions = mentions)
+
+            // THEN
+            result shouldBe "Thanks **@Anna**"
+        }
+
+        @Test
+        fun `commentBodyMarkdown - should keep the mention literal when no mentions are passed`() {
+            // GIVEN
+            val root = comment(author = reviewer, isResolved = false, raw = "Thanks @{11111111-1111-1111-1111-111111111111}")
+
+            // WHEN
+            val result = ConversationThreadRules.commentBodyMarkdown(comment = root)
+
+            // THEN
+            result shouldBe "Thanks @{11111111-1111-1111-1111-111111111111}"
+        }
+    }
+
+    @Nested
     inner class LocationTests {
         @Test
         fun `locationText - should be null for a pull request level comment`() {
@@ -372,6 +417,68 @@ class ConversationThreadRulesTest {
 
             // THEN
             result shouldBe false
+        }
+    }
+
+    @Nested
+    inner class ExistingInlinePathTests {
+        @Test
+        fun `existingInlinePath - should keep the path when the file exists`() {
+            // GIVEN
+            val comment = comment(author = reviewer, isResolved = false, inlinePath = "src/Main.kt")
+
+            // WHEN
+            val result = ConversationThreadRules.existingInlinePath(comment = comment) { true }
+
+            // THEN
+            result shouldBe "src/Main.kt"
+        }
+
+        @Test
+        fun `existingInlinePath - should drop the path when the file is missing`() {
+            // GIVEN
+            val comment = comment(author = reviewer, isResolved = false, inlinePath = "src/Removed.kt")
+
+            // WHEN
+            val result = ConversationThreadRules.existingInlinePath(comment = comment) { false }
+
+            // THEN
+            result shouldBe null
+        }
+
+        @Test
+        fun `existingInlinePath - should be null without asking when the comment has no inline path`() {
+            // GIVEN
+            val comment = comment(author = reviewer, isResolved = false)
+            var asked = false
+
+            // WHEN
+            val result = ConversationThreadRules.existingInlinePath(comment = comment) {
+                asked = true
+                true
+            }
+
+            // THEN
+            assertSoftly {
+                result shouldBe null
+                asked shouldBe false
+            }
+        }
+
+        @Test
+        fun `existingInlinePath - should ask about the comment's own path`() {
+            // GIVEN
+            val comment = comment(author = reviewer, isResolved = false, inlinePath = "src/Main.kt")
+            val askedPaths = mutableListOf<String>()
+
+            // WHEN
+            ConversationThreadRules.existingInlinePath(comment = comment) { path ->
+                askedPaths.add(path)
+                true
+            }
+
+            // THEN
+            askedPaths shouldBe listOf("src/Main.kt")
         }
     }
 
