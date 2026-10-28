@@ -11,17 +11,17 @@ import javax.swing.Icon
 import kotlin.time.Clock
 
 /**
- * Drives the Jewel activity feed of the Changes tab. The editor session pushes the feed through
- * [showActivityFeed]; the composable reads [state] and renders the entries.
+ * Drives the Jewel History feed of the Overview tab. The editor session pushes the feed through
+ * [showHistoryFeed]; the composable reads [state] and renders the entries.
  *
  * The avatars come from the shared [AuthorAvatarCache]; the cache is prefetched when the feed arrives and the
- * [PullRequestActivityUiState.avatarRevision] is bumped once the images are ready, so the composable redraws them.
+ * [PullRequestHistoryUiState.avatarRevision] is bumped once the images are ready, so the composable redraws them.
  */
-class PullRequestActivityViewModel(
+class PullRequestHistoryViewModel(
     private val pullRequestId: () -> Long?,
     private val avatarCache: AuthorAvatarCache = AuthorAvatarCache(avatarSize = ACTIVITY_AVATAR_SIZE)
 ) {
-    val state: MutableState<PullRequestActivityUiState> = mutableStateOf(initialState())
+    val state: MutableState<PullRequestHistoryUiState> = mutableStateOf(initialState())
 
     private var coroutineScope: CoroutineScope? = null
 
@@ -29,7 +29,7 @@ class PullRequestActivityViewModel(
         this.coroutineScope = coroutineScope
     }
 
-    fun showActivityFeed(feed: PullRequestActivityFeed?) {
+    fun showHistoryFeed(feed: PullRequestActivityFeed?) {
         coroutineScope?.let { scope ->
             avatarCache.prefetch(
                 urls = feed?.entries?.flatMap { entry -> entry.actor?.avatarUrl?.let { listOf(it) }.orEmpty() }.orEmpty(),
@@ -63,7 +63,7 @@ class PullRequestActivityViewModel(
             )
             return
         }
-        val groups = ActivityDayGroups.group(
+        val groups = HistoryDayGroups.group(
             entries = model.entries,
             now = Clock.System.now(),
             timeZone = TimeZone.currentSystemDefault()
@@ -80,12 +80,12 @@ class PullRequestActivityViewModel(
         state.value = state.value.copy(avatarRevision = state.value.avatarRevision + 1)
     }
 
-    private fun initialState(): PullRequestActivityUiState {
-        return PullRequestActivityUiState(title = BbCloudBundle.message("main.branch.activity.title"))
+    private fun initialState(): PullRequestHistoryUiState {
+        return PullRequestHistoryUiState(title = BbCloudBundle.message("main.branch.history.title"))
     }
 
     companion object {
-        private val LOG = logger<PullRequestActivityViewModel>()
+        private val LOG = logger<PullRequestHistoryViewModel>()
 
         private const val ACTIVITY_AVATAR_SIZE = 24
     }

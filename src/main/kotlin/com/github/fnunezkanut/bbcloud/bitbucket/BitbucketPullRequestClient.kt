@@ -16,6 +16,12 @@ interface BitbucketPullRequestClient {
 
     suspend fun getCurrentUser(apiToken: String): CurrentUser?
 
+    /**
+     * Looks up one account by [uuid], which keeps the braces Bitbucket writes around account keys. Returns null when the
+     * account is not found, is hidden by its owner's privacy setting, or the response cannot be read.
+     */
+    suspend fun getUser(uuid: String, apiToken: String): ActivityUser?
+
     /** Lists the repository's remote branch names, newest-updated first; null when any page fails. */
     suspend fun listBranches(workspace: String, repoSlug: String, apiToken: String): RepositoryBranches?
 

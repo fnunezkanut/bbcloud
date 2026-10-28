@@ -33,7 +33,7 @@ class WatchedProjectsViewModel(
     private val onSyncRequestedCallback: () -> Unit,
     private val onOpenLocalProjectCallback: (WatchedProjectMapping) -> Unit,
     private val onOpenWorktreeCallback: (WatchedProjectMapping, WatchedProjectWorktreeRow) -> Unit,
-    private val onPruneWorktreesCallback: (WatchedProjectMapping) -> Unit
+    private val onPruneWorktreesCallback: () -> Unit
 ) {
     val state: MutableState<WatchedProjectsUiState> = mutableStateOf(WatchedProjectsUiState())
 
@@ -47,7 +47,6 @@ class WatchedProjectsViewModel(
     private var worktreeLoadGeneration = 0L
 
     private var organizationUrl: String? = null
-    private val prunesInProgress = mutableSetOf<String>()
 
     fun showLoading() {
         worktreeLoadGeneration++
@@ -148,28 +147,16 @@ class WatchedProjectsViewModel(
                     mapping = row.mapping,
                     organizationUrl = organizationUrl,
                     avatarUrl = null,
-                    worktrees = row.worktrees,
-                    isPruneInProgress = row.mapping.remoteRepoSlug in prunesInProgress
+                    worktrees = row.worktrees
                 )
             },
             avatarRevision = state.value.avatarRevision + 1
         )
     }
 
-    fun setPruneInProgress(slug: String, inProgress: Boolean) {
-        if (inProgress) {
-            prunesInProgress += slug
-        } else {
-            prunesInProgress -= slug
-        }
-        val rows = state.value.rows.map { row ->
-            if (row.mapping.remoteRepoSlug == slug) {
-                row.copy(isPruneInProgress = inProgress)
-            } else {
-                row
-            }
-        }
-        state.value = state.value.copy(rows = rows)
+    /** Sets whether a prune of all watched projects is running; the Prune and Sync buttons are disabled meanwhile. */
+    fun setPruneInProgress(inProgress: Boolean) {
+        state.value = state.value.copy(pruneEnabled = !inProgress)
     }
 
     fun onWatchedChanged(mapping: WatchedProjectMapping, watched: Boolean) {
@@ -198,9 +185,9 @@ class WatchedProjectsViewModel(
         onOpenWorktreeCallback(mapping, worktree)
     }
 
-    fun onPruneWorktrees(mapping: WatchedProjectMapping) {
-        LOG.info("User requested PR worktree pruning for ${mapping.remoteRepoSlug}")
-        onPruneWorktreesCallback(mapping)
+    fun onPruneWorktreesClicked() {
+        LOG.info("User requested PR worktree pruning for all watched projects")
+        onPruneWorktreesCallback()
     }
 
     fun avatarIconFor(url: String?): javax.swing.Icon {
@@ -215,8 +202,7 @@ class WatchedProjectsViewModel(
             buildWatchedProjectRow(
                 mapping = mapping,
                 organizationUrl = organizationUrl,
-                avatarUrl = slugToAvatarUrl[mapping.remoteRepoSlug],
-                isPruneInProgress = mapping.remoteRepoSlug in prunesInProgress
+                avatarUrl = slugToAvatarUrl[mapping.remoteRepoSlug]
             )
         }
     }

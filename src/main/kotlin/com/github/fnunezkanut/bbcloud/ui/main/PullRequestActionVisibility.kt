@@ -19,8 +19,18 @@ object PullRequestActionVisibility {
         return JBColor.GRAY.toComposeColor()
     }
 
-    /** Returns the header actions in display order; closed pull requests have none. */
-    fun visibleActions(state: PullRequestState, isDraft: Boolean, isApprovedByCurrentUser: Boolean): List<PullRequestAction> {
+    /**
+     * Returns the header actions in display order; closed pull requests have none.
+     *
+     * Request Changes (or Changes Requested, when the current user already requested changes) is offered on drafts too,
+     * as on Bitbucket web. Approve and Unapprove are hidden while a pull request is a draft.
+     */
+    fun visibleActions(
+        state: PullRequestState,
+        isDraft: Boolean,
+        isApprovedByCurrentUser: Boolean,
+        isChangesRequestedByCurrentUser: Boolean
+    ): List<PullRequestAction> {
         if (state != PullRequestState.Open) {
             return emptyList()
         }
@@ -28,10 +38,11 @@ object PullRequestActionVisibility {
             if (!isDraft) {
                 // Merge remains visible; merge-check gating belongs in PullRequestDetailViewModel.recomputeActions.
                 add(PullRequestAction.Merge)
-                // Review-decision actions are hidden entirely while a pull request is a draft; they only appear once
+                // Approve-decision actions are hidden entirely while a pull request is a draft; they only appear once
                 // the pull request is marked ready for review.
                 add(if (isApprovedByCurrentUser) PullRequestAction.Unapprove else PullRequestAction.Approve)
             }
+            add(if (isChangesRequestedByCurrentUser) PullRequestAction.RemoveChangesRequest else PullRequestAction.RequestChanges)
             add(if (isDraft) PullRequestAction.MarkAsReady else PullRequestAction.MarkAsDraft)
             add(PullRequestAction.Decline)
         }
@@ -42,6 +53,8 @@ object PullRequestActionVisibility {
             PullRequestAction.Merge -> BbCloudBundle.message("main.branch.action.merge")
             PullRequestAction.Approve -> BbCloudBundle.message("main.branch.action.approve")
             PullRequestAction.Unapprove -> BbCloudBundle.message("main.branch.action.unapprove")
+            PullRequestAction.RequestChanges -> BbCloudBundle.message("main.branch.action.requestChanges")
+            PullRequestAction.RemoveChangesRequest -> BbCloudBundle.message("main.branch.action.changesRequested")
             PullRequestAction.MarkAsDraft -> BbCloudBundle.message("main.branch.action.markDraft")
             PullRequestAction.MarkAsReady -> BbCloudBundle.message("main.branch.action.markReady")
             PullRequestAction.Decline -> BbCloudBundle.message("main.branch.action.decline")
@@ -54,6 +67,8 @@ object PullRequestActionVisibility {
             PullRequestAction.Merge -> AllIconsKeys.Vcs.Merge
             PullRequestAction.Approve -> AllIconsKeys.Actions.Checked
             PullRequestAction.Unapprove -> AllIconsKeys.Actions.Cancel
+            PullRequestAction.RequestChanges -> AllIconsKeys.General.BalloonWarning
+            PullRequestAction.RemoveChangesRequest -> AllIconsKeys.General.Warning
             PullRequestAction.MarkAsDraft -> AllIconsKeys.Actions.Edit
             PullRequestAction.MarkAsReady -> AllIconsKeys.Actions.Commit
             PullRequestAction.Decline -> AllIconsKeys.Actions.Close
@@ -66,8 +81,14 @@ object PullRequestActionVisibility {
             PullRequestAction.Merge -> PullRequestStateStyle.color(PullRequestState.Open)
             PullRequestAction.Approve -> PullRequestStateStyle.color(PullRequestState.Merged)
             PullRequestAction.Unapprove -> PullRequestStateStyle.draftColor()
+            PullRequestAction.RequestChanges, PullRequestAction.RemoveChangesRequest -> ActionButtonOutlines.orange()
             PullRequestAction.MarkAsDraft, PullRequestAction.MarkAsReady -> neutralColor()
             PullRequestAction.Decline -> PullRequestStateStyle.color(PullRequestState.Declined)
         }
+    }
+
+    /** True when the button draws a dotted outline even while it is enabled; the "already requested" state uses it. */
+    fun isDottedOutline(action: PullRequestAction): Boolean {
+        return action == PullRequestAction.RemoveChangesRequest
     }
 }

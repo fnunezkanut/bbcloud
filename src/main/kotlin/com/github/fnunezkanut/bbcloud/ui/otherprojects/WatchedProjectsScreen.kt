@@ -88,7 +88,11 @@ fun WatchedProjectsScreen(viewModel: WatchedProjectsViewModel) {
                 WatchedProjectsCard.Listing -> WatchedProjectsTable(viewModel = viewModel)
             }
         }
-        WatchedProjectsFooter(state = state, onSync = viewModel::onSyncClicked)
+        WatchedProjectsFooter(
+            state = state,
+            onSync = viewModel::onSyncClicked,
+            onPrune = viewModel::onPruneWorktreesClicked
+        )
     }
 }
 
@@ -96,14 +100,12 @@ private enum class WatchedProjectsColumn {
     Watched,
     Remote,
     Local,
-    Worktrees,
-    Prune
+    Worktrees
 }
 
 private val TABLE_COLUMNS = WatchedProjectsColumn.entries
-private const val COLUMN_COUNT = 5
+private const val COLUMN_COUNT = 4
 private val CHECKBOX_WIDTH = 36.dp
-private val PRUNE_WIDTH = 210.dp
 private val AVATAR_SIZE = 32.dp
 private val CELL_BORDER_WIDTH = 8.dp
 
@@ -116,7 +118,7 @@ private val LOCAL_MIN_WIDTH = 120.dp
 private val WORKTREES_MIN_WIDTH = 240.dp
 
 // Flexible column weights in the historical 1:1:2 ratio (Remote:Local:Worktrees). The leftover width after the fixed
-// Watched/Prune columns and inter-cell padding is split across the three flexible columns in this ratio.
+// Watched column and inter-cell padding is split across the three flexible columns in this ratio.
 private const val REMOTE_WEIGHT = 1
 private const val LOCAL_WEIGHT = 1
 private const val WORKTREES_WEIGHT = 2
@@ -168,14 +170,14 @@ private fun WatchedProjectsTable(viewModel: WatchedProjectsViewModel) {
 }
 
 /**
- * Splits the width left after the fixed Watched/Prune columns and the inter-cell padding across the three flexible
+ * Splits the width left after the fixed Watched column and the inter-cell padding across the three flexible
  * columns in the 1:1:2 ratio, so the table fills the whole available width. Falls back to the per-column floors when
  * the window is too narrow to honor the ratio; BasicTableLayout then scales everything down proportionally.
  */
 private fun computeFlexibleColumnWidths(availableWidth: androidx.compose.ui.unit.Dp): FlexibleColumnWidths {
     // BasicTableLayout reserves cellBorderWidth on both edges and between every column (columnCount + 1 gaps).
     val totalPadding = CELL_BORDER_WIDTH * (COLUMN_COUNT + 1)
-    val flexibleWidth = availableWidth - CHECKBOX_WIDTH - PRUNE_WIDTH - totalPadding
+    val flexibleWidth = availableWidth - CHECKBOX_WIDTH - totalPadding
     val minimumFlexibleWidth = REMOTE_MIN_WIDTH + LOCAL_MIN_WIDTH + WORKTREES_MIN_WIDTH
     if (flexibleWidth <= minimumFlexibleWidth) {
         return FlexibleColumnWidths(
@@ -242,12 +244,6 @@ private fun watchedProjectsHeaderCells(
                     text = BbCloudBundle.message("workspace.watchedProjects.column.worktrees"),
                     width = flexibleWidths.worktrees
                 )
-            }
-
-            WatchedProjectsColumn.Prune -> {
-                {
-                    Box(modifier = Modifier.width(PRUNE_WIDTH))
-                }
             }
         }
     }
@@ -319,16 +315,6 @@ private fun watchedProjectRowCells(
                         row = row,
                         viewModel = viewModel,
                         modifier = Modifier.width(flexibleWidths.worktrees)
-                    )
-                }
-            }
-
-            WatchedProjectsColumn.Prune -> {
-                stripedCell(rowIndex) {
-                    PruneCell(
-                        row = row,
-                        viewModel = viewModel,
-                        modifier = Modifier.width(PRUNE_WIDTH)
                     )
                 }
             }
@@ -470,39 +456,7 @@ private fun WorktreeEntry(mapping: WatchedProjectMapping, worktree: WatchedProje
 }
 
 @Composable
-private fun PruneCell(row: WatchedProjectRow, viewModel: WatchedProjectsViewModel, modifier: Modifier) {
-    Row(
-        modifier = modifier,
-        horizontalArrangement = Arrangement.End
-    ) {
-        if (row.worktrees.isNotEmpty()) {
-            Tooltip(
-                tooltip = {
-                    Text(text = BbCloudBundle.message("workspace.watchedProjects.column.prune.tooltip"))
-                }
-            ) {
-                OutlinedButton(
-                    onClick = { viewModel.onPruneWorktrees(row.mapping) },
-                    enabled = !row.isPruneInProgress
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Icon(
-                            key = AllIconsKeys.Actions.GC,
-                            contentDescription = "Prune worktrees"
-                        )
-                        Text(text = BbCloudBundle.message("workspace.watchedProjects.column.prune.button"))
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun WatchedProjectsFooter(state: WatchedProjectsUiState, onSync: () -> Unit) {
+private fun WatchedProjectsFooter(state: WatchedProjectsUiState, onSync: () -> Unit, onPrune: () -> Unit) {
     Divider(
         orientation = Orientation.Horizontal,
         modifier = Modifier.fillMaxWidth()
@@ -519,7 +473,26 @@ private fun WatchedProjectsFooter(state: WatchedProjectsUiState, onSync: () -> U
         )
         Spacer(modifier = Modifier.weight(1f))
         if (state.syncVisible) {
-            OutlinedButton(onClick = onSync, enabled = state.syncEnabled) {
+            Tooltip(
+                tooltip = {
+                    Text(text = BbCloudBundle.message("workspace.watchedProjects.prune.tooltip"))
+                }
+            ) {
+                OutlinedButton(onClick = onPrune, enabled = state.pruneEnabled && state.syncEnabled) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            key = AllIconsKeys.Actions.GC,
+                            contentDescription = BbCloudBundle.message("workspace.watchedProjects.prune.button")
+                        )
+                        Text(text = BbCloudBundle.message("workspace.watchedProjects.prune.button"))
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            OutlinedButton(onClick = onSync, enabled = state.syncEnabled && state.pruneEnabled) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)

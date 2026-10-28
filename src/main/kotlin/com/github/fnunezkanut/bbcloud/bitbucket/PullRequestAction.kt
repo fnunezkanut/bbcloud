@@ -4,6 +4,8 @@ enum class PullRequestAction {
     Merge,
     Approve,
     Unapprove,
+    RequestChanges,
+    RemoveChangesRequest,
     MarkAsDraft,
     MarkAsReady,
     Decline
@@ -15,7 +17,11 @@ data class PullRequestDetails(
     val reviewers: List<PullRequestReviewer> = emptyList(),
     val authorUuid: String? = null,
     /** Raw Markdown description of the pull request; null when Bitbucket returned none. */
-    val description: String? = null
+    val description: String? = null,
+    /** True when the current user's participant entry is in the `changes_requested` state. */
+    val isChangesRequestedByCurrentUser: Boolean = false,
+    /** True when the current user authored the pull request; Bitbucket rejects review actions on one's own pull request. */
+    val isAuthoredByCurrentUser: Boolean = false
 )
 
 sealed class PullRequestActionResult {

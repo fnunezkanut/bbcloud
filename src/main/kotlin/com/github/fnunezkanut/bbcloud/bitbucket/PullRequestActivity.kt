@@ -108,12 +108,15 @@ sealed interface ActivityFeedEntry : TimelineEntry
 /**
  * Comment threads for the Conversation tab.
  * Threads are sorted newest first.
+ * [mentions] maps a normalized account UUID to the display name shown for `@{uuid}` mentions; unresolved UUIDs map to
+ * the localized unknown-user label.
  */
 data class PullRequestConversation(
     val threads: List<TimelineEntry.CommentThread>,
     val currentUserUuid: String?,
     val currentUserAvatarUrl: String?,
-    val isTruncated: Boolean
+    val isTruncated: Boolean,
+    val mentions: Map<String, String> = emptyMap()
 )
 
 /**

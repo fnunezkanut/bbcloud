@@ -3,13 +3,20 @@ package com.github.fnunezkanut.bbcloud.bitbucket
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestCommentThreads.groupIntoThreads
 
 object PullRequestTimelineBuilder {
-    fun buildConversation(comments: PagedItems<PullRequestComment>, currentUserUuid: String?, currentUserAvatarUrl: String?): PullRequestConversation {
+    /** [mentions] is resolved by the service layer before the conversation is assembled; this builder only carries it through. */
+    fun buildConversation(
+        comments: PagedItems<PullRequestComment>,
+        currentUserUuid: String?,
+        currentUserAvatarUrl: String?,
+        mentions: Map<String, String> = emptyMap()
+    ): PullRequestConversation {
         val threads = PullRequestCommentThreads.sortedLikeConversation(groupIntoThreads(comments = comments.items))
         return PullRequestConversation(
             threads = threads,
             currentUserUuid = currentUserUuid,
             currentUserAvatarUrl = currentUserAvatarUrl,
-            isTruncated = comments.isTruncated
+            isTruncated = comments.isTruncated,
+            mentions = mentions
         )
     }
 

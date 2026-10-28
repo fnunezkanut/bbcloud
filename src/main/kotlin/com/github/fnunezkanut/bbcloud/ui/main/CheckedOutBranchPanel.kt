@@ -64,14 +64,14 @@ class CheckedOutBranchPanel(
         onChangesTabSelected = onChangesTabSelected
     )
 
-    // The Changes tab is entirely Jewel/Compose: the changed-file tree and the activity feed are Compose content.
+    // The Changes tab is entirely Jewel/Compose: the changed-file tree and the History feed are Compose content.
     private val changesViewModel = PullRequestChangesViewModel(
         pullRequestId = { displayedPullRequestId },
         projectBasePath = { attachedProject?.basePath },
         onRefreshRequested = onFilesChangedRefreshRequested,
         onOpenChange = { change -> openChangedFile(change = change) }
     )
-    private val activityViewModel = PullRequestActivityViewModel(pullRequestId = { displayedPullRequestId })
+    private val historyViewModel = PullRequestHistoryViewModel(pullRequestId = { displayedPullRequestId })
 
     // The Conversation tab is entirely Jewel/Compose: the comment composer and the comment threads are Compose content.
     private val conversationViewModel = PullRequestConversationViewModel(
@@ -101,7 +101,7 @@ class CheckedOutBranchPanel(
             overviewViewModel = overviewViewModel,
             conversationViewModel = conversationViewModel,
             changesViewModel = changesViewModel,
-            activityViewModel = activityViewModel,
+            historyViewModel = historyViewModel,
             infoViewModel = infoViewModel,
             headerViewModel = headerViewModel,
             configurationService = configurationService,
@@ -149,7 +149,7 @@ class CheckedOutBranchPanel(
                 LOG.debug("Shutting down the pull request changes tab for project ${project.name}")
                 attachedProject = null
                 changesViewModel.reset()
-                activityViewModel.reset()
+                historyViewModel.reset()
                 conversationViewModel.reset()
             }
         )
@@ -205,7 +205,7 @@ class CheckedOutBranchPanel(
         overviewViewModel.reset()
         conversationViewModel.reset()
         changesViewModel.reset()
-        activityViewModel.reset()
+        historyViewModel.reset()
     }
 
     /** Updates the pull-request information card after an action without resetting the selected tab or the overview. */
@@ -282,8 +282,8 @@ class CheckedOutBranchPanel(
         } ?: MergeChecksState.NotBlocked
         LOG.debug("Overview reports mergeChecksState=$mergeChecksState for pull request #$pullRequestId")
         detailViewModel.setMergeChecksState(pullRequestId = pullRequestId, state = mergeChecksState)
-        activityViewModel.bind(coroutineScope = coroutineScope)
-        activityViewModel.showActivityFeed(feed = overview.activityFeed)
+        historyViewModel.bind(coroutineScope = coroutineScope)
+        historyViewModel.showHistoryFeed(feed = overview.activityFeed)
         conversationViewModel.bind(coroutineScope = coroutineScope)
         conversationViewModel.showConversation(
             conversation = overview.conversation,

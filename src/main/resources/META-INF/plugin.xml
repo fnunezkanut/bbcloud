@@ -3,7 +3,7 @@
     <name>Bitbucket Cloud PR Review</name>
     <vendor>fnunezkanut</vendor>
     <description><![CDATA[
-        Bitbucket Cloud integration for IntelliJ IDEA.
+        Atlassian Bitbucket Cloud integration for IntelliJ IDEA. Create and review pull requests in their own git work tree. Leave comments (including inline in editor), approve, deny, draft and merge pull requests. View own pull requests and pull requests you are involved in watched projects from your bitbucket workspace.
     ]]></description>
 
     <depends>com.intellij.modules.platform</depends>
@@ -67,6 +67,8 @@
         <fileType name="Bitbucket Cloud New PR"
                   implementationClass="com.github.fnunezkanut.bbcloud.ui.pullrequest.create.BbCloudNewPullRequestFileType"
                   fieldName="INSTANCE"/>
+        <diff.DiffExtension
+                implementation="com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.PullRequestDiffBarsDiffExtension"/>
         <editorNotificationProvider
                 implementation="com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.BbCloudPullRequestReviewBarProvider"/>
         <editorNotificationProvider

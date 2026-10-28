@@ -1,13 +1,19 @@
 package com.github.fnunezkanut.bbcloud.bitbucket
 
+import com.github.fnunezkanut.bbcloud.BbCloudBundle
 import com.github.fnunezkanut.bbcloud.config.BbCloudConfigurationService
 import com.github.fnunezkanut.bbcloud.credentials.BbCloudCredentialStore
 import com.github.fnunezkanut.bbcloud.git.BitbucketGitRemoteReader
 import com.github.fnunezkanut.bbcloud.project.ProjectRepositoryResolver
+import com.github.fnunezkanut.bbcloud.review.BbCloudUserDisplayNameCache
 import com.intellij.openapi.diagnostic.logger
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.nio.file.Path
 
@@ -15,7 +21,9 @@ class BbCloudOpenPullRequestService(
     private val credentialStore: BbCloudCredentialStore,
     private val pullRequestClient: BitbucketPullRequestClient,
     private val readRemoteUrl: (Path) -> String? = BitbucketGitRemoteReader::readRemoteUrl,
-    private val configurationService: BbCloudConfigurationService? = null
+    private val configurationService: BbCloudConfigurationService? = null,
+    /** Read only when a comment mentions an account, so tests and callers without mentions never touch the IDE application. */
+    private val userNameCache: () -> BbCloudUserDisplayNameCache = { BbCloudUserDisplayNameCache.getInstance() }
 ) {
     @Volatile
     private var cachedCurrentUser: CachedCurrentUser? = null
@@ -127,6 +135,8 @@ class BbCloudOpenPullRequestService(
                 )
             }
             val timelineSources = async { timelineSources(target = target, pullRequestId = summary.id) }
+            // Workspace members name mentioned accounts, so they load alongside the comments rather than after them.
+            val mentionMembers = async { loadMentionMembers(target = target) }
             val loadedBuilds = builds.await()
             val loadedTasks = tasks.await()
             val sources = timelineSources.await()
@@ -134,7 +144,12 @@ class BbCloudOpenPullRequestService(
                 PullRequestTimelineBuilder.buildConversation(
                     comments = comments,
                     currentUserUuid = sources.currentUser?.uuid,
-                    currentUserAvatarUrl = sources.currentUser?.avatarUrl
+                    currentUserAvatarUrl = sources.currentUser?.avatarUrl,
+                    mentions = resolveMentionNames(
+                        target = target,
+                        comments = comments.items,
+                        members = mentionMembers.await()
+                    )
                 )
             }
             val activityFeed = PullRequestTimelineBuilder.buildActivityFeed(
@@ -455,6 +470,158 @@ class BbCloudOpenPullRequestService(
         val members = pullRequestClient.listWorkspaceMembers(workspace = workspace, apiToken = apiToken) ?: return null
         cachedMembers = CachedMembers(workspace = workspace, tokenHash = tokenHash, members = members)
         return members
+    }
+
+    /**
+     * Maps the `@{account-key}` mentions in [comments] to display names for the diff inline cards, which read the comment
+     * snapshot directly instead of a conversation. An empty map means that no comment mentions anyone.
+     */
+    suspend fun pullRequestMentionNames(projectBasePath: String?, organizationUrl: String, comments: List<PullRequestComment>): Map<String, String> {
+        val mentionsAnyone = comments.any { comment ->
+            CommentMentionResolver.mentionTokensIn(body = mentionSource(comment = comment)).isNotEmpty()
+        }
+        if (!mentionsAnyone) {
+            return emptyMap()
+        }
+        val target = resolveTarget(
+            operation = "resolve comment mentions",
+            projectBasePath = projectBasePath,
+            organizationUrl = organizationUrl
+        ) ?: return emptyMap()
+        return resolveMentionNames(target = target, comments = comments, members = loadMentionMembers(target = target))
+    }
+
+    /** Workspace members name mentioned accounts; a failure only leaves those names to the direct lookup. */
+    private suspend fun loadMentionMembers(target: RepositoryTarget): List<ReviewerCandidate> {
+        return try {
+            workspaceMembers(workspace = target.workspace, apiToken = target.apiToken)?.members.orEmpty()
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            LOG.debug("Could not load workspace members for mention names", exception)
+            emptyList()
+        }
+    }
+
+    /**
+     * Best effort: a failure leaves the mentions unresolved, so the conversation itself still loads. A mention without a
+     * name gets the unknown-user label, which keeps a raw account key out of the rendered comment.
+     */
+    private suspend fun resolveMentionNames(
+        target: RepositoryTarget,
+        comments: List<PullRequestComment>,
+        members: List<ReviewerCandidate>
+    ): Map<String, String> {
+        return try {
+            mentionNames(target = target, comments = comments, members = members)
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            LOG.debug("Could not resolve mention names for ${comments.size} comment(s); mentions stay unresolved", exception)
+            emptyMap()
+        }
+    }
+
+    /**
+     * Assembles the name of every mentioned account. Comment authors and resolvers win over workspace members, and both
+     * win over a direct `/users/{uuid}` lookup. Lookups go through the session cache, so each account is fetched at most
+     * once, and the negative results are cached too.
+     */
+    private suspend fun mentionNames(target: RepositoryTarget, comments: List<PullRequestComment>, members: List<ReviewerCandidate>): Map<String, String> {
+        val tokensByKey = comments
+            .flatMap { comment -> CommentMentionResolver.mentionTokensIn(body = mentionSource(comment = comment)) }
+            .associateBy { rawToken -> CommentMentionResolver.normalizeKey(rawKey = rawToken) }
+        if (tokensByKey.isEmpty()) {
+            return emptyMap()
+        }
+        val cache = userNameCache()
+        val knownNames = knownNames(comments = comments, members = members)
+        cache.putAll(names = knownNames)
+        val lookedUpNames = mutableMapOf<String, String?>()
+        val keysToFetch = mutableListOf<String>()
+        tokensByKey.keys.filterNot { key -> key in knownNames }.forEach { key ->
+            val cached = cache.cachedName(uuidKey = key)
+            if (cached == null) {
+                keysToFetch += key
+            } else {
+                lookedUpNames[key] = cached.displayName
+            }
+        }
+        lookedUpNames.putAll(fetchUserNames(tokensByKey = tokensByKey, keys = keysToFetch, cache = cache, apiToken = target.apiToken))
+        val unknownLabel = BbCloudBundle.message("main.branch.history.unknownUser")
+        val names = tokensByKey.keys.associateWith { key -> knownNames[key] ?: lookedUpNames[key] ?: unknownLabel }
+        val unknownKeys = tokensByKey.keys.filter { key -> key !in knownNames && lookedUpNames[key] == null }
+        LOG.info(
+            "Resolved ${names.size} mentioned account(s): ${knownNames.keys.count { key -> key in tokensByKey }} from comments or members, " +
+                "${lookedUpNames.values.count { name -> name != null }} from the cache or a lookup " +
+                "(${keysToFetch.size} fetched), ${unknownKeys.size} unknown" +
+                if (unknownKeys.isEmpty()) "" else "; unknown account key(s): $unknownKeys"
+        )
+        return names
+    }
+
+    /** Names from the comment authors and resolvers of this pull request, then the workspace members, keyed by normalized uuid. */
+    private fun knownNames(comments: List<PullRequestComment>, members: List<ReviewerCandidate>): Map<String, String> {
+        val names = mutableMapOf<String, String>()
+        members.forEach { member ->
+            names[CommentMentionResolver.normalizeKey(rawKey = member.uuid)] = member.displayName
+        }
+        comments.forEach { comment ->
+            listOfNotNull(comment.author, comment.resolvedBy).forEach { user ->
+                val uuid = user.uuid ?: return@forEach
+                names[CommentMentionResolver.normalizeKey(rawKey = uuid)] = user.displayName
+            }
+        }
+        return names
+    }
+
+    /** Looks up the accounts in [keys], a few at a time, and returns their names; a failed lookup yields a null name. */
+    private suspend fun fetchUserNames(
+        tokensByKey: Map<String, String>,
+        keys: List<String>,
+        cache: BbCloudUserDisplayNameCache,
+        apiToken: String
+    ): Map<String, String?> {
+        if (keys.isEmpty()) {
+            return emptyMap()
+        }
+        val permits = Semaphore(permits = MAX_CONCURRENT_USER_LOOKUPS)
+        return coroutineScope {
+            keys.map { key ->
+                async {
+                    permits.withPermit {
+                        // A UUID account key is queried as {uuid}; an Atlassian account id (for example 712020:...) must be queried
+                        // verbatim, because wrapping it in braces makes the /users endpoint return 404. CommentMentionResolver decides.
+                        val selector = CommentMentionResolver.lookupSelector(rawKey = tokensByKey.getValue(key))
+                        val displayName = fetchUser(uuid = selector, apiToken = apiToken)?.displayName
+                        if (displayName == null) {
+                            LOG.info(
+                                "Direct /users lookup did not return a name for mentioned account $key " +
+                                    "(likely a private profile or deprecated endpoint); it will show as unknown"
+                            )
+                        }
+                        cache.put(uuidKey = key, displayName = displayName)
+                        key to displayName
+                    }
+                }
+            }.awaitAll().toMap()
+        }
+    }
+
+    private suspend fun fetchUser(uuid: String, apiToken: String): ActivityUser? {
+        return try {
+            pullRequestClient.getUser(uuid = uuid, apiToken = apiToken)
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            LOG.debug("Could not look up a mentioned account", exception)
+            null
+        }
+    }
+
+    /** The text the conversation renders for a comment: the Markdown source when Bitbucket sent it, otherwise the HTML. */
+    private fun mentionSource(comment: PullRequestComment): String {
+        return comment.raw?.takeIf { raw -> raw.isNotBlank() } ?: comment.html
     }
 
     suspend fun pullRequestDetails(projectBasePath: String?, organizationUrl: String, pullRequestId: Long): PullRequestDetails? {
@@ -817,5 +984,8 @@ class BbCloudOpenPullRequestService(
 
     companion object {
         private val LOG = logger<BbCloudOpenPullRequestService>()
+
+        /** Caps the `/users/{uuid}` requests in flight, so a conversation with many unknown mentions does not flood Bitbucket. */
+        private const val MAX_CONCURRENT_USER_LOOKUPS = 4
     }
 }

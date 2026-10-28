@@ -18,6 +18,7 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.project.Project
+import com.intellij.ui.EditorNotifications
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -125,11 +126,28 @@ class WorktreeTodoBannerViewModel(private val project: Project, private val coro
             previous = previous
         )
         state.value = resolved
+        if (shouldRefreshEditorNotifications(previousIsWorktree = previous.isWorktree, nextIsWorktree = resolved.isWorktree)) {
+            refreshEditorNotifications()
+        }
         if (!resolved.isWorktree) {
             return
         }
         prefetchRepositoryAvatar(avatarUrl = resolved.repositoryAvatarUrl)
         reconcileLineTotals(previous = previous, resolved = resolved)
+    }
+
+    /**
+     * Re-queries the editor notification providers, so an editor that was opened before the state resolved shows the
+     * blue bar, and an editor that was opened while the pull request was open hides it once the state changes.
+     */
+    private fun refreshEditorNotifications() {
+        ApplicationManager.getApplication().invokeLater {
+            if (project.isDisposed) {
+                return@invokeLater
+            }
+            LOG.debug("Refreshing editor notifications after the blue bar state changed")
+            EditorNotifications.getInstance(project).updateAllNotifications()
+        }
     }
 
     fun setRefreshEnabled(enabled: Boolean) {

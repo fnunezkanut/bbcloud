@@ -22,6 +22,9 @@ import java.net.URISyntaxException
  * description images only to an authenticated browser session and exposes no plugin-usable download endpoint. Clicking
  * a link opens the image URL in the browser, where the user's session can resolve it. Raw HTML images remain sanitized
  * as plain text.
+ *
+ * The rendered text is selectable, so users can copy descriptions, comment bodies and composer previews. Link clicks
+ * still open in the browser.
  */
 @Composable
 internal fun MarkdownDescription(markdown: String) {
@@ -31,6 +34,7 @@ internal fun MarkdownDescription(markdown: String) {
         Markdown(
             markdown = content,
             modifier = Modifier.fillMaxWidth(),
+            selectable = true,
             onUrlClick = { url: String ->
                 LOG.info("User opened a pull-request description link in browser")
                 BrowserUtil.browse(url)

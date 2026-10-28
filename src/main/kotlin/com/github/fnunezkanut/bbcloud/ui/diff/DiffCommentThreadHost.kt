@@ -18,6 +18,7 @@ import java.awt.event.ComponentAdapter
 import java.awt.event.ComponentEvent
 import java.awt.event.ComponentListener
 import javax.swing.JPanel
+import javax.swing.SwingUtilities
 import kotlin.math.ceil
 import kotlin.math.max
 
@@ -34,6 +35,18 @@ import kotlin.math.max
 internal class DiffCommentThreadHost(private val editor: EditorEx) : JPanel(BorderLayout()) {
     /** The embedded Compose content; set by [attachComposePanel] once the content is built. */
     private var composePanel: ComposePanel? = null
+
+    /** Set once a Compose measurement failed, so [logMeasureFailureOnce] logs only the first failure of this host. */
+    private var measureFailureLogged: Boolean = false
+
+    /** The height last reported by [getPreferredSize]; used when Compose has no measured height yet. */
+    private var lastInlayHeight: Int = 0
+
+    /** The latest Compose content height (physical pixels) waiting for [applyComposeContentHeight]. */
+    private var pendingContentHeightPx: Int = 0
+
+    /** Whether an [applyComposeContentHeight] run is already queued on the EDT. */
+    private var contentHeightSyncScheduled: Boolean = false
 
     /** The scrollbar-flip math only depends on the scroll pane client property, so it is computed once. */
     private val verticalScrollbarFlipped: Boolean = run {
@@ -89,22 +102,59 @@ internal class DiffCommentThreadHost(private val editor: EditorEx) : JPanel(Bord
     /**
      * Drives the inlay width from the editor viewport instead of the preferred width of the Compose content, so the
      * thread spans the full editor text width. The height follows the embedded content preferred height.
+     *
+     * Must not call `super.getPreferredSize()`: that re-enters [ComposePanel.getPreferredSize], which measures Compose
+     * during a Swing validation pass and fails with "layout state is not idle before measure starts".
      */
     override fun getPreferredSize(): Dimension {
         val width = currentInlayWidth()
-        val childHeight = resolveComposePanelHeightForInlay(panel = composePanel) ?: super.getPreferredSize().height
+        val childHeight = inlayHeightOrFallback(
+            resolve = { resolveComposePanelHeightForInlay(panel = composePanel) },
+            fallback = { lastInlayHeight },
+            onFailure = { exception -> logMeasureFailureOnce(exception = exception) }
+        )
+        lastInlayHeight = childHeight
         return Dimension(width, childHeight)
+    }
+
+    /**
+     * Logs a failed Compose measurement once per host, so a layout pass that keeps failing does not flood `idea.log`.
+     */
+    private fun logMeasureFailureOnce(exception: IllegalStateException) {
+        if (measureFailureLogged) {
+            return
+        }
+        measureFailureLogged = true
+        LOG.warn("Inline comment inlay could not measure the Compose content; using the Swing height", exception)
     }
 
     /**
      * Updates the Compose preferred height after layout (Reply/Edit expansion). Width stays viewport-derived; height is
      * set only when [contentHeightPx] is positive. [contentHeightPx] is in Compose physical pixels and is converted to
-     * Swing logical pixels before being stored on the panel preferred size.
+     * Swing logical pixels before being stored on the panel preferred size. The update runs on a later EDT event.
      */
     fun syncComposeContentHeight(contentHeightPx: Int) {
         if (contentHeightPx <= 0) {
             return
         }
+        // Called from `onSizeChanged`, i.e. inside the Compose measure pass. Revalidating and dispatching the resize
+        // event synchronously re-enters Compose measurement ("layout state is not idle before measure starts") and
+        // leaves the Compose layout state stuck, which then fails again when the panel is detached. Defer and
+        // coalesce the update so it runs after the measure pass completes.
+        pendingContentHeightPx = contentHeightPx
+        if (contentHeightSyncScheduled) {
+            return
+        }
+        contentHeightSyncScheduled = true
+        SwingUtilities.invokeLater {
+            contentHeightSyncScheduled = false
+            if (isDisplayable) {
+                applyComposeContentHeight(contentHeightPx = pendingContentHeightPx)
+            }
+        }
+    }
+
+    private fun applyComposeContentHeight(contentHeightPx: Int) {
         val panel = composePanel ?: return
         val width = currentInlayWidth().takeIf { inlayWidth -> inlayWidth > 0 }
             ?: panel.preferredSize?.width?.takeIf { panelWidth -> panelWidth > 0 }
@@ -225,6 +275,20 @@ internal fun preferredComposeDimensionForWidthUpdate(width: Int, existingPreferr
         UNSPECIFIED_DIMENSION_VALUE
     }
     return Dimension(width, height)
+}
+
+/**
+ * Returns the height from [resolve], or the height from [fallback] when [resolve] yields no value. An
+ * [IllegalStateException] thrown while Compose sizes its content is reported to [onFailure] and replaced by [fallback],
+ * so the EDT layout pass does not fail.
+ */
+internal fun inlayHeightOrFallback(resolve: () -> Int?, fallback: () -> Int, onFailure: (IllegalStateException) -> Unit): Int {
+    return try {
+        resolve() ?: fallback()
+    } catch (exception: IllegalStateException) {
+        onFailure(exception)
+        fallback()
+    }
 }
 
 /** Height reported to the editor inlay when Compose preferred height is not ready yet. */

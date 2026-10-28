@@ -208,7 +208,94 @@ class PullRequestDetailViewModelTest {
         )
     }
 
-    private fun details(id: Long = 42L): PullRequestDetails {
+    @Test
+    fun `showActions - should disable request changes actions on own pull request`() {
+        // GIVEN
+        val viewModel = createViewModel()
+        viewModel.bind(pullRequestId = 42L)
+
+        // WHEN
+        viewModel.showActions(details(isAuthoredByCurrentUser = true))
+
+        // THEN
+        assertSoftly {
+            viewModel.state.value.actions shouldContain PullRequestAction.RequestChanges
+            viewModel.state.value.disabledActions shouldContain PullRequestAction.RequestChanges
+            viewModel.state.value.actionTooltips[PullRequestAction.RequestChanges] shouldBe
+                "You cannot request changes on your own pull request"
+        }
+    }
+
+    @Test
+    fun `showActions - should disable remove changes request action on own pull request`() {
+        // GIVEN
+        val viewModel = createViewModel()
+        viewModel.bind(pullRequestId = 42L)
+
+        // WHEN
+        viewModel.showActions(details(isAuthoredByCurrentUser = true, isChangesRequestedByCurrentUser = true))
+
+        // THEN
+        assertSoftly {
+            viewModel.state.value.actions shouldContain PullRequestAction.RemoveChangesRequest
+            viewModel.state.value.disabledActions shouldContain PullRequestAction.RemoveChangesRequest
+        }
+    }
+
+    @Test
+    fun `showActions - should keep request changes enabled on another user's pull request`() {
+        // GIVEN
+        val viewModel = createViewModel()
+        viewModel.bind(pullRequestId = 42L)
+
+        // WHEN
+        viewModel.showActions(details(isAuthoredByCurrentUser = false))
+
+        // THEN
+        assertSoftly {
+            viewModel.state.value.actions shouldContain PullRequestAction.RequestChanges
+            viewModel.state.value.disabledActions shouldNotContain PullRequestAction.RequestChanges
+            viewModel.state.value.actionTooltips[PullRequestAction.RequestChanges] shouldBe null
+        }
+    }
+
+    @Test
+    fun `showActions - should offer remove changes request when current user already requested changes`() {
+        // GIVEN
+        val viewModel = createViewModel()
+        viewModel.bind(pullRequestId = 42L)
+
+        // WHEN
+        viewModel.showActions(details(isChangesRequestedByCurrentUser = true))
+
+        // THEN
+        assertSoftly {
+            viewModel.state.value.actions shouldContain PullRequestAction.RemoveChangesRequest
+            viewModel.state.value.actions shouldNotContain PullRequestAction.RequestChanges
+        }
+    }
+
+    @Test
+    fun `showActions - should keep merge disabled and request changes disabled on own blocked pull request`() {
+        // GIVEN
+        val viewModel = createViewModel()
+        viewModel.bind(pullRequestId = 42L)
+        viewModel.showActions(details(isAuthoredByCurrentUser = true))
+
+        // WHEN
+        viewModel.setMergeChecksState(pullRequestId = 42L, state = MergeChecksState.Blocked)
+
+        // THEN
+        assertSoftly {
+            viewModel.state.value.disabledActions shouldContain PullRequestAction.Merge
+            viewModel.state.value.disabledActions shouldContain PullRequestAction.RequestChanges
+            viewModel.state.value.actionTooltips[PullRequestAction.Merge] shouldBe "Merging is blocked by a merge check"
+            viewModel.state.value.actionTooltips[PullRequestAction.RequestChanges] shouldBe
+                "You cannot request changes on your own pull request"
+        }
+    }
+
+    private fun details(id: Long = 42L, isAuthoredByCurrentUser: Boolean = false, isChangesRequestedByCurrentUser: Boolean = false): PullRequestDetails {
         return PullRequestDetails(
             summary = PullRequestSummary(
                 id = id,
@@ -224,7 +311,9 @@ class PullRequestDetailViewModelTest {
                 state = PullRequestState.Open,
                 isDraft = false
             ),
-            isApprovedByCurrentUser = false
+            isApprovedByCurrentUser = false,
+            isChangesRequestedByCurrentUser = isChangesRequestedByCurrentUser,
+            isAuthoredByCurrentUser = isAuthoredByCurrentUser
         )
     }
 }

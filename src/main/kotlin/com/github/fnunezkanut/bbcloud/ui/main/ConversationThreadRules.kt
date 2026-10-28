@@ -2,6 +2,7 @@ package com.github.fnunezkanut.bbcloud.ui.main
 
 import com.github.fnunezkanut.bbcloud.BbCloudBundle
 import com.github.fnunezkanut.bbcloud.bitbucket.ActivityUser
+import com.github.fnunezkanut.bbcloud.bitbucket.CommentMentionResolver
 import com.github.fnunezkanut.bbcloud.bitbucket.InlineCommentSide
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestComment
 import com.github.fnunezkanut.bbcloud.bitbucket.TimelineEntry
@@ -50,14 +51,16 @@ object ConversationThreadRules {
     /**
      * The Markdown of a comment body. Bitbucket reports the Markdown source as [PullRequestComment.raw], but only
      * sometimes; when it is missing, the rendered HTML is stripped down to its text so that the comment never renders
-     * blank.
+     * blank. `@{account-key}` mentions are replaced with the names in [mentions]; a mention without a name stays as written.
      */
-    fun commentBodyMarkdown(comment: PullRequestComment): String {
+    fun commentBodyMarkdown(comment: PullRequestComment, mentions: Map<String, String> = emptyMap()): String {
         val raw = comment.raw
-        if (!raw.isNullOrBlank()) {
-            return raw
+        val body = if (!raw.isNullOrBlank()) {
+            raw
+        } else {
+            normalizeDescription(comment.html)
         }
-        return normalizeDescription(comment.html)
+        return CommentMentionResolver.resolveMentions(body = body, mentions = mentions)
     }
 
     /**
@@ -78,16 +81,24 @@ object ConversationThreadRules {
         return if (inlineLine != null) "$inlinePath:$inlineLine" else inlinePath
     }
 
+    /**
+     * The inline path of a thread whose file still exists, or null when the thread should render like a pull-request-level
+     * thread: either it has no inline path, or its file is gone so a link to it would lead nowhere.
+     */
+    fun existingInlinePath(comment: PullRequestComment, fileExists: (String) -> Boolean): String? {
+        return comment.inlinePath?.takeIf { path -> fileExists(path) }
+    }
+
     /** The notice of a resolved thread; Bitbucket omits the resolver on some threads, so the name falls back to "Unknown user". */
     fun resolvedByText(resolvedBy: ActivityUser?): String {
         val name = resolvedBy?.displayName?.takeIf { displayName -> displayName.isNotBlank() }
-            ?: BbCloudBundle.message("main.branch.activity.unknownUser")
-        return BbCloudBundle.message("main.branch.activity.resolvedBy", name)
+            ?: BbCloudBundle.message("main.branch.history.unknownUser")
+        return BbCloudBundle.message("main.branch.history.resolvedBy", name)
     }
 
     /** The name of a comment author; Bitbucket does not always report the author of a deleted comment. */
     fun authorName(author: ActivityUser?): String {
         return author?.displayName?.takeIf { displayName -> displayName.isNotBlank() }
-            ?: BbCloudBundle.message("main.branch.activity.unknownUser")
+            ?: BbCloudBundle.message("main.branch.history.unknownUser")
     }
 }

@@ -888,4 +888,72 @@ class BitbucketPullRequestResponseParserTest {
             summary.shouldBeNull()
         }
     }
+
+    @Nested
+    inner class UserLookupTests {
+        @Test
+        fun `buildUserUrl - should encode the braced account key as one path segment`() {
+            // WHEN
+            val url = BitbucketPullRequestResponseParser.buildUserUrl(uuid = "{11111111-1111-1111-1111-111111111111}").toHttpUrl()
+
+            // THEN
+            assertSoftly(url) {
+                encodedPathSegments.last() shouldBe "%7B11111111-1111-1111-1111-111111111111%7D"
+                queryParameter("fields") shouldBe "uuid,account_id,display_name,links.avatar.href"
+            }
+        }
+
+        @Test
+        fun `buildUserUrl - should keep an Atlassian account id unbraced in one path segment`() {
+            // GIVEN
+            val accountId = "712020:00000000-0000-0000-0000-000000000000"
+
+            // WHEN
+            val url = BitbucketPullRequestResponseParser.buildUserUrl(uuid = accountId).toHttpUrl()
+
+            // THEN
+            assertSoftly(url) {
+                encodedPathSegments.last() shouldBe accountId
+                encodedPathSegments.last().contains("%7B") shouldBe false
+                encodedPathSegments.last().contains("%7D") shouldBe false
+                queryParameter("fields") shouldBe "uuid,account_id,display_name,links.avatar.href"
+            }
+        }
+
+        @Test
+        fun `parseUser - should read the uuid, account id, display name, and avatar of an account`() {
+            // GIVEN
+            val body =
+                """
+                {
+                  "uuid": "{11111111-1111-1111-1111-111111111111}",
+                  "account_id": "712020:00000000-0000-0000-0000-000000000000",
+                  "display_name": "Anna",
+                  "links": {"avatar": {"href": "https://avatars.example/anna.png"}}
+                }
+                """.trimIndent()
+
+            // WHEN
+            val user = BitbucketPullRequestResponseParser.parseUser(responseBody = body)
+
+            // THEN
+            user shouldBe ActivityUser(
+                uuid = "{11111111-1111-1111-1111-111111111111}",
+                displayName = "Anna",
+                avatarUrl = "https://avatars.example/anna.png"
+            )
+        }
+
+        @Test
+        fun `parseUser - should return null when the account has no display name`() {
+            // GIVEN
+            val body = """{"uuid": "{11111111-1111-1111-1111-111111111111}"}"""
+
+            // WHEN
+            val user = BitbucketPullRequestResponseParser.parseUser(responseBody = body)
+
+            // THEN
+            user.shouldBeNull()
+        }
+    }
 }

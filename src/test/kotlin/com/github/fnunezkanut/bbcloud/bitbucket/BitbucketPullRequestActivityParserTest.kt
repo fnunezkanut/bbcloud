@@ -432,9 +432,11 @@ class BitbucketPullRequestActivityParserTest {
                 "values.created_on",
                 "values.resolved_on",
                 "values.creator.uuid",
+                "values.creator.account_id",
                 "values.creator.display_name",
                 "values.creator.links.avatar.href",
                 "values.resolved_by.uuid",
+                "values.resolved_by.account_id",
                 "values.resolved_by.display_name",
                 "values.resolved_by.links.avatar.href"
             )

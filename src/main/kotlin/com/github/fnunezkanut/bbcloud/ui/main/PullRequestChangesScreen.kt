@@ -12,7 +12,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -44,11 +43,9 @@ import org.jetbrains.jewel.ui.component.LazyTree
 import org.jetbrains.jewel.ui.component.Link
 import org.jetbrains.jewel.ui.component.Text
 import org.jetbrains.jewel.ui.component.Tooltip
-import org.jetbrains.jewel.ui.component.VerticallyScrollableContainer
 import org.jetbrains.jewel.ui.icons.AllIconsKeys
 import java.awt.datatransfer.StringSelection
 
-private val CARD_GAP = 8.dp
 private val FILE_ICON_SIZE = 16.dp
 private val COMMENT_PILL_ICON_SIZE = 14.dp
 
@@ -60,34 +57,14 @@ private val LINE_STATS_LEADING_GAP = 5.dp
 private val LOG = logger<PullRequestChangesViewModel>()
 
 /**
- * The Jewel Changes tab: the file-changes card on the left and the activity feed on the right, in the same
- * golden-ratio split the Overview tab uses.
+ * The Jewel Changes tab: the file-changes card fills the whole width and height of the tab. The activity feed is shown
+ * on the Overview tab, below the description.
  */
 @Composable
-internal fun PullRequestChangesScreen(filesViewModel: PullRequestChangesViewModel, activityViewModel: PullRequestActivityViewModel) {
-    Row(
-        modifier = Modifier.fillMaxSize(),
-        horizontalArrangement = Arrangement.spacedBy(CARD_GAP)
-    ) {
-        Column(
-            modifier = Modifier
-                .weight(GOLDEN_RATIO_LEFT)
-                .fillMaxHeight()
-        ) {
-            TitledCardBox(title = BbCloudBundle.message("main.branch.changes.card.fileChanges")) {
-                FileChangesBody(viewModel = filesViewModel)
-            }
-        }
-        Column(
-            modifier = Modifier
-                .weight(GOLDEN_RATIO_RIGHT)
-                .fillMaxHeight()
-        ) {
-            TitledCardBox {
-                VerticallyScrollableContainer(modifier = Modifier.fillMaxSize()) {
-                    PullRequestActivityFeedScreen(viewModel = activityViewModel)
-                }
-            }
+internal fun PullRequestChangesScreen(filesViewModel: PullRequestChangesViewModel) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        TitledCardBox(title = BbCloudBundle.message("main.branch.changes.card.fileChanges")) {
+            FileChangesBody(viewModel = filesViewModel)
         }
     }
 }

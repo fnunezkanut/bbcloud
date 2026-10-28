@@ -1,6 +1,5 @@
 package com.github.fnunezkanut.bbcloud.ui.main
 
-import com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.PullRequestReviewBarDiffRequestProducer
 import com.intellij.diff.DiffDialogHints
 import com.intellij.diff.DiffManager
 import com.intellij.diff.chains.SimpleDiffRequestChain
@@ -22,9 +21,8 @@ internal object PullRequestChangeDiffOpener {
                     LOG.info("Cannot open the diff of the selected change: no diff producer is available")
                     return@invokeLater
                 }
-                val chain = SimpleDiffRequestChain.fromProducer(
-                    PullRequestReviewBarDiffRequestProducer.wrap(project = project, change = change, delegate = producer)
-                )
+                // The pull-request bars of the diff are attached by PullRequestDiffBarsDiffExtension, so the producer is used as is.
+                val chain = SimpleDiffRequestChain.fromProducer(producer)
                 DiffManager.getInstance().showDiff(project, chain, DiffDialogHints.DEFAULT)
                 LOG.info("Opened the diff of a changed file of the pull request")
             } catch (exception: Exception) {

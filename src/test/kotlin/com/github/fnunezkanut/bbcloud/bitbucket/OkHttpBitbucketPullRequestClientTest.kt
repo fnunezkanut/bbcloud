@@ -198,6 +198,59 @@ class OkHttpBitbucketPullRequestClientTest {
         }
 
     @Test
+    fun `performAction requestChanges - sends an empty JSON post to the request-changes endpoint`(): Unit =
+        runBlocking {
+            // GIVEN
+            val requests = mutableListOf<Request>()
+            val client = OkHttpBitbucketPullRequestClient(capturingClient(requests))
+
+            // WHEN
+            val result = client.performAction(
+                workspace = "workspace",
+                repoSlug = "repo",
+                pullRequest = summary(),
+                action = PullRequestAction.RequestChanges,
+                apiToken = "secret"
+            )
+
+            // THEN
+            val request = requests.single()
+            assertSoftly {
+                result shouldBe PullRequestActionResult.Success
+                request.method shouldBe "POST"
+                request.url.encodedPath shouldBe "/2.0/repositories/workspace/repo/pullrequests/42/request-changes"
+                request.header("Authorization") shouldBe "Bearer secret"
+                request.bodyText() shouldBe "{}"
+            }
+        }
+
+    @Test
+    fun `performAction removeChangesRequest - sends a delete to the request-changes endpoint`(): Unit =
+        runBlocking {
+            // GIVEN
+            val requests = mutableListOf<Request>()
+            val client = OkHttpBitbucketPullRequestClient(capturingClient(requests))
+
+            // WHEN
+            val result = client.performAction(
+                workspace = "workspace",
+                repoSlug = "repo",
+                pullRequest = summary(),
+                action = PullRequestAction.RemoveChangesRequest,
+                apiToken = "secret"
+            )
+
+            // THEN
+            val request = requests.single()
+            assertSoftly {
+                result shouldBe PullRequestActionResult.Success
+                request.method shouldBe "DELETE"
+                request.url.encodedPath shouldBe "/2.0/repositories/workspace/repo/pullrequests/42/request-changes"
+                request.header("Authorization") shouldBe "Bearer secret"
+            }
+        }
+
+    @Test
     fun `reopenCommentThread - deletes the comment resolve endpoint`(): Unit =
         runBlocking {
             // GIVEN

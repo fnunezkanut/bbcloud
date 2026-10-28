@@ -70,7 +70,8 @@ private fun ConversationComposer(viewModel: PullRequestConversationViewModel) {
     CommentComposerScreen(
         viewModel = composerViewModel,
         avatarIcon = viewModel.avatarIconFor(state.currentUserAvatarUrl),
-        modifier = Modifier.padding(bottom = CONVERSATION_THREAD_GAP)
+        modifier = Modifier.padding(bottom = CONVERSATION_THREAD_GAP),
+        showsDottedBorder = true
     )
 }
 
@@ -79,18 +80,18 @@ private fun ConversationComposer(viewModel: PullRequestConversationViewModel) {
 private fun ConversationBody(state: PullRequestConversationUiState, viewModel: PullRequestConversationViewModel) {
     when (state.loadState) {
         PullRequestConversationLoadState.Loading -> {
-            ConversationMessage(BbCloudBundle.message("main.branch.activity.loading"))
+            ConversationMessage(BbCloudBundle.message("main.branch.history.loading"))
         }
         PullRequestConversationLoadState.Error -> {
-            ConversationMessage(BbCloudBundle.message("main.branch.activity.error"))
+            ConversationMessage(BbCloudBundle.message("main.branch.history.error"))
         }
         PullRequestConversationLoadState.Loaded -> {
             if (state.isEmpty()) {
-                ConversationMessage(BbCloudBundle.message("main.branch.activity.empty"))
+                ConversationMessage(BbCloudBundle.message("main.branch.history.empty"))
             }
             state.groups.forEach { group ->
                 Text(
-                    text = activityDayHeaderText(group.day),
+                    text = historyDayHeaderText(group.day),
                     fontWeight = FontWeight.Bold,
                     color = JewelTheme.globalColors.text.info,
                     modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)
@@ -107,7 +108,7 @@ private fun ConversationBody(state: PullRequestConversationUiState, viewModel: P
                 }
             }
             if (state.isTruncated) {
-                ConversationMessage(BbCloudBundle.message("main.branch.activity.truncated"))
+                ConversationMessage(BbCloudBundle.message("main.branch.history.truncated"))
             }
         }
     }

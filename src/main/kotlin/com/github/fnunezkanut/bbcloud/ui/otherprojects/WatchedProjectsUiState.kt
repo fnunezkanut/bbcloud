@@ -14,8 +14,7 @@ data class WatchedProjectRow(
     val remoteUrl: String?,
     val localSlug: String,
     val isLocalOpenable: Boolean,
-    val avatarUrl: String?,
-    val isPruneInProgress: Boolean
+    val avatarUrl: String?
 )
 
 enum class WatchedProjectsCard {
@@ -30,6 +29,7 @@ data class WatchedProjectsUiState(
     val rescanFailed: Boolean = false,
     val syncVisible: Boolean = false,
     val syncEnabled: Boolean = true,
+    val pruneEnabled: Boolean = true,
     val masterToggle: ToggleableState = ToggleableState.Off,
     val avatarRevision: Int = 0
 )
@@ -47,8 +47,7 @@ internal fun buildWatchedProjectRow(
     mapping: WatchedProjectMapping,
     organizationUrl: String?,
     avatarUrl: String?,
-    worktrees: List<WatchedProjectWorktreeRow> = emptyList(),
-    isPruneInProgress: Boolean = false
+    worktrees: List<WatchedProjectWorktreeRow> = emptyList()
 ): WatchedProjectRow {
     return WatchedProjectRow(
         mapping = mapping,
@@ -63,7 +62,6 @@ internal fun buildWatchedProjectRow(
         isLocalOpenable = mapping.localFolderPath.isNotBlank() && runCatching {
             Files.isDirectory(Path.of(mapping.localFolderPath))
         }.getOrDefault(false),
-        avatarUrl = avatarUrl,
-        isPruneInProgress = isPruneInProgress
+        avatarUrl = avatarUrl
     )
 }

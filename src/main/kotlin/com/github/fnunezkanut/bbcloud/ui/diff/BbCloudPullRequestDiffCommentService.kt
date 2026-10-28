@@ -132,6 +132,7 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
                 viewModel = composerViewModel,
                 avatarIcon = avatarCache.iconFor(context.binding?.currentUserAvatarUrl ?: context.currentUserAvatarUrl),
                 showsCollapsedField = false,
+                showsDottedBorder = true,
                 onCollapsed = { Disposer.dispose(session) },
                 modifier = Modifier
                     .wrapContentHeight(align = Alignment.Top, unbounded = true)
@@ -210,6 +211,7 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
                 viewModel = composerViewModel,
                 avatarIcon = avatarCache.iconFor(context.binding?.currentUserAvatarUrl ?: context.currentUserAvatarUrl),
                 showsCollapsedField = false,
+                showsDottedBorder = true,
                 onCollapsed = { Disposer.dispose(session) },
                 modifier = Modifier
                     .wrapContentHeight(align = Alignment.Top, unbounded = true)
