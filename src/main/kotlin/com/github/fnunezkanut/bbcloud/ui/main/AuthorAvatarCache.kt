@@ -1,10 +1,10 @@
 package com.github.fnunezkanut.bbcloud.ui.main
 
 import com.github.fnunezkanut.bbcloud.bitbucket.BitbucketAvatarClient
+import com.github.fnunezkanut.bbcloud.ui.ScreenScale
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.logger
-import com.intellij.ui.scale.JBUIScale
 import com.intellij.ui.scale.ScaleContext
 import com.intellij.util.IconUtil
 import com.intellij.util.ui.ImageUtil
@@ -75,7 +75,7 @@ class AuthorAvatarCache(private val avatarClient: BitbucketAvatarClient = Bitbuc
             return
         }
         LOG.debug("Prefetching ${pendingUrls.size} author avatars")
-        val devicePixels = ceil(JBUI.scale(avatarSize) * JBUIScale.sysScale()).toInt()
+        val devicePixels = ceil(JBUI.scale(avatarSize) * ScreenScale.maxOfConnectedScreens()).toInt()
         pendingUrls.forEach { url ->
             coroutineScope.launch {
                 try {

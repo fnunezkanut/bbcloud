@@ -13,6 +13,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import com.github.fnunezkanut.bbcloud.bitbucket.TimelineEntry
 import com.github.fnunezkanut.bbcloud.ui.main.ConversationThreadLayout
 import com.github.fnunezkanut.bbcloud.ui.main.PullRequestCommentThreadCard
@@ -20,6 +21,7 @@ import com.github.fnunezkanut.bbcloud.ui.main.PullRequestCommentThreadCard
 /** Inline diff thread card with Conversation spacing; reports its natural height so the inlay can grow and shrink. */
 @Composable
 internal fun DiffInlineCommentThreadCard(thread: TimelineEntry.CommentThread, host: DiffCommentThreadHost, controller: EditorCommentThreadController) {
+    val density = LocalDensity.current.density
     PullRequestCommentThreadCard(
         thread = thread,
         host = controller,
@@ -28,7 +30,7 @@ internal fun DiffInlineCommentThreadCard(thread: TimelineEntry.CommentThread, ho
         modifier = Modifier
             .wrapContentHeight(align = Alignment.Top, unbounded = true)
             .onSizeChanged { size ->
-                host.syncComposeContentHeight(contentHeightPx = size.height)
+                host.syncComposeContentHeight(contentHeightPx = size.height, density = density)
             }
             .padding(bottom = ConversationThreadLayout.verticalGapBetweenCards)
     )

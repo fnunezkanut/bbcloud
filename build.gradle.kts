@@ -1,3 +1,7 @@
+import org.gradle.api.tasks.testing.TestDescriptor
+import org.gradle.api.tasks.testing.TestListener
+import org.gradle.api.tasks.testing.TestResult
+
 plugins {
     kotlin("jvm") version "2.4.20"
     kotlin("plugin.serialization") version "2.4.20"
@@ -9,7 +13,7 @@ plugins {
 }
 
 group = "com.github.fnunezkanut"
-version = "1.1.0"
+version = "1.2.0"
 
 val isLocalBuild = providers.environmentVariable("CI").orNull.isNullOrEmpty()
 
@@ -103,8 +107,32 @@ tasks.test {
         excludeTags("integration")
     }
     testLogging {
-        events("passed", "skipped", "failed")
+        events("skipped", "failed")
     }
+    val testLogger = logger
+    addTestListener(
+        object : TestListener {
+            override fun beforeSuite(suite: TestDescriptor) {}
+
+            override fun beforeTest(testDescriptor: TestDescriptor) {}
+
+            override fun afterTest(testDescriptor: TestDescriptor, result: TestResult) {}
+
+            override fun afterSuite(suite: TestDescriptor, result: TestResult) {
+                if (suite.parent != null) return // reports the root suite only
+                val suiteName = suite.displayName.substringAfterLast(":")
+                val failedIcon = if (result.failedTestCount > 0) "❌ " else ""
+                val skippedIcon = if (result.skippedTestCount > 0) "⚠ " else ""
+                testLogger.lifecycle("TestSuite [$suiteName] Result: ${result.resultType}")
+                testLogger.lifecycle(
+                    "TestSuite [$suiteName] Summary: ${result.testCount} tests [ " +
+                        "${result.successfulTestCount} OK ✅ , " +
+                        "${result.failedTestCount} FAIL $failedIcon, " +
+                        "${result.skippedTestCount} SKIP $skippedIcon ]",
+                )
+            }
+        },
+    )
 }
 
 kotlinter {

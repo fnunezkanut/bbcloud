@@ -1,0 +1,135 @@
+package com.github.fnunezkanut.bbcloud.bitbucket
+
+/**
+ * Splits Bitbucket comment Markdown into prose and code runs, so the Markdown rewriters ([CommentMentionResolver] and
+ * [CommentEmojiResolver]) leave inline code spans and fenced code blocks untouched.
+ *
+ * The code detection is a deliberately small scanner rather than a full CommonMark parser, so an exotic construct can be
+ * misjudged. The failure mode is a token that stays literal or is rewritten when it should not be, never a body that is
+ * corrupted.
+ */
+internal object MarkdownCodeRegions {
+    /** One run of a comment body. [isCode] is true for a fenced block or an inline code span, which is never rewritten. */
+    internal data class BodySegment(val text: String, val isCode: Boolean)
+
+    /**
+     * Splits [body] into prose and code runs. The segments join back to exactly [body], so the prose can be rewritten and
+     * the code copied through unchanged.
+     */
+    fun splitCodeRegions(body: String): List<BodySegment> {
+        val segments = mutableListOf<BodySegment>()
+        val pending = StringBuilder()
+        var fenceMarker: String? = null
+        val lines = body.split('\n')
+        lines.forEachIndexed { index, line ->
+            val terminated = if (index < lines.lastIndex) "$line\n" else line
+            val marker = fenceMarker
+            if (marker == null) {
+                val opener = fenceOpenerOf(line = line)
+                if (opener != null) {
+                    segments += splitInlineCode(text = pending.toString())
+                    pending.clear()
+                    fenceMarker = opener
+                }
+                pending.append(terminated)
+            } else {
+                pending.append(terminated)
+                if (isFenceCloser(line = line, marker = marker)) {
+                    addSegment(segments = segments, text = pending.toString(), isCode = true)
+                    pending.clear()
+                    fenceMarker = null
+                }
+            }
+        }
+        if (fenceMarker != null) {
+            // An unclosed fence runs to the end of the body, as it does in CommonMark.
+            addSegment(segments = segments, text = pending.toString(), isCode = true)
+        } else {
+            segments += splitInlineCode(text = pending.toString())
+        }
+        return segments
+    }
+
+    /** Splits prose into text and inline code spans; a backtick run without a matching closer stays literal text. */
+    private fun splitInlineCode(text: String): List<BodySegment> {
+        val segments = mutableListOf<BodySegment>()
+        val prose = StringBuilder()
+        var index = 0
+        while (index < text.length) {
+            val character = text[index]
+            if (character == '\\' && text.getOrNull(index + 1) == '`') {
+                // A backslash-escaped backtick is text, not the start of a code span.
+                prose.append(text, index, index + 2)
+                index += 2
+            } else if (character != '`') {
+                prose.append(character)
+                index += 1
+            } else {
+                val openLength = backtickRunLength(text = text, start = index)
+                val closeEnd = closingBacktickRunEnd(text = text, from = index + openLength, length = openLength)
+                if (closeEnd == -1) {
+                    prose.append(text, index, index + openLength)
+                    index += openLength
+                } else {
+                    addSegment(segments = segments, text = prose.toString(), isCode = false)
+                    prose.clear()
+                    addSegment(segments = segments, text = text.substring(index, closeEnd), isCode = true)
+                    index = closeEnd
+                }
+            }
+        }
+        addSegment(segments = segments, text = prose.toString(), isCode = false)
+        return segments
+    }
+
+    private fun backtickRunLength(text: String, start: Int): Int {
+        var end = start
+        while (end < text.length && text[end] == '`') {
+            end += 1
+        }
+        return end - start
+    }
+
+    /** Returns the index just past the first backtick run of exactly [length] at or after [from], or -1 when there is none. */
+    private fun closingBacktickRunEnd(text: String, from: Int, length: Int): Int {
+        var index = from
+        while (index < text.length) {
+            if (text[index] == '`') {
+                val runLength = backtickRunLength(text = text, start = index)
+                if (runLength == length) {
+                    return index + runLength
+                }
+                index += runLength
+            } else {
+                index += 1
+            }
+        }
+        return -1
+    }
+
+    /** Returns the fence marker (three or more backticks or tildes) when [line] opens a fenced block, otherwise null. */
+    private fun fenceOpenerOf(line: String): String? {
+        val trimmed = line.trimStart()
+        val fenceCharacter = trimmed.firstOrNull() ?: return null
+        if (fenceCharacter != '`' && fenceCharacter != '~') {
+            return null
+        }
+        val run = trimmed.takeWhile { character -> character == fenceCharacter }
+        return run.takeIf { candidate -> candidate.length >= FENCE_MIN_LENGTH }
+    }
+
+    /** A closing fence repeats the opener's character at least as many times, with nothing else on the line. */
+    private fun isFenceCloser(line: String, marker: String): Boolean {
+        val trimmed = line.trim()
+        return trimmed.length >= marker.length && trimmed.all { character -> character == marker.first() }
+    }
+
+    private fun addSegment(segments: MutableList<BodySegment>, text: String, isCode: Boolean) {
+        if (text.isEmpty()) {
+            return
+        }
+        segments += BodySegment(text = text, isCode = isCode)
+    }
+
+    private const val FENCE_MIN_LENGTH = 3
+}
