@@ -1,3 +1,7 @@
+import org.gradle.api.tasks.testing.TestDescriptor
+import org.gradle.api.tasks.testing.TestListener
+import org.gradle.api.tasks.testing.TestResult
+
 plugins {
     kotlin("jvm") version "2.4.20"
     kotlin("plugin.serialization") version "2.4.20"
@@ -9,7 +13,7 @@ plugins {
 }
 
 group = "com.github.fnunezkanut"
-version = "1.1.0"
+version = "1.2.0"
 
 val isLocalBuild = providers.environmentVariable("CI").orNull.isNullOrEmpty()
 
@@ -87,12 +91,6 @@ intellijPlatform {
         ides {
             recommended()
         }
-        // The verifier reports experimental API usages as informational results, and the ignored problems file
-        // does not apply to them (verifier 1.410 filters only compatibility problems). The remaining usages are the
-        // com.intellij.collaboration.* code review UI, which has no stable replacement, the
-        // ToolWindowContentUi.NOT_SELECTED_TAB_ICON_TRANSPARENT tab icon key, and the Jewel components
-        // (TextField/TextArea/Markdown/LazyTree/TabStrip) that the Compose screens are built from. They do not fail
-        // verifyPlugin.
     }
 }
 
@@ -103,8 +101,39 @@ tasks.test {
         excludeTags("integration")
     }
     testLogging {
-        events("passed", "skipped", "failed")
+        events = setOf(
+            org.gradle.api.tasks.testing.logging.TestLogEvent.FAILED
+        )
+        showStandardStreams = false
+        showExceptions = true
+        showCauses = true
+        showStackTraces = true
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
     }
+    val testLogger = logger
+    addTestListener(
+        object : TestListener {
+            override fun beforeSuite(suite: TestDescriptor) {}
+
+            override fun beforeTest(testDescriptor: TestDescriptor) {}
+
+            override fun afterTest(testDescriptor: TestDescriptor, result: TestResult) {}
+
+            override fun afterSuite(suite: TestDescriptor, result: TestResult) {
+                if (suite.parent != null) return // reports the root suite only
+                val suiteName = suite.displayName.substringAfterLast(":")
+                val failedIcon = if (result.failedTestCount > 0) "❌ " else ""
+                val skippedIcon = if (result.skippedTestCount > 0) "⚠ " else ""
+                testLogger.lifecycle("TestSuite [$suiteName] Result: ${result.resultType}")
+                testLogger.lifecycle(
+                    "TestSuite [$suiteName] Summary: ${result.testCount} tests [ " +
+                        "${result.successfulTestCount} OK ✅ , " +
+                        "${result.failedTestCount} FAIL $failedIcon, " +
+                        "${result.skippedTestCount} SKIP $skippedIcon ]",
+                )
+            }
+        },
+    )
 }
 
 kotlinter {

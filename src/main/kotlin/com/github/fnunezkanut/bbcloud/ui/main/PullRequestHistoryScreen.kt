@@ -36,6 +36,7 @@ import com.github.fnunezkanut.bbcloud.BbCloudBundle
 import com.github.fnunezkanut.bbcloud.bitbucket.ActivityFeedEntry
 import com.github.fnunezkanut.bbcloud.bitbucket.ActivityUser
 import com.github.fnunezkanut.bbcloud.bitbucket.BuildState
+import com.github.fnunezkanut.bbcloud.bitbucket.CommentEmojiResolver
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestBuildStatus
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestCommit
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestState
@@ -310,7 +311,7 @@ private fun HistoryStatePill(text: String, state: PullRequestState) {
 private fun HistoryTaskCheckBox(task: PullRequestTask) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Checkbox(checked = task.isResolved, onCheckedChange = {}, enabled = false)
-        SelectableText(text = task.content)
+        SelectableText(text = remember(task.content) { CommentEmojiResolver.resolveEmoji(body = task.content) })
     }
 }
 

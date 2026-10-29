@@ -8,6 +8,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import com.github.fnunezkanut.bbcloud.BbCloudBundle
+import com.github.fnunezkanut.bbcloud.bitbucket.CommentEmojiResolver
+import com.github.fnunezkanut.bbcloud.bitbucket.MarkdownCodeRegions
 import com.intellij.ide.BrowserUtil
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.util.text.StringUtil
@@ -45,19 +47,33 @@ internal fun MarkdownDescription(markdown: String) {
 }
 
 internal fun normalizeDescription(markdown: String): String {
+    // Replace Bitbucket emoji markup (`:name:{: data-emoji-text='…' }`) with the emoji first, so the image attribute regex
+    // below never sees an emoji fragment.
+    val withEmoji = CommentEmojiResolver.resolveEmoji(body = markdown)
+    // The image and HTML rewrites apply to prose only. Inline code spans and fenced blocks are copied through unchanged,
+    // so code such as `branch/<CID>-v<N>` keeps its angle brackets instead of being stripped as HTML tags.
+    val segments = MarkdownCodeRegions.splitCodeRegions(body = withEmoji).map { segment ->
+        if (segment.isCode) segment else segment.copy(text = normalizeProse(text = segment.text))
+    }
+    val hasHtml = segments.any { segment -> !segment.isCode && HTML_TAG.containsMatchIn(segment.text) }
+    if (!hasHtml) {
+        return segments.joinToString(separator = "") { segment -> segment.text }
+    }
+    val stripped = segments.joinToString(separator = "") { segment ->
+        if (segment.isCode) segment.text else StringUtil.stripHtml(segment.text, " ")
+    }
+    return stripped.trim()
+}
+
+private fun normalizeProse(text: String): String {
     // Strip the trailing `{: ... }` attribute fragment first so the image -> link transform sees a clean `![alt](url)`.
-    val withoutImageAttributes = markdown.replace(IMAGE_ATTRIBUTE_FRAGMENT) { it.groupValues[1] }
+    val withoutImageAttributes = text.replace(IMAGE_ATTRIBUTE_FRAGMENT) { it.groupValues[1] }
     // Convert Markdown images into Markdown links; Bitbucket images are not fetchable by the plugin, so we never
     // render them inline.
     val withLinks = imagesToLinks(withoutImageAttributes)
     // HTML `<img>` tags are intentionally dropped (no reliable alt/label, and the Swing precedent
     // `ConversationThreadRules.removeImages` already removes them for the same authentication reason).
-    val withoutHtmlImages = withLinks.replace(IMAGE_TAG, "")
-    return if (HTML_TAG.containsMatchIn(withoutHtmlImages)) {
-        StringUtil.stripHtml(withoutHtmlImages, " ").trim()
-    } else {
-        withoutHtmlImages
-    }
+    return withLinks.replace(IMAGE_TAG, "")
 }
 
 /**

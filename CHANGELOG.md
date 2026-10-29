@@ -1,5 +1,14 @@
 # CHANGELOG
 
+## *1.2.0* - 2020-10-29
+* Changed: the add-comment icon in diff gutters uses the standard IDE "+" icon
+* Fixed: Clipping of comment boxes on multi-monitor (with different scales) setup
+* Fixed: emoji in pull-request descriptions, comments and tasks are shown as the emoji instead of Bitbucket markup such as `:slight_smile:{: data-emoji-id='1f642' ... }`
+* Fixed: Backspace, Delete, Select All, arrow keys, copy and cut in comment boxes of diff views act on the comment text instead of the file ("This view is read-only")
+* Fixed: inline code and code blocks in comments and descriptions keep text in angle brackets, instead of losing it as HTML
+* Fixed: plain emoji shortcodes such as `:thumbs_up:` are shown as the emoji
+* Fixed: use of internal apis
+
 ## *1.1.0* - 2020-10-28
 * Added: "Request Changes" action on pull requests; it changes to "Changes Requested" when the current user has requested changes, and is unavailable on your own pull requests
 * Added: `@mention` tokens in comments show the mentioned account's name, resolved from comment authors, workspace members, or a direct user lookup

@@ -2,7 +2,7 @@ package com.github.fnunezkanut.bbcloud.ui.otherprojects
 
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.toComposeImageBitmap
-import com.intellij.ui.scale.JBUIScale
+import com.github.fnunezkanut.bbcloud.ui.ScreenScale
 import org.jetbrains.skia.Image
 import java.awt.RenderingHints
 import java.awt.image.BufferedImage
@@ -11,7 +11,7 @@ import javax.imageio.ImageIO
 import kotlin.math.ceil
 
 /** Paints an IntelliJ icon into a Compose bitmap while preserving theme-specific icon colors. */
-internal fun javax.swing.Icon.toComposeImageBitmap(scale: Double = JBUIScale.sysScale().toDouble()): ImageBitmap {
+internal fun javax.swing.Icon.toComposeImageBitmap(scale: Double = ScreenScale.maxOfConnectedScreens().toDouble()): ImageBitmap {
     // Allocate in device pixels so HiDPI avatar detail is not lost at the Swing-to-Compose boundary.
     val deviceScale = scale.coerceAtLeast(1.0)
     val deviceWidth = ceil(iconWidth * deviceScale).toInt().coerceAtLeast(1)

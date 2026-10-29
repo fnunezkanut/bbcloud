@@ -1,6 +1,6 @@
 package com.github.fnunezkanut.bbcloud.bitbucket
 
-import com.intellij.ui.scale.JBUIScale
+import com.github.fnunezkanut.bbcloud.ui.ScreenScale
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.net.URI
 import kotlin.math.ceil
@@ -15,7 +15,7 @@ object AvatarUrlUpgrader {
      * Returns a larger URL only for recognized avatar providers. Unknown URLs and malformed URLs are preserved
      * exactly so an opaque provider URL cannot be broken by normalization.
      */
-    fun upgrade(url: String?, logicalSize: Int = DEFAULT_LOGICAL_AVATAR_SIZE, scale: Double = JBUIScale.sysScale().toDouble()): String? {
+    fun upgrade(url: String?, logicalSize: Int = DEFAULT_LOGICAL_AVATAR_SIZE, scale: Double = ScreenScale.maxOfConnectedScreens().toDouble()): String? {
         if (url == null) {
             return null
         }
