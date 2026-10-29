@@ -31,6 +31,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.github.fnunezkanut.bbcloud.BbCloudBundle
+import com.github.fnunezkanut.bbcloud.bitbucket.CommentEmojiResolver
 import com.github.fnunezkanut.bbcloud.bitbucket.MergeCheckStatus
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestReviewer
 import com.github.fnunezkanut.bbcloud.bitbucket.ReviewerStatus
@@ -453,7 +454,7 @@ private fun TasksViewContent(tasks: TasksSectionState, viewModel: PullRequestOve
                 onCheckedChange = { resolved -> viewModel.onTaskResolvedChanged(row.id, resolved) },
                 enabled = row.enabled
             )
-            SelectableText(text = row.content)
+            SelectableText(text = remember(row.content) { CommentEmojiResolver.resolveEmoji(body = row.content) })
         }
     }
     if (!tasks.isEditable) {

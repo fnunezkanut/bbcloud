@@ -55,8 +55,8 @@ One can create a new PR for their branch
 ## Requirements
 
 - **JDK 25.** The build uses `jvmToolchain(25)`, matching the JetBrains Runtime bundled with IntelliJ IDEA 2026.2. [`.sdkmanrc`](.sdkmanrc) pins `java=25.0.4-amzn`; run `sdk env` to switch to it.
-- **Gradle 9.8.0.** Provided by the Gradle wrapper (`./gradlew`), so no separate install is needed. It is also pinned in `.sdkmanrc`.
-- **IntelliJ IDEA 2026.2.3 (build `262.10968.63`) or newer.**
+- **Gradle 9.8.1.** Provided by the Gradle wrapper (`./gradlew`), so no separate install is needed. It is also pinned in `.sdkmanrc`.
+- **IntelliJ IDEA 2026.2.3 (build `262.10968.63`)**
 
 ## Build
 

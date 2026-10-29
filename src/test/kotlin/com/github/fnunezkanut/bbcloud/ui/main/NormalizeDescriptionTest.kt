@@ -109,6 +109,42 @@ class NormalizeDescriptionTest {
     }
 
     @Test
+    fun `normalizeDescription - should keep angle brackets inside inline code spans`() {
+        // GIVEN
+        val markdown = "`branch/<CID>-v<N>`\n\nmaybe just leave it at `branch/<CID>-<* whatever>`"
+
+        // WHEN
+        val result = normalizeDescription(markdown)
+
+        // THEN
+        result shouldBe markdown
+    }
+
+    @Test
+    fun `normalizeDescription - should keep angle brackets inside fenced code blocks`() {
+        // GIVEN
+        val markdown = "```kotlin\nval items: List<String> = emptyList()\n```"
+
+        // WHEN
+        val result = normalizeDescription(markdown)
+
+        // THEN
+        result shouldBe markdown
+    }
+
+    @Test
+    fun `normalizeDescription - should strip HTML in prose but keep inline code unchanged`() {
+        // GIVEN
+        val markdown = "<b>bold</b> and `List<String>`"
+
+        // WHEN
+        val result = normalizeDescription(markdown)
+
+        // THEN
+        result shouldBe "bold and `List<String>`"
+    }
+
+    @Test
     fun `normalizeDescription - should drop raw HTML images`() {
         // GIVEN
         val markdown = "<p>Before <img src=\"https://example.com/x.png\" alt=\"x\"> after</p>"
@@ -123,5 +159,49 @@ class NormalizeDescriptionTest {
             result shouldNotContain "<img"
             result shouldNotContain "https://example.com/x.png"
         }
+    }
+
+    @Test
+    fun `normalizeDescription - should replace the Bitbucket emoji markup with the emoji`() {
+        // GIVEN
+        val markdown = "a stage-0-handoff.md :slight_smile:{: data-emoji-id='1f642' data-emoji-text='🙂' }  as its stage-0"
+
+        // WHEN
+        val result = normalizeDescription(markdown)
+
+        // THEN
+        assertSoftly {
+            result shouldBe "a stage-0-handoff.md 🙂  as its stage-0"
+            result shouldNotContain "data-emoji-id"
+            result shouldNotContain "{:"
+        }
+    }
+
+    @Test
+    fun `normalizeDescription - should resolve an emoji and convert an image with an attribute fragment`() {
+        // GIVEN
+        val markdown = "![](https://example.com/x.png){: data-layout='center' } :smile:{: data-emoji-text='🙂' }"
+
+        // WHEN
+        val result = normalizeDescription(markdown)
+
+        // THEN
+        assertSoftly {
+            result shouldBe "[x.png](https://example.com/x.png) 🙂"
+            result shouldNotContain "{:"
+        }
+    }
+
+    @Test
+    fun `normalizeDescription - should return the same result when normalized twice`() {
+        // GIVEN
+        val markdown = "Done :+1:{: data-emoji-id='1f44d' data-emoji-text='👍' } and ![](https://example.com/y.png)"
+
+        // WHEN
+        val once = normalizeDescription(markdown)
+        val twice = normalizeDescription(once)
+
+        // THEN
+        twice shouldBe once
     }
 }

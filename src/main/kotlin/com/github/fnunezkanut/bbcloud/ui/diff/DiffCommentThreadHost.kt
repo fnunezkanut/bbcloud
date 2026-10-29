@@ -6,6 +6,10 @@ import androidx.compose.ui.awt.ComposePanel
 import androidx.compose.ui.awt.UNSPECIFIED_DIMENSION_VALUE
 import com.intellij.collaboration.ui.layout.SizeRestrictedSingleComponentLayout
 import com.intellij.collaboration.ui.util.DimensionRestrictions
+import com.intellij.openapi.actionSystem.CommonDataKeys
+import com.intellij.openapi.actionSystem.DataSink
+import com.intellij.openapi.actionSystem.PlatformDataKeys
+import com.intellij.openapi.actionSystem.UiDataProvider
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.editor.ex.EditorEx
 import com.intellij.ui.components.JBScrollPane
@@ -17,6 +21,7 @@ import java.awt.Dimension
 import java.awt.event.ComponentAdapter
 import java.awt.event.ComponentEvent
 import java.awt.event.ComponentListener
+import java.beans.PropertyChangeListener
 import javax.swing.JPanel
 import javax.swing.SwingUtilities
 import kotlin.math.ceil
@@ -31,8 +36,14 @@ import kotlin.math.max
  * The host also tracks the editor viewport width so the thread spans the full editor text width (see
  * [editorInlayContentWidth]) instead of the narrower `editor.contentComponent.width`. It listens for viewport resizes
  * and for height changes of the embedded [ComposePanel], re-measuring and relaying the inlay on either.
+ *
+ * The host is also a [UiDataProvider] that hides the host editor data (see [hideHostEditorData]) from the embedded
+ * content, so editor actions such as Backspace and Select All do not run on the diff editor while the comment box has
+ * the focus.
  */
-internal class DiffCommentThreadHost(private val editor: EditorEx) : JPanel(BorderLayout()) {
+internal class DiffCommentThreadHost(private val editor: EditorEx) :
+    JPanel(BorderLayout()),
+    UiDataProvider {
     /** The embedded Compose content; set by [attachComposePanel] once the content is built. */
     private var composePanel: ComposePanel? = null
 
@@ -44,6 +55,9 @@ internal class DiffCommentThreadHost(private val editor: EditorEx) : JPanel(Bord
 
     /** The latest Compose content height (physical pixels) waiting for [applyComposeContentHeight]. */
     private var pendingContentHeightPx: Int = 0
+
+    /** The Compose density that produced [pendingContentHeightPx]; physical pixels per Swing logical pixel. */
+    private var pendingDensity: Float = 0f
 
     /** Whether an [applyComposeContentHeight] run is already queued on the EDT. */
     private var contentHeightSyncScheduled: Boolean = false
@@ -70,11 +84,17 @@ internal class DiffCommentThreadHost(private val editor: EditorEx) : JPanel(Bord
         }
     }
 
+    /** Re-measures the content when the window moves to a monitor with another scale; the new density changes its size. */
+    private val graphicsConfigurationListener: PropertyChangeListener = PropertyChangeListener {
+        refreshWidth()
+    }
+
     init {
         isOpaque = false
         isFocusable = true
         isRequestFocusEnabled = true
         editor.scrollPane.viewport.addComponentListener(viewportResizeListener)
+        addPropertyChangeListener(GRAPHICS_CONFIGURATION_PROPERTY, graphicsConfigurationListener)
     }
 
     /** Hosts [panel] at the center and keeps a reference so width and height updates can reach it. */
@@ -117,6 +137,11 @@ internal class DiffCommentThreadHost(private val editor: EditorEx) : JPanel(Bord
         return Dimension(width, childHeight)
     }
 
+    /** Keeps editor actions from running on the host editor while the focus is inside the inlay; see [hideHostEditorData]. */
+    override fun uiDataSnapshot(sink: DataSink) {
+        hideHostEditorData(sink = sink)
+    }
+
     /**
      * Logs a failed Compose measurement once per host, so a layout pass that keeps failing does not flood `idea.log`.
      */
@@ -132,8 +157,12 @@ internal class DiffCommentThreadHost(private val editor: EditorEx) : JPanel(Bord
      * Updates the Compose preferred height after layout (Reply/Edit expansion). Width stays viewport-derived; height is
      * set only when [contentHeightPx] is positive. [contentHeightPx] is in Compose physical pixels and is converted to
      * Swing logical pixels before being stored on the panel preferred size. The update runs on a later EDT event.
+     *
+     * [density] is the Compose density that produced [contentHeightPx], that is the scale of the monitor the panel
+     * rendered on. It is used for the conversion, so monitors with different scale factors give the same logical
+     * height instead of the height of the primary monitor.
      */
-    fun syncComposeContentHeight(contentHeightPx: Int) {
+    fun syncComposeContentHeight(contentHeightPx: Int, density: Float) {
         if (contentHeightPx <= 0) {
             return
         }
@@ -142,6 +171,7 @@ internal class DiffCommentThreadHost(private val editor: EditorEx) : JPanel(Bord
         // leaves the Compose layout state stuck, which then fails again when the panel is detached. Defer and
         // coalesce the update so it runs after the measure pass completes.
         pendingContentHeightPx = contentHeightPx
+        pendingDensity = density
         if (contentHeightSyncScheduled) {
             return
         }
@@ -149,17 +179,19 @@ internal class DiffCommentThreadHost(private val editor: EditorEx) : JPanel(Bord
         SwingUtilities.invokeLater {
             contentHeightSyncScheduled = false
             if (isDisplayable) {
-                applyComposeContentHeight(contentHeightPx = pendingContentHeightPx)
+                applyComposeContentHeight(contentHeightPx = pendingContentHeightPx, density = pendingDensity)
             }
         }
     }
 
-    private fun applyComposeContentHeight(contentHeightPx: Int) {
+    private fun applyComposeContentHeight(contentHeightPx: Int, density: Float) {
         val panel = composePanel ?: return
         val width = currentInlayWidth().takeIf { inlayWidth -> inlayWidth > 0 }
             ?: panel.preferredSize?.width?.takeIf { panelWidth -> panelWidth > 0 }
             ?: return
-        val swingHeight = composePixelsToSwingPixels(pixels = contentHeightPx, scale = JBUIScale.sysScale())
+        val scale = resolveContentScale(composeDensity = density, componentScale = { JBUIScale.sysScale(this) })
+        val swingHeight = composePixelsToSwingPixels(pixels = contentHeightPx, scale = scale)
+        LOG.debug("Inline comment inlay height: ${contentHeightPx}px at density $density -> $swingHeight logical px")
         panel.preferredSize = Dimension(width, swingHeight)
         notifyEmbeddedHeightChanged()
     }
@@ -204,6 +236,7 @@ internal class DiffCommentThreadHost(private val editor: EditorEx) : JPanel(Bord
     override fun removeNotify() {
         editor.scrollPane.viewport.removeComponentListener(viewportResizeListener)
         composePanel?.removeComponentListener(composePanelResizeListener)
+        removePropertyChangeListener(GRAPHICS_CONFIGURATION_PROPERTY, graphicsConfigurationListener)
         super.removeNotify()
     }
 
@@ -224,6 +257,9 @@ internal class DiffCommentThreadHost(private val editor: EditorEx) : JPanel(Bord
 
     companion object {
         private val LOG = logger<DiffCommentThreadHost>()
+
+        /** The property `java.awt.Component` fires when the component moves to a screen with another configuration. */
+        private const val GRAPHICS_CONFIGURATION_PROPERTY = "graphicsConfiguration"
     }
 }
 
@@ -244,12 +280,42 @@ internal fun liftInlayWrapperWidthCap(wrapper: Container): Boolean {
     return true
 }
 
+/**
+ * Hides the data the host editor provides from the components embedded in an editor inlay. Without this, the action
+ * system resolves [CommonDataKeys.EDITOR] to the host editor while the Compose comment box has the focus, so editor
+ * actions such as Backspace ("This view is read-only") and Select All run on the editor and consume the keystroke
+ * before Compose receives it.
+ *
+ * The paste provider is deliberately not hidden: the Jewel wrapper inside the host supplies its own paste provider.
+ */
+internal fun hideHostEditorData(sink: DataSink) {
+    sink.setNull(CommonDataKeys.EDITOR)
+    sink.setNull(CommonDataKeys.HOST_EDITOR)
+    sink.setNull(CommonDataKeys.CARET)
+    sink.setNull(CommonDataKeys.EDITOR_VIRTUAL_SPACE)
+    sink.setNull(PlatformDataKeys.COPY_PROVIDER)
+    sink.setNull(PlatformDataKeys.CUT_PROVIDER)
+    sink.setNull(PlatformDataKeys.DELETE_ELEMENT_PROVIDER)
+}
+
 /** Converts Compose layout size (physical pixels) to Swing preferred size (logical pixels) for the given UI scale. */
 internal fun composePixelsToSwingPixels(pixels: Int, scale: Float): Int {
     if (scale <= 0f) {
         return pixels
     }
     return ceil(pixels / scale).toInt()
+}
+
+/**
+ * The scale used to convert Compose physical pixels to Swing logical pixels. Prefers [composeDensity], the density that
+ * produced the pixels, so the result is correct on the monitor the panel is on; falls back to [componentScale] (the
+ * scale of the monitor the host component is on) when the density is not usable.
+ */
+internal fun resolveContentScale(composeDensity: Float, componentScale: () -> Float): Float {
+    if (composeDensity > 0f && composeDensity.isFinite()) {
+        return composeDensity
+    }
+    return componentScale()
 }
 
 /**

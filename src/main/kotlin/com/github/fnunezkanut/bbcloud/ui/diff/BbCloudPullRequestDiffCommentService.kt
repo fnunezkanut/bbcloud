@@ -5,6 +5,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.awt.ComposePanel
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import com.github.fnunezkanut.bbcloud.BbCloudBundle
 import com.github.fnunezkanut.bbcloud.bitbucket.InlineCommentAnchor
 import com.github.fnunezkanut.bbcloud.bitbucket.InlineCommentSide
@@ -17,6 +18,7 @@ import com.github.fnunezkanut.bbcloud.ui.main.CommentComposerViewModel
 import com.github.fnunezkanut.bbcloud.ui.main.CommentInput
 import com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.BbCloudPullRequestVirtualFile
 import com.intellij.collaboration.ui.codereview.comment.CommentInputActionsComponentFactory
+import com.intellij.collaboration.ui.codereview.editor.CodeReviewEditorGutterControlsRenderer
 import com.intellij.collaboration.ui.codereview.editor.insertComponentAfter
 import com.intellij.diff.FrameDiffTool
 import com.intellij.diff.contents.DocumentContent
@@ -53,6 +55,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import org.jetbrains.jewel.bridge.compose
 import java.util.concurrent.ConcurrentHashMap
 
@@ -128,6 +131,7 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
         val composerViewModel = CommentComposerViewModel(input = input, startsExpanded = true)
         var composePanel: ComposePanel? = null
         val content = compose(config = { composePanel = this }) {
+            val density = LocalDensity.current.density
             CommentComposerScreen(
                 viewModel = composerViewModel,
                 avatarIcon = avatarCache.iconFor(context.binding?.currentUserAvatarUrl ?: context.currentUserAvatarUrl),
@@ -137,7 +141,7 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
                 modifier = Modifier
                     .wrapContentHeight(align = Alignment.Top, unbounded = true)
                     .onSizeChanged { size ->
-                        host.syncComposeContentHeight(contentHeightPx = size.height)
+                        host.syncComposeContentHeight(contentHeightPx = size.height, density = density)
                     }
             )
         }
@@ -207,6 +211,7 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
         val composerViewModel = CommentComposerViewModel(input = input, startsExpanded = true)
         var composePanel: ComposePanel? = null
         val content = compose(config = { composePanel = this }) {
+            val density = LocalDensity.current.density
             CommentComposerScreen(
                 viewModel = composerViewModel,
                 avatarIcon = avatarCache.iconFor(context.binding?.currentUserAvatarUrl ?: context.currentUserAvatarUrl),
@@ -216,7 +221,7 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
                 modifier = Modifier
                     .wrapContentHeight(align = Alignment.Top, unbounded = true)
                     .onSizeChanged { size ->
-                        host.syncComposeContentHeight(contentHeightPx = size.height)
+                        host.syncComposeContentHeight(contentHeightPx = size.height, density = density)
                     }
             )
         }
@@ -264,38 +269,40 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
     }
 
     /**
-     * Installs the custom green chat icon on [editor] for the fixed inline [side]. The highlighter, renderer listeners,
-     * and free-painters reservation all live for exactly [session], so a rediff or editor close releases the gutter width.
+     * Installs the platform add-comment gutter icon on [editor] for the fixed inline [side]. The highlighter, renderer
+     * listeners, and gutter width all live for exactly [session], so a rediff or editor close releases the gutter width.
      */
     private fun installAddCommentGutter(editor: EditorEx, relativePath: String, pullRequestId: Long, side: InlineCommentSide, session: Disposable) {
-        val renderer = PullRequestAddCommentGutterRenderer(
-            project = project,
-            editor = editor,
-            relativePath = relativePath,
-            pullRequestId = pullRequestId,
-            side = side,
-            service = this
+        val model = PullRequestAddCommentGutterModel(
+            canComment = { line ->
+                line in 0 until editor.document.lineCount &&
+                    PullRequestReviewCommentTarget.canOfferPullRequestLineComment(
+                        project = project,
+                        file = editor.virtualFile,
+                        pullRequestId = pullRequestId
+                    )
+            },
+            onRequestNewComment = { line ->
+                LOG.info("Add Review Comment via gutter icon for pull request #$pullRequestId at line ${line + 1} ($side)")
+                openInlineLineComposer(
+                    editor = editor,
+                    relativePath = relativePath,
+                    pullRequestId = pullRequestId,
+                    fileOneBasedLine = line + 1,
+                    side = side
+                )
+            }
         )
-        val highlighter = editor.markupModel.addRangeHighlighter(
-            null,
-            0,
-            editor.document.textLength,
-            DiffDrawUtil.LST_LINE_MARKER_LAYER,
-            HighlighterTargetArea.LINES_IN_RANGE
-        ).apply {
-            setGreedyToLeft(true)
-            setGreedyToRight(true)
-            setLineMarkerRenderer(renderer)
+        // render() switches to the EDT itself and disposes its highlighter and renderer when the job is cancelled
+        val job = coroutineScope.launch {
+            CodeReviewEditorGutterControlsRenderer.render(model = model, editor = editor)
         }
-        editor.gutterComponentEx.reserveLeftFreePaintersAreaWidth(
-            session,
-            addCommentGutterReserveWidthPx()
-        )
         addCommentGutterEditors.add(editor)
+        LOG.debug("Installed add-comment gutter for pull request #$pullRequestId on $side")
         Disposer.register(session) {
             addCommentGutterEditors.remove(editor)
-            highlighter.dispose()
-            Disposer.dispose(renderer)
+            job.cancel()
+            LOG.debug("Disposed add-comment gutter for pull request #$pullRequestId on $side")
         }
     }
 
