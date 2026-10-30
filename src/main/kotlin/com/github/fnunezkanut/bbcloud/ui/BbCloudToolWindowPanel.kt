@@ -44,9 +44,9 @@ import javax.swing.Icon
 import javax.swing.JComponent
 
 /**
- * Owns the six tool window tabs and the panels behind them. The Project - Open PRs tab opens by default once a Bitbucket
- * workspace and API token exist, otherwise the Settings tab opens. Tabs are never redirected: while the plugin is unconfigured,
- * the other tabs offer a link to the Settings tab instead.
+ * Owns the four tool window tabs and the panels behind them. The Current Project - PRs tab opens by default once a
+ * Bitbucket workspace and API token exist, otherwise the Settings tab opens. Tabs are never redirected: while the plugin
+ * is unconfigured, the other tabs offer a link to the Settings tab instead.
  */
 @Service(Service.Level.PROJECT)
 class BbCloudToolWindowPanel(private val project: Project) {
@@ -83,15 +83,13 @@ class BbCloudToolWindowPanel(private val project: Project) {
     private var isProgrammaticSelection = false
     private var contentByTab: Map<BbCloudToolWindowTab, Content> = emptyMap()
 
-    /** Non-closeable components for each of the six tabs; wired from coordinators. */
-    val projectOpenPrsComponent: JComponent = mainPanel.openTabComponent
-    val projectCompletedPrsComponent: JComponent = mainPanel.completedTabComponent
-    val workspaceMyPrsComponent: JComponent = otherProjectsPanel.myPrsTabComponent
-    val workspaceAssignedPrsComponent: JComponent = otherProjectsPanel.assignedPrsTabComponent
+    /** Non-closeable components for each of the four tabs; wired from coordinators. */
+    val projectPrsComponent: JComponent = mainPanel.projectPrsTabComponent
+    val workspacePrsComponent: JComponent = otherProjectsPanel.workspacePrsTabComponent
     val workspaceWatchedProjectsComponent: JComponent = otherProjectsPanel.watchedProjectsTabComponent
     val settingsComponent: JComponent = settingsComposeComponent
 
-    /** Builds the six non-closeable tabs, in header order. */
+    /** Builds the four non-closeable tabs, in header order. */
     fun createContents(): List<Content> {
         val contentFactory = ContentFactory.getInstance()
         val contents = BbCloudToolWindowTab.entries.map { tab ->
@@ -118,17 +116,17 @@ class BbCloudToolWindowPanel(private val project: Project) {
         return mainPanel.openCreatedPullRequest(summary = summary, localMainBranch = localMainBranch)
     }
 
-    /** Selects Project - Open PRs and restores its listing card without starting a reload. */
-    fun showProjectOpenPullRequestsListing(): Boolean {
+    /** Selects Current Project - PRs and restores its listing card without starting a reload. */
+    fun showCurrentProjectPullRequestsListing(): Boolean {
         val contentManager = contentManager ?: return false
-        val content = contentByTab[BbCloudToolWindowTab.ProjectOpenPrs] ?: return false
+        val content = contentByTab[BbCloudToolWindowTab.ProjectPrs] ?: return false
         isProgrammaticSelection = true
         try {
             contentManager.setSelectedContent(content)
         } finally {
             isProgrammaticSelection = false
         }
-        mainPanel.showProjectOpenPullRequestsListing()
+        mainPanel.showCurrentProjectPullRequestsListing()
         return true
     }
 
@@ -189,22 +187,20 @@ class BbCloudToolWindowPanel(private val project: Project) {
 
     private fun applyTabSelection(tab: BbCloudToolWindowTab) {
         when (tab) {
-            BbCloudToolWindowTab.ProjectOpenPrs -> refreshProjectOpenPrs()
-            BbCloudToolWindowTab.ProjectCompletedPrs -> refreshProjectCompletedPrs()
-            BbCloudToolWindowTab.WorkspaceMyPrs -> refreshWorkspaceMyPrs()
-            BbCloudToolWindowTab.WorkspaceAssignedPrs -> refreshWorkspaceAssignedPrs()
+            BbCloudToolWindowTab.ProjectPrs -> refreshProjectPrs()
+            BbCloudToolWindowTab.WorkspacePrs -> refreshWorkspacePrs()
             BbCloudToolWindowTab.WorkspaceWatchedProjects -> refreshWorkspaceWatchedProjects()
             BbCloudToolWindowTab.Settings -> bindSettingsState()
         }
     }
 
-    private fun refreshProjectOpenPrs() {
-        LOG.debug("Refreshing the Project - Open PRs tab")
+    private fun refreshProjectPrs() {
+        LOG.debug("Refreshing the Current Project - PRs tab")
         coroutineScope.launch {
             val configured = configurationService.isConfigured()
             ApplicationManager.getApplication().invokeLater {
                 isConfigured = configured
-                if (isSelected(tab = BbCloudToolWindowTab.ProjectOpenPrs)) {
+                if (isSelected(tab = BbCloudToolWindowTab.ProjectPrs)) {
                     if (configured) {
                         mainPanel.refresh(project = project, coroutineScope = coroutineScope)
                     } else {
@@ -215,52 +211,15 @@ class BbCloudToolWindowPanel(private val project: Project) {
         }
     }
 
-    private fun refreshProjectCompletedPrs() {
-        LOG.debug("Refreshing the Project - Completed PRs tab")
+    private fun refreshWorkspacePrs() {
+        LOG.debug("Refreshing the Workspace - PRs tab")
         coroutineScope.launch {
             val configured = configurationService.isConfigured()
             ApplicationManager.getApplication().invokeLater {
                 isConfigured = configured
-                if (isSelected(tab = BbCloudToolWindowTab.ProjectCompletedPrs)) {
+                if (isSelected(tab = BbCloudToolWindowTab.WorkspacePrs)) {
                     if (configured) {
-                        mainPanel.refresh(project = project, coroutineScope = coroutineScope)
-                    } else {
-                        mainPanel.showNotConfigured()
-                    }
-                }
-            }
-        }
-    }
-
-    private fun refreshWorkspaceMyPrs() {
-        LOG.debug("Refreshing the Workspace - My PRs tab")
-        coroutineScope.launch {
-            val configured = configurationService.isConfigured()
-            ApplicationManager.getApplication().invokeLater {
-                isConfigured = configured
-                if (isSelected(tab = BbCloudToolWindowTab.WorkspaceMyPrs)) {
-                    if (configured) {
-                        otherProjectsPanel.loadAuthored(
-                            excludedRepoSlug = LocalProjectRepositorySlug.fromBasePath(project.basePath),
-                            coroutineScope = coroutineScope
-                        )
-                    } else {
-                        otherProjectsPanel.showNotConfigured()
-                    }
-                }
-            }
-        }
-    }
-
-    private fun refreshWorkspaceAssignedPrs() {
-        LOG.debug("Refreshing the Workspace - Assigned PRs tab")
-        coroutineScope.launch {
-            val configured = configurationService.isConfigured()
-            ApplicationManager.getApplication().invokeLater {
-                isConfigured = configured
-                if (isSelected(tab = BbCloudToolWindowTab.WorkspaceAssignedPrs)) {
-                    if (configured) {
-                        otherProjectsPanel.loadReviewing(
+                        otherProjectsPanel.loadWorkspacePullRequests(
                             excludedRepoSlug = LocalProjectRepositorySlug.fromBasePath(project.basePath),
                             coroutineScope = coroutineScope
                         )
@@ -331,10 +290,8 @@ class BbCloudToolWindowPanel(private val project: Project) {
 
     private fun componentFor(tab: BbCloudToolWindowTab): JComponent {
         return when (tab) {
-            BbCloudToolWindowTab.ProjectOpenPrs -> projectOpenPrsComponent
-            BbCloudToolWindowTab.ProjectCompletedPrs -> projectCompletedPrsComponent
-            BbCloudToolWindowTab.WorkspaceMyPrs -> workspaceMyPrsComponent
-            BbCloudToolWindowTab.WorkspaceAssignedPrs -> workspaceAssignedPrsComponent
+            BbCloudToolWindowTab.ProjectPrs -> projectPrsComponent
+            BbCloudToolWindowTab.WorkspacePrs -> workspacePrsComponent
             BbCloudToolWindowTab.WorkspaceWatchedProjects -> workspaceWatchedProjectsComponent
             BbCloudToolWindowTab.Settings -> settingsComposeComponent
         }
@@ -342,10 +299,8 @@ class BbCloudToolWindowPanel(private val project: Project) {
 
     private fun titleKeyFor(tab: BbCloudToolWindowTab): String {
         return when (tab) {
-            BbCloudToolWindowTab.ProjectOpenPrs -> "toolwindow.tab.projectOpenPrs"
-            BbCloudToolWindowTab.ProjectCompletedPrs -> "toolwindow.tab.projectCompletedPrs"
-            BbCloudToolWindowTab.WorkspaceMyPrs -> "toolwindow.tab.workspaceMyPrs"
-            BbCloudToolWindowTab.WorkspaceAssignedPrs -> "toolwindow.tab.workspaceAssignedPrs"
+            BbCloudToolWindowTab.ProjectPrs -> "toolwindow.tab.projectPrs"
+            BbCloudToolWindowTab.WorkspacePrs -> "toolwindow.tab.workspacePrs"
             BbCloudToolWindowTab.WorkspaceWatchedProjects -> "toolwindow.tab.workspaceWatchedProjects"
             BbCloudToolWindowTab.Settings -> "toolwindow.tab.settings"
         }
@@ -353,10 +308,8 @@ class BbCloudToolWindowPanel(private val project: Project) {
 
     private fun iconFor(tab: BbCloudToolWindowTab): Icon {
         return when (tab) {
-            BbCloudToolWindowTab.ProjectOpenPrs -> AllIcons.Nodes.IdeaProject
-            BbCloudToolWindowTab.ProjectCompletedPrs -> AllIcons.Vcs.Merge
-            BbCloudToolWindowTab.WorkspaceMyPrs -> AllIcons.General.User
-            BbCloudToolWindowTab.WorkspaceAssignedPrs -> AllIcons.General.Information
+            BbCloudToolWindowTab.ProjectPrs -> AllIcons.Nodes.IdeaProject
+            BbCloudToolWindowTab.WorkspacePrs -> AllIcons.General.User
             BbCloudToolWindowTab.WorkspaceWatchedProjects -> AllIcons.Actions.Show
             BbCloudToolWindowTab.Settings -> AllIcons.General.Settings
         }
@@ -378,18 +331,14 @@ class BbCloudToolWindowPanel(private val project: Project) {
             val configured = configurationService.isConfigured()
             if (!configured) {
                 otherProjectsPanel.showNotConfigured()
-                // Route the Watched Projects tab to its centered not-configured card too, so all three Workspace tabs
+                // Route the Watched Projects tab to its centered not-configured card too, so both Workspace tabs
                 // show the generic link rather than leaving Watched Projects on stale content.
                 otherProjectsPanel.showWatchedProjectsNotConfigured()
                 return@launch
             }
             val excludedRepoSlug = LocalProjectRepositorySlug.fromBasePath(project.basePath)
             ApplicationManager.getApplication().invokeLater {
-                otherProjectsPanel.loadAuthored(
-                    excludedRepoSlug = excludedRepoSlug,
-                    coroutineScope = coroutineScope
-                )
-                otherProjectsPanel.loadReviewing(
+                otherProjectsPanel.loadWorkspacePullRequests(
                     excludedRepoSlug = excludedRepoSlug,
                     coroutineScope = coroutineScope
                 )

@@ -1,14 +1,7 @@
 package com.github.fnunezkanut.bbcloud.toolwindow
 
-/** The six permanent tabs of the Bitbucket Cloud PR Review tool window, in header order. */
-enum class BbCloudToolWindowTab {
-    ProjectOpenPrs,
-    ProjectCompletedPrs,
-    WorkspaceMyPrs,
-    WorkspaceAssignedPrs,
-    WorkspaceWatchedProjects,
-    Settings
-}
+/** The four permanent tabs of the Bitbucket Cloud PR Review tool window, in header order. */
+enum class BbCloudToolWindowTab { ProjectPrs, WorkspacePrs, WorkspaceWatchedProjects, Settings }
 
 object BbCloudToolWindowTabResolver {
     /**
@@ -21,7 +14,7 @@ object BbCloudToolWindowTabResolver {
         return if (isConfigured == false) {
             BbCloudToolWindowTab.Settings
         } else {
-            BbCloudToolWindowTab.ProjectOpenPrs
+            BbCloudToolWindowTab.ProjectPrs
         }
     }
 }

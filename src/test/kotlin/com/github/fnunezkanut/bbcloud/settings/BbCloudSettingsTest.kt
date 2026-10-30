@@ -191,4 +191,127 @@ class BbCloudSettingsTest {
             state.watchedRepos.isEmpty() shouldBe true
         }
     }
+
+    @Test
+    fun `pullRequestListFilter - should default to exclude resolved and drafts only for the current project scope`() {
+        // GIVEN a fresh settings instance
+        val settings = BbCloudSettings()
+
+        // WHEN
+        val filter = settings.pullRequestListFilter(scope = PullRequestListScope.CurrentProject)
+
+        // THEN Resolved and Drafts default on; Mine and Approved by me default off
+        filter shouldBe PullRequestListFilter(
+            excludeResolved = true,
+            excludeMine = false,
+            excludeApprovedByMe = false,
+            excludeDrafts = true
+        )
+    }
+
+    @Test
+    fun `pullRequestListFilter - should default to exclude drafts only and never resolved for the workspace scope`() {
+        // GIVEN a fresh settings instance
+        val settings = BbCloudSettings()
+
+        // WHEN
+        val filter = settings.pullRequestListFilter(scope = PullRequestListScope.Workspace)
+
+        // THEN the workspace scope offers no Resolved checkbox, so it always carries excludeResolved = false
+        filter shouldBe PullRequestListFilter(
+            excludeResolved = false,
+            excludeMine = false,
+            excludeApprovedByMe = false,
+            excludeDrafts = true
+        )
+    }
+
+    @Test
+    fun `savePullRequestListFilter - should ignore excludeResolved for the workspace scope`() {
+        // GIVEN a filter with excludeResolved mistakenly true for the workspace scope
+        val settings = BbCloudSettings()
+
+        // WHEN saved and read back
+        settings.savePullRequestListFilter(
+            scope = PullRequestListScope.Workspace,
+            filter = PullRequestListFilter(excludeResolved = true, excludeMine = true, excludeApprovedByMe = true, excludeDrafts = false)
+        )
+        val reread = settings.pullRequestListFilter(scope = PullRequestListScope.Workspace)
+
+        // THEN excludeResolved is not persisted for the workspace scope, but the other flags are
+        reread shouldBe PullRequestListFilter(
+            excludeResolved = false,
+            excludeMine = true,
+            excludeApprovedByMe = true,
+            excludeDrafts = false
+        )
+    }
+
+    @Test
+    fun `savePullRequestListFilter - should keep the two scopes independent`() {
+        // GIVEN
+        val settings = BbCloudSettings()
+
+        // WHEN each scope saves a distinct filter
+        settings.savePullRequestListFilter(
+            scope = PullRequestListScope.CurrentProject,
+            filter = PullRequestListFilter(excludeResolved = false, excludeMine = true, excludeApprovedByMe = false, excludeDrafts = false)
+        )
+        settings.savePullRequestListFilter(
+            scope = PullRequestListScope.Workspace,
+            filter = PullRequestListFilter(excludeResolved = false, excludeMine = false, excludeApprovedByMe = true, excludeDrafts = true)
+        )
+
+        // THEN each scope reads back its own values without interference
+        assertSoftly {
+            settings.pullRequestListFilter(scope = PullRequestListScope.CurrentProject) shouldBe PullRequestListFilter(
+                excludeResolved = false,
+                excludeMine = true,
+                excludeApprovedByMe = false,
+                excludeDrafts = false
+            )
+            settings.pullRequestListFilter(scope = PullRequestListScope.Workspace) shouldBe PullRequestListFilter(
+                excludeResolved = false,
+                excludeMine = false,
+                excludeApprovedByMe = true,
+                excludeDrafts = true
+            )
+        }
+    }
+
+    @Test
+    fun `pullRequestListFilter - should round-trip through XmlSerializer`() {
+        // GIVEN a settings instance with non-default filter flags saved
+        val settings = BbCloudSettings()
+        settings.savePullRequestListFilter(
+            scope = PullRequestListScope.CurrentProject,
+            filter = PullRequestListFilter(excludeResolved = false, excludeMine = true, excludeApprovedByMe = true, excludeDrafts = false)
+        )
+        settings.savePullRequestListFilter(
+            scope = PullRequestListScope.Workspace,
+            filter = PullRequestListFilter(excludeResolved = false, excludeMine = true, excludeApprovedByMe = false, excludeDrafts = false)
+        )
+
+        // WHEN the state is serialized to XML and deserialized back
+        val serialized = XmlSerializer.serialize(settings.state)
+        val roundTripped = XmlSerializer.deserialize(serialized, BbCloudSettings.State::class.java)
+        val reloaded = BbCloudSettings()
+        reloaded.loadState(roundTripped)
+
+        // THEN both scopes come back with the saved values
+        assertSoftly {
+            reloaded.pullRequestListFilter(scope = PullRequestListScope.CurrentProject) shouldBe PullRequestListFilter(
+                excludeResolved = false,
+                excludeMine = true,
+                excludeApprovedByMe = true,
+                excludeDrafts = false
+            )
+            reloaded.pullRequestListFilter(scope = PullRequestListScope.Workspace) shouldBe PullRequestListFilter(
+                excludeResolved = false,
+                excludeMine = true,
+                excludeApprovedByMe = false,
+                excludeDrafts = false
+            )
+        }
+    }
 }

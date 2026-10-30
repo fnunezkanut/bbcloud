@@ -21,7 +21,12 @@ sealed class ReviewingPullRequestListResult {
      * repository list ran past its page limit, or more pull requests came back than [pullRequests] holds. The panel
      * says so, rather than letting a short table pass for the whole review queue.
      */
-    data class Success(val pullRequests: List<ReviewingPullRequest>, val isTruncated: Boolean = false) : ReviewingPullRequestListResult()
+    data class Success(
+        val pullRequests: List<ReviewingPullRequest>,
+        val isTruncated: Boolean = false,
+        /** The account the listing was keyed by; used by the Mine and Approved-by-me filters. */
+        val currentUserUuid: String? = null
+    ) : ReviewingPullRequestListResult()
 
     data class Failed(val cause: Throwable? = null) : ReviewingPullRequestListResult()
 }

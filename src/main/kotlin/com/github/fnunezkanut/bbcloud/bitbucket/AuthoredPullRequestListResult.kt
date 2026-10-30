@@ -6,7 +6,12 @@ sealed class AuthoredPullRequestListResult {
      * row named no repository and had to be dropped. The panel says so rather than letting a short table pass for
      * every pull request the user opened.
      */
-    data class Success(val pullRequests: List<ReviewingPullRequest>, val isTruncated: Boolean = false) : AuthoredPullRequestListResult()
+    data class Success(
+        val pullRequests: List<ReviewingPullRequest>,
+        val isTruncated: Boolean = false,
+        /** The account the listing was keyed by; used by the Mine and Approved-by-me filters. */
+        val currentUserUuid: String? = null
+    ) : AuthoredPullRequestListResult()
 
     data class Failed(val cause: Throwable? = null) : AuthoredPullRequestListResult()
 }

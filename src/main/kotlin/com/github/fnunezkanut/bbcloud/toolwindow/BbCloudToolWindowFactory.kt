@@ -24,7 +24,7 @@ class BbCloudToolWindowFactory : ToolWindowFactory {
             contentManager.addContent(content)
         }
         panel.bind(contentManager = contentManager, parentDisposable = currentProjectContent)
-        // All three contents share the one panel and are disposed together with the tool window, so a single
+        // All contents share the one panel and are disposed together with the tool window, so a single
         // registration covers the whole header.
         Disposer.register(currentProjectContent) {
             panel.disposePanel()

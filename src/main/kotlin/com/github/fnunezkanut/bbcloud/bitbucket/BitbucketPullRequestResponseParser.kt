@@ -60,8 +60,9 @@ object BitbucketPullRequestResponseParser {
     }
 
     fun buildListPullRequestsUrl(workspace: String, repoSlug: String): String {
+        // The `+` of the fields expansion must be encoded as %2B: a raw `+` in a query string is decoded as a space.
         return "$BITBUCKET_API_BASE/repositories/$workspace/$repoSlug/pullrequests" +
-            "?state=OPEN&state=MERGED&state=DECLINED&sort=-updated_on&pagelen=$PAGE_LEN"
+            "?state=OPEN&state=MERGED&state=DECLINED&sort=-updated_on&pagelen=$PAGE_LEN&fields=%2Bvalues.participants"
     }
 
     /** Builds the all-pages OPEN-only listing used as the safe source of truth for worktree pruning. */
@@ -589,6 +590,13 @@ object BitbucketPullRequestResponseParser {
 
     const val PAGE_LEN = 50
 
+    /**
+     * The fields expansion that asks a listing endpoint to include participants, so the Approved-by-me filter can read
+     * approvals. Bitbucket list endpoints omit participants by default. OkHttp's addQueryParameter encodes the leading
+     * `+` as %2B; a hand-built query string must encode it the same way (a raw `+` decodes as a space).
+     */
+    internal const val LISTING_PARTICIPANTS_FIELDS = "+values.participants"
+
     const val COUNT_PAGE_LEN = 100
 
     private const val BITBUCKET_API_BASE = "https://api.bitbucket.org/2.0"
@@ -904,7 +912,12 @@ object BitbucketPullRequestResponseParser {
                 commentCount = commentCount ?: 0,
                 webUrl = webUrl,
                 state = prState,
-                isDraft = draft ?: false
+                isDraft = draft ?: false,
+                authorUuid = author?.uuid?.takeIf { it.isNotBlank() },
+                approverUuids = participants
+                    .filter { participant -> participant.approved == true }
+                    .mapNotNull { participant -> participant.user?.uuid?.takeIf { it.isNotBlank() } }
+                    .toSet()
             )
         }
     }

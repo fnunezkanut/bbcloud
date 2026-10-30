@@ -39,9 +39,16 @@ import com.github.fnunezkanut.bbcloud.project.WatchedProjectsDiscoveryResult
 import com.github.fnunezkanut.bbcloud.project.WorktreePruneAction
 import com.github.fnunezkanut.bbcloud.project.WorktreePruneDecision
 import com.github.fnunezkanut.bbcloud.project.WorktreePruneSummary
+import com.github.fnunezkanut.bbcloud.settings.PullRequestListScope
 import com.github.fnunezkanut.bbcloud.ui.components.NotConfiguredContent
 import com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.BbCloudPendingEditorOpen
 import com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.BbCloudPullRequestEditorOpenQueue
+import com.github.fnunezkanut.bbcloud.ui.pullrequests.PullRequestExcludeCheckboxes
+import com.github.fnunezkanut.bbcloud.ui.pullrequests.PullRequestListEntry
+import com.github.fnunezkanut.bbcloud.ui.pullrequests.PullRequestListingSource
+import com.github.fnunezkanut.bbcloud.ui.pullrequests.PullRequestsCard
+import com.github.fnunezkanut.bbcloud.ui.pullrequests.PullRequestsListingBody
+import com.github.fnunezkanut.bbcloud.ui.pullrequests.PullRequestsViewModel
 import com.github.fnunezkanut.bbcloud.ui.worktree.WorktreeBranchCollisionDialog
 import com.intellij.ide.BrowserUtil
 import com.intellij.notification.NotificationAction
@@ -69,10 +76,11 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.coroutineScope as coroutineScopeBlock
 
 /**
- * Coordinator for the Workspace scope (tabs 3-5) that owns the shared data and UI for:
- *   - Tab 3: Workspace - My PRs (Compose body owned by WorkspaceMyPullRequestsViewModel)
- *   - Tab 4: Workspace - Assigned PRs (Compose body owned by WorkspaceAssignedPullRequestsViewModel)
- *   - Tab 5: Workspace - Watched Projects (projects directory selection and discovered project list)
+ * Coordinator for the Workspace scope that owns the shared data and UI for:
+ *   - The Workspace - PRs tab: one merged listing of the pull requests the user opened and the pull requests assigned
+ *     to the user for review, driven by the reusable PullRequestsViewModel (sources WorkspaceAuthored and
+ *     WorkspaceAssigned).
+ *   - The Workspace - Watched Projects tab: projects directory selection and the discovered project list.
  */
 
 class BbCloudOtherProjectsPanel(
@@ -96,16 +104,20 @@ class BbCloudOtherProjectsPanel(
     /** Prevents repeated prune requests for all watched projects while the first request is running. */
     private val pruneAllInProgress = AtomicBoolean(false)
 
-    // Three tab bodies
-    private val myPrsViewModel = WorkspaceMyPullRequestsViewModel(
-        onOpenLocalProjectCallback = ::openLocalProjectForPullRequest,
-        onOpenPrOnWebCallback = ::openPrOnWebForPullRequest,
-        onOpenRepositoryCallback = ::openRepositoryForPullRequest
-    )
-    private val assignedPrsViewModel = WorkspaceAssignedPullRequestsViewModel(
-        onOpenLocalProjectCallback = ::openLocalProjectForPullRequest,
-        onOpenPrOnWebCallback = ::openPrOnWebForPullRequest,
-        onOpenRepositoryCallback = ::openRepositoryForPullRequest
+    // The one merged Workspace - PRs view model (sources WorkspaceAuthored and WorkspaceAssigned).
+    private val workspacePullRequestsViewModel = PullRequestsViewModel(
+        logName = "Workspace - PRs",
+        sourcesOfTab = setOf(PullRequestListingSource.WorkspaceAuthored, PullRequestListingSource.WorkspaceAssigned),
+        scope = PullRequestListScope.Workspace,
+        initialFilter = configurationService.pullRequestListFilter(scope = PullRequestListScope.Workspace),
+        organizationUrl = { configurationService.organizationUrlOrNull() },
+        onFilterChangedCallback = { filter ->
+            configurationService.savePullRequestListFilter(scope = PullRequestListScope.Workspace, filter = filter)
+        },
+        onOpenTitleCallback = { entry -> startOpenPullRequestInWorktree(pullRequest = entry.pullRequest) },
+        onOpenPrOnWebCallback = { entry -> openPrOnWebForPullRequest(entry.pullRequest) },
+        onOpenRepositoryCallback = { entry -> openRepositoryForPullRequest(entry.pullRequest) },
+        onCountsChanged = { openCount, card -> updateWorkspaceOpenCount(openCount = openCount, card = card) }
     )
     private val watchedProjectsViewModel = WatchedProjectsViewModel(
         coroutineScope = coroutineScope,
@@ -123,43 +135,34 @@ class BbCloudOtherProjectsPanel(
         onPruneWorktreesCallback = ::pruneAllWatchedWorktrees
     )
 
-    // Two separate workspace headers, one per tab root (My PRs and Assigned PRs)
-    private val myPrsHeaderViewModel = WorkspaceHeaderViewModel(onRefreshRequested = onRefreshRequested)
-    private val assignedPrsHeaderViewModel = WorkspaceHeaderViewModel(onRefreshRequested = onRefreshRequested)
+    // One workspace header for the merged Workspace - PRs tab root.
+    private val workspaceHeaderViewModel = WorkspaceHeaderViewModel(onRefreshRequested = onRefreshRequested)
 
     /** The two cards of each Workspace tab root, driven by Compose state instead of a Swing CardLayout. */
-    private val myPrsCard: MutableState<ViewCard> = mutableStateOf(ViewCard.Content)
-    private val assignedPrsCard: MutableState<ViewCard> = mutableStateOf(ViewCard.Content)
+    private val workspacePrsCard: MutableState<ViewCard> = mutableStateOf(ViewCard.Content)
     private val watchedProjectsCard: MutableState<ViewCard> = mutableStateOf(ViewCard.Content)
 
     /** Counter so overlapping loads keep the refresh button disabled until all finish. */
     private var activeLoadCount = 0
 
-    val myPrsTabComponent: JComponent = compose {
+    val workspacePrsTabComponent: JComponent = compose {
         WorkspaceRootContent(
-            card = myPrsCard.value,
-            headerState = myPrsHeaderViewModel.state.value,
-            onRefreshRequested = myPrsHeaderViewModel::onRefreshClicked,
+            card = workspacePrsCard.value,
+            headerState = workspaceHeaderViewModel.state.value,
+            onRefreshRequested = workspaceHeaderViewModel::onRefreshClicked,
             onGoToSettings = onGoToSettings,
-            content = {
-                WorkspacePullRequestsScreen(
-                    viewModel = myPrsViewModel,
-                    tab = WorkspacePullRequestsTab.MyPrs
+            excludeContent = {
+                PullRequestExcludeCheckboxes(
+                    filter = workspacePullRequestsViewModel.state.value.filter,
+                    viewModel = workspacePullRequestsViewModel
                 )
-            }
-        )
-    }
-
-    val assignedPrsTabComponent: JComponent = compose {
-        WorkspaceRootContent(
-            card = assignedPrsCard.value,
-            headerState = assignedPrsHeaderViewModel.state.value,
-            onRefreshRequested = assignedPrsHeaderViewModel::onRefreshClicked,
-            onGoToSettings = onGoToSettings,
+            },
             content = {
-                WorkspacePullRequestsScreen(
-                    viewModel = assignedPrsViewModel,
-                    tab = WorkspacePullRequestsTab.AssignedPrs
+                PullRequestsListingBody(
+                    viewModel = workspacePullRequestsViewModel,
+                    emptyMessageKey = "pullRequests.workspace.none",
+                    errorMessageKey = "pullRequests.workspace.loadFailed",
+                    footer = { state -> WorkspacePullRequestsFooter(state = state) }
                 )
             }
         )
@@ -314,27 +317,49 @@ class BbCloudOtherProjectsPanel(
     }
 
     fun showNotConfigured() {
-        myPrsHeaderViewModel.setRefreshVisible(false)
-        assignedPrsHeaderViewModel.setRefreshVisible(false)
-        myPrsHeaderViewModel.setRefreshEnabled(false)
-        assignedPrsHeaderViewModel.setRefreshEnabled(false)
-        myPrsViewModel.showNotConfigured()
-        myPrsCard.value = ViewCard.NotConfigured
-        assignedPrsCard.value = ViewCard.NotConfigured
+        workspaceHeaderViewModel.setRefreshVisible(false)
+        workspaceHeaderViewModel.setRefreshEnabled(false)
+        workspacePullRequestsViewModel.showHidden()
+        workspacePrsCard.value = ViewCard.NotConfigured
     }
 
-    fun loadAuthored(excludedRepoSlug: String?, coroutineScope: CoroutineScope) {
+    /**
+     * Updates the Workspace - PRs header open-count pill from the view model's counts callback. [openCount] is the
+     * number of visible open rows after the Exclude filters, so toggling an Exclude checkbox that hides open rows
+     * updates the pill. The pill is hidden on the Hidden, Loading, and Error cards, matching the Current Project - PRs
+     * header's visibility rule.
+     */
+    private fun updateWorkspaceOpenCount(openCount: Int, card: PullRequestsCard) {
+        workspaceHeaderViewModel.setOpenCount(
+            text = openCount.toString(),
+            visible = card != PullRequestsCard.Hidden &&
+                card != PullRequestsCard.Loading &&
+                card != PullRequestsCard.Error
+        )
+    }
+
+    /**
+     * Loads both Workspace - PRs sources under one refresh generation, so a single Refresh starts one generation and a
+     * slow response of one source cannot overwrite a newer load of the other.
+     */
+    fun loadWorkspacePullRequests(excludedRepoSlug: String?, coroutineScope: CoroutineScope) {
+        val generation = workspacePullRequestsViewModel.beginRefresh()
+        loadAuthored(excludedRepoSlug = excludedRepoSlug, generation = generation, coroutineScope = coroutineScope)
+        loadReviewing(excludedRepoSlug = excludedRepoSlug, generation = generation, coroutineScope = coroutineScope)
+    }
+
+    private fun loadAuthored(excludedRepoSlug: String?, generation: Long, coroutineScope: CoroutineScope) {
         val organizationUrl = configurationService.organizationUrlOrNull()
         if (organizationUrl == null) {
             LOG.info("Cannot load authored PRs: no organization URL")
-            myPrsViewModel.showError()
+            workspacePullRequestsViewModel.failSource(generation = generation, source = PullRequestListingSource.WorkspaceAuthored)
             return
         }
         val workspaceOverviewUrl = BitbucketRepositoryUrls.workspaceOverviewUrl(organizationUrl)
-        myPrsHeaderViewModel.setWorkspaceUrl(workspaceOverviewUrl)
-        myPrsHeaderViewModel.setRefreshVisible(true)
-        myPrsViewModel.showLoading()
-        myPrsCard.value = ViewCard.Content
+        val workspaceName = BitbucketRepositoryUrls.workspaceFromOrganizationUrl(organizationUrl)
+        workspaceHeaderViewModel.setWorkspaceUrl(url = workspaceOverviewUrl, name = workspaceName)
+        workspaceHeaderViewModel.setRefreshVisible(true)
+        workspacePrsCard.value = ViewCard.Content
         beginLoad()
         coroutineScope.launch {
             val result = authoredPullRequestService.listAuthoredPullRequests(
@@ -342,28 +367,29 @@ class BbCloudOtherProjectsPanel(
                 excludedRepoSlug = excludedRepoSlug
             )
             ApplicationManager.getApplication().invokeLater {
-                showAuthoredResult(result, coroutineScope)
+                showAuthoredResult(result = result, generation = generation, coroutineScope = coroutineScope)
                 endLoad()
             }
         }
     }
 
-    fun loadReviewing(excludedRepoSlug: String?, coroutineScope: CoroutineScope) {
+    private fun loadReviewing(excludedRepoSlug: String?, generation: Long, coroutineScope: CoroutineScope) {
         val organizationUrl = configurationService.organizationUrlOrNull()
         val projectsDirectory = configurationService.projectsDirectoryOrNull()
         val workspaceOverviewUrl = organizationUrl?.let { BitbucketRepositoryUrls.workspaceOverviewUrl(it) }
-        assignedPrsHeaderViewModel.setWorkspaceUrl(workspaceOverviewUrl)
-        assignedPrsHeaderViewModel.setRefreshVisible(workspaceOverviewUrl != null)
+        val workspaceName = organizationUrl?.let { BitbucketRepositoryUrls.workspaceFromOrganizationUrl(it) }
+        workspaceHeaderViewModel.setWorkspaceUrl(url = workspaceOverviewUrl, name = workspaceName)
+        workspaceHeaderViewModel.setRefreshVisible(workspaceOverviewUrl != null)
         if (organizationUrl == null) {
             LOG.info("Cannot load reviewing PRs: no organization URL")
-            assignedPrsViewModel.showError()
+            workspacePullRequestsViewModel.failSource(generation = generation, source = PullRequestListingSource.WorkspaceAssigned)
             return
         }
         if (projectsDirectory == null) {
             LOG.info("Assigned PRs: projects directory not set; prompting for Settings")
             // Route to the generic centered not-configured card (R2) rather than showing partial content with the
-            // header still visible. showNotConfigured switches both My PRs and Assigned PRs and hides their refresh
-            // buttons.
+            // header still visible. showNotConfigured switches the single Workspace - PRs root and hides its refresh
+            // button.
             showNotConfigured()
             return
         }
@@ -371,9 +397,8 @@ class BbCloudOtherProjectsPanel(
         if (repoSlugs.isEmpty()) {
             LOG.info("No watched projects are enabled for the current workspace, so no pull requests to review are listed")
         }
-        assignedPrsViewModel.showLoading()
-        assignedPrsHeaderViewModel.setRefreshVisible(true)
-        assignedPrsCard.value = ViewCard.Content
+        workspaceHeaderViewModel.setRefreshVisible(true)
+        workspacePrsCard.value = ViewCard.Content
         beginLoad()
         coroutineScope.launch {
             val result = reviewQueueService.listReviewingPullRequests(
@@ -382,20 +407,32 @@ class BbCloudOtherProjectsPanel(
                 repoSlugs = repoSlugs
             )
             ApplicationManager.getApplication().invokeLater {
-                showReviewingResult(result, coroutineScope)
+                showReviewingResult(result = result, generation = generation, coroutineScope = coroutineScope)
                 endLoad()
             }
         }
     }
 
-    private fun showAuthoredResult(result: AuthoredPullRequestListResult, coroutineScope: CoroutineScope) {
+    private fun showAuthoredResult(result: AuthoredPullRequestListResult, generation: Long, coroutineScope: CoroutineScope) {
         when (result) {
             is AuthoredPullRequestListResult.Success -> {
-                myPrsViewModel.showResult(
-                    result = result,
-                    organizationUrl = configurationService.organizationUrlOrNull(),
-                    coroutineScope = coroutineScope,
-                    avatarUrlBySlug = configurationService.repoAvatarUrlsForCurrentWorkspace()
+                // The repository avatar lookup is copied verbatim from WorkspaceMyPullRequestsViewModel.showResult: the
+                // persisted URL map is keyed by the raw repoSlug, with no lowercasing.
+                val avatarUrlBySlug = configurationService.repoAvatarUrlsForCurrentWorkspace()
+                val entries = result.pullRequests.map { pullRequest ->
+                    PullRequestListEntry(
+                        pullRequest = pullRequest,
+                        source = PullRequestListingSource.WorkspaceAuthored,
+                        repoAvatarUrl = avatarUrlBySlug[pullRequest.repoSlug]
+                    )
+                }
+                workspacePullRequestsViewModel.applySource(
+                    generation = generation,
+                    source = PullRequestListingSource.WorkspaceAuthored,
+                    entries = entries,
+                    isTruncated = result.isTruncated,
+                    currentUserUuid = result.currentUserUuid,
+                    coroutineScope = coroutineScope
                 )
             }
             is AuthoredPullRequestListResult.Failed -> {
@@ -404,19 +441,31 @@ class BbCloudOtherProjectsPanel(
                 } else {
                     LOG.warn("Could not load the pull requests you opened")
                 }
-                myPrsViewModel.showError()
+                workspacePullRequestsViewModel.failSource(generation = generation, source = PullRequestListingSource.WorkspaceAuthored)
             }
         }
     }
 
-    private fun showReviewingResult(result: ReviewingPullRequestListResult, coroutineScope: CoroutineScope) {
+    private fun showReviewingResult(result: ReviewingPullRequestListResult, generation: Long, coroutineScope: CoroutineScope) {
         when (result) {
             is ReviewingPullRequestListResult.Success -> {
-                assignedPrsViewModel.showResult(
-                    result = result,
-                    organizationUrl = configurationService.organizationUrlOrNull(),
-                    coroutineScope = coroutineScope,
-                    avatarUrlBySlug = configurationService.repoAvatarUrlsForCurrentWorkspace()
+                // The repository avatar lookup is copied verbatim from WorkspaceAssignedPullRequestsViewModel.showResult:
+                // the persisted URL map is keyed by the raw repoSlug, with no lowercasing.
+                val avatarUrlBySlug = configurationService.repoAvatarUrlsForCurrentWorkspace()
+                val entries = result.pullRequests.map { pullRequest ->
+                    PullRequestListEntry(
+                        pullRequest = pullRequest,
+                        source = PullRequestListingSource.WorkspaceAssigned,
+                        repoAvatarUrl = avatarUrlBySlug[pullRequest.repoSlug]
+                    )
+                }
+                workspacePullRequestsViewModel.applySource(
+                    generation = generation,
+                    source = PullRequestListingSource.WorkspaceAssigned,
+                    entries = entries,
+                    isTruncated = result.isTruncated,
+                    currentUserUuid = result.currentUserUuid,
+                    coroutineScope = coroutineScope
                 )
             }
             is ReviewingPullRequestListResult.Failed -> {
@@ -425,17 +474,13 @@ class BbCloudOtherProjectsPanel(
                 } else {
                     LOG.warn("Could not load the pull requests to review")
                 }
-                assignedPrsViewModel.showError()
+                workspacePullRequestsViewModel.failSource(generation = generation, source = PullRequestListingSource.WorkspaceAssigned)
             }
         }
     }
 
     /** Guards against duplicate open coroutines for the same worktree path. Mutated on the EDT only. */
     private val worktreesInProgress = mutableSetOf<Path>()
-
-    private fun openLocalProjectForPullRequest(pullRequest: ReviewingPullRequest) {
-        startOpenPullRequestInWorktree(pullRequest = pullRequest)
-    }
 
     private fun openPrOnWebForPullRequest(pullRequest: ReviewingPullRequest) {
         val url = pullRequest.summary.webUrl
@@ -1258,16 +1303,14 @@ class BbCloudOtherProjectsPanel(
 
     private fun beginLoad() {
         activeLoadCount++
-        myPrsHeaderViewModel.setRefreshEnabled(false)
-        assignedPrsHeaderViewModel.setRefreshEnabled(false)
+        workspaceHeaderViewModel.setRefreshEnabled(false)
     }
 
     @Synchronized
     private fun endLoad() {
         if (--activeLoadCount <= 0) {
             activeLoadCount = 0
-            myPrsHeaderViewModel.setRefreshEnabled(true)
-            assignedPrsHeaderViewModel.setRefreshEnabled(true)
+            workspaceHeaderViewModel.setRefreshEnabled(true)
         }
     }
 
@@ -1291,8 +1334,10 @@ private enum class ViewCard {
 /**
  * The Compose body of one Workspace tab root.
  *
- * It switches between the not-configured card and the content card, which carries the [WorkspaceHeader] of the My PRs
- * and Assigned PRs roots, driven by Compose state instead of the Swing CardLayout the panel used before.
+ * It switches between the not-configured card and the content card, which carries the [WorkspaceHeader] of the merged
+ * Workspace - PRs root, driven by Compose state instead of the Swing CardLayout the panel used before. The optional
+ * [excludeContent] slot carries the Exclude: checkboxes inline into the header row; the Watched Projects tab passes
+ * nothing, so it shows no header and no checkboxes.
  */
 @Composable
 private fun WorkspaceRootContent(
@@ -1300,6 +1345,7 @@ private fun WorkspaceRootContent(
     headerState: WorkspaceHeaderState?,
     onRefreshRequested: () -> Unit,
     onGoToSettings: () -> Unit,
+    excludeContent: (@Composable androidx.compose.foundation.layout.RowScope.() -> Unit)? = null,
     content: @Composable () -> Unit
 ) {
     Box(modifier = Modifier.fillMaxSize().padding(8.dp)) {
@@ -1307,7 +1353,11 @@ private fun WorkspaceRootContent(
             ViewCard.NotConfigured -> NotConfiguredContent(onGoToSettings = onGoToSettings)
             ViewCard.Content -> Column(modifier = Modifier.fillMaxSize()) {
                 if (headerState != null) {
-                    WorkspaceHeader(state = headerState, onRefreshRequested = onRefreshRequested)
+                    WorkspaceHeader(
+                        state = headerState,
+                        onRefreshRequested = onRefreshRequested,
+                        excludeContent = excludeContent ?: {}
+                    )
                 }
                 Box(modifier = Modifier.weight(1f)) {
                     content()

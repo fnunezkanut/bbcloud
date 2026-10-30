@@ -95,6 +95,24 @@ class BbCloudReviewQueueServiceTest {
         }
 
     @Test
+    fun `listReviewingPullRequests - should carry the reviewer uuid the queue was keyed by`(): Unit =
+        runBlocking {
+            // GIVEN
+            val client = mockClientForSlugs(
+                currentUserUuid = CURRENT_USER_UUID,
+                slugResults = mapOf("repo-a" to ReviewerQueueQueryResult.Listed(listOf(pullRequest(1))))
+            )
+            val service = service(client = client, token = "token")
+
+            // WHEN
+            val result = service.listReviewingPullRequests(organizationUrl = organizationUrl, excludedRepoSlug = null, repoSlugs = listOf("repo-a"))
+
+            // THEN the success carries the reviewer uuid, for the Mine and Approved-by-me filters
+            val success = result.shouldBeInstanceOf<ReviewingPullRequestListResult.Success>()
+            success.currentUserUuid shouldBe CURRENT_USER_UUID
+        }
+
+    @Test
     fun `listReviewingPullRequests - should skip the current project repository case-insensitively`(): Unit =
         runBlocking {
             // GIVEN

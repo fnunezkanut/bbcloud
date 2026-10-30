@@ -25,7 +25,7 @@ class BitbucketPullRequestResponseParserTest {
         )
 
         url shouldBe "https://api.bitbucket.org/2.0/repositories/my-workspace/examplerepo/pullrequests" +
-            "?state=OPEN&state=MERGED&state=DECLINED&sort=-updated_on&pagelen=50"
+            "?state=OPEN&state=MERGED&state=DECLINED&sort=-updated_on&pagelen=50&fields=%2Bvalues.participants"
     }
 
     @Test
@@ -230,6 +230,78 @@ class BitbucketPullRequestResponseParserTest {
                   "links": { "html": { "href": "https://bitbucket.org/my-workspace/examplerepo/pull-requests/$id" } }
                 }
                 """.trimIndent()
+        }
+    }
+
+    @Nested
+    inner class AuthorAndApprovers {
+        @Test
+        fun `parsePullRequestsPage - should read author uuid and approving participant uuids`() {
+            // GIVEN one approving participant, one non-approving participant, and one participant without a user
+            val json =
+                """
+                {
+                  "values": [
+                    {
+                      "id": 1,
+                      "title": "PR 1",
+                      "state": "OPEN",
+                      "updated_on": "2026-09-28T10:00:00+00:00",
+                      "author": { "uuid": "{author}", "display_name": "John Smith" },
+                      "source": { "branch": { "name": "feature" } },
+                      "destination": { "branch": { "name": "main" } },
+                      "links": { "html": { "href": "https://bitbucket.org/my-workspace/examplerepo/pull-requests/1" } },
+                      "participants": [
+                        { "user": { "uuid": "{a}" }, "approved": true },
+                        { "user": { "uuid": "{b}" }, "approved": false },
+                        { "approved": true }
+                      ]
+                    }
+                  ]
+                }
+                """.trimIndent()
+
+            // WHEN
+            val pullRequests = BitbucketPullRequestResponseParser.parsePullRequests(json)
+
+            // THEN
+            assertSoftly {
+                pullRequests shouldHaveSize 1
+                pullRequests[0].authorUuid shouldBe "{author}"
+                pullRequests[0].approverUuids shouldBe setOf("{a}")
+            }
+        }
+
+        @Test
+        fun `parsePullRequestsPage - should default to empty approvers when participants are absent`() {
+            // GIVEN a pull request with no participants array
+            val json =
+                """
+                {
+                  "values": [
+                    {
+                      "id": 2,
+                      "title": "PR 2",
+                      "state": "OPEN",
+                      "updated_on": "2026-09-28T10:00:00+00:00",
+                      "author": { "display_name": "John Smith" },
+                      "source": { "branch": { "name": "feature" } },
+                      "destination": { "branch": { "name": "main" } },
+                      "links": { "html": { "href": "https://bitbucket.org/my-workspace/examplerepo/pull-requests/2" } }
+                    }
+                  ]
+                }
+                """.trimIndent()
+
+            // WHEN
+            val pullRequests = BitbucketPullRequestResponseParser.parsePullRequests(json)
+
+            // THEN
+            assertSoftly {
+                pullRequests shouldHaveSize 1
+                pullRequests[0].authorUuid.shouldBeNull()
+                pullRequests[0].approverUuids shouldBe emptySet()
+            }
         }
     }
 

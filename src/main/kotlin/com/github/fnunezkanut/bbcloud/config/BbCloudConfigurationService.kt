@@ -10,6 +10,8 @@ import com.github.fnunezkanut.bbcloud.project.BbCloudWatchedProjectsDiscoverySer
 import com.github.fnunezkanut.bbcloud.project.WatchedProjectMapping
 import com.github.fnunezkanut.bbcloud.project.WatchedProjectsDiscoveryResult
 import com.github.fnunezkanut.bbcloud.settings.BbCloudSettings
+import com.github.fnunezkanut.bbcloud.settings.PullRequestListFilter
+import com.github.fnunezkanut.bbcloud.settings.PullRequestListScope
 import com.github.fnunezkanut.bbcloud.validation.BitbucketWorkspaceValidator
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.service
@@ -239,7 +241,22 @@ class BbCloudConfigurationService(
         settings.organizationUrl = ""
         settings.projectsDirectory = ""
         clearWatchedProjects()
+        // The PR list Exclude: filters are view preferences, not setup, so they are intentionally kept across a reset.
         thisLogger().info("Bitbucket Cloud PR Review plugin settings fully reset")
+    }
+
+    /** Reads the persisted Exclude: checkbox states of [scope]; the Workspace scope always reports excludeResolved=false. */
+    fun pullRequestListFilter(scope: PullRequestListScope): PullRequestListFilter {
+        return settings.pullRequestListFilter(scope = scope)
+    }
+
+    /** Persists the Exclude: checkbox states of [scope]; the Workspace scope ignores [filter]'s excludeResolved. */
+    fun savePullRequestListFilter(scope: PullRequestListScope, filter: PullRequestListFilter) {
+        settings.savePullRequestListFilter(scope = scope, filter = filter)
+        thisLogger().info(
+            "Saved $scope pull request list filter: resolved=${filter.excludeResolved}, mine=${filter.excludeMine}, " +
+                "approvedByMe=${filter.excludeApprovedByMe}, drafts=${filter.excludeDrafts}"
+        )
     }
 
     /**

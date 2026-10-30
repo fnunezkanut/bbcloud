@@ -61,7 +61,7 @@ class BitbucketReviewerQueueClientTest {
                     requests.single().url.encodedPath shouldBe
                         "/2.0/repositories/my-workspace/other-repo/pullrequests"
                     requests.single().url.encodedQuery shouldBe
-                        "q=state%3D%22OPEN%22%20AND%20reviewers.uuid%3D%22%7B5b10ac8d%7D%22%20AND%20author.uuid%21%3D%22%7B5b10ac8d%7D%22&sort=-updated_on&pagelen=50"
+                        "q=state%3D%22OPEN%22%20AND%20reviewers.uuid%3D%22%7B5b10ac8d%7D%22%20AND%20author.uuid%21%3D%22%7B5b10ac8d%7D%22&sort=-updated_on&pagelen=50&fields=%2Bvalues.participants"
                 }
             }
 

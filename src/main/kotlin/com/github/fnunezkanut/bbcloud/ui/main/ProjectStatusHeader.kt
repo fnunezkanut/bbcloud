@@ -4,16 +4,18 @@ package com.github.fnunezkanut.bbcloud.ui.main
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.github.fnunezkanut.bbcloud.BbCloudBundle
 import com.github.fnunezkanut.bbcloud.ui.components.BbCloudOutlinedActionButton
+import com.github.fnunezkanut.bbcloud.ui.components.RoundedBadge
+import com.github.fnunezkanut.bbcloud.ui.components.actionButtonHoverBackground
 import org.jetbrains.jewel.ui.component.Icon
 import org.jetbrains.jewel.ui.component.Link
 import org.jetbrains.jewel.ui.component.OutlinedButton
@@ -21,8 +23,10 @@ import org.jetbrains.jewel.ui.component.Text
 import org.jetbrains.jewel.ui.icons.AllIconsKeys
 
 /**
- * The project status row of one Project tab root: the status icon and message, the "Project:" prefix and repository
- * link, the open pull request count, and the refresh action.
+ * The project status row of the Current Project - PRs tab: when the repository is resolved it reads
+ * <green tick icon> <repo_slug link> <num_open pill>, then the inline [excludeContent] slot (the Exclude: checkboxes),
+ * then a flexible spacer, then the Create new PR and Refresh buttons. When the repository is not resolved it instead
+ * shows the status icon and message (for example "Checking..."). The former "Project:" prefix has been removed.
  */
 @Composable
 internal fun ProjectStatusHeader(
@@ -30,7 +34,8 @@ internal fun ProjectStatusHeader(
     onRefreshRequested: () -> Unit,
     onCreatePullRequestRequested: () -> Unit,
     onRepositoryLinkClicked: (String) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    excludeContent: @Composable RowScope.() -> Unit = {}
 ) {
     Row(
         modifier = modifier.fillMaxWidth().padding(bottom = 4.dp),
@@ -47,14 +52,15 @@ internal fun ProjectStatusHeader(
         }
         val repositoryWebUrl = state.repositoryWebUrl
         if (repositoryWebUrl != null) {
-            Text(text = BbCloudBundle.message("main.branch.project"), color = MainPanelStatusSupport.projectFoundForeground())
-            Link(text = repositoryWebUrl, onClick = { onRepositoryLinkClicked(repositoryWebUrl) })
+            // The link text is the repository slug; when the slug is blank, fall back to the last path segment of the URL.
+            val linkText = state.repositorySlug ?: repositoryWebUrl.trimEnd('/').substringAfterLast('/')
+            Link(text = linkText, onClick = { onRepositoryLinkClicked(repositoryWebUrl) })
         }
         val openCountText = state.openCountText
         if (openCountText != null) {
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(text = openCountText)
+            RoundedBadge(text = openCountText, fillColor = actionButtonHoverBackground())
         }
+        excludeContent()
         Spacer(modifier = Modifier.weight(1f))
         if (state.isCreatePullRequestVisible) {
             BbCloudOutlinedActionButton(

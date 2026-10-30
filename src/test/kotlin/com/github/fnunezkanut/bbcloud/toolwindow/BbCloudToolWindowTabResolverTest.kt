@@ -7,7 +7,7 @@ import org.junit.jupiter.api.Test
 @Tag("unit")
 class BbCloudToolWindowTabResolverTest {
     @Test
-    fun `initialTab - should open the project open PRs tab when configured`() {
+    fun `initialTab - should open the current project PRs tab when configured`() {
         // GIVEN
         val isConfigured = true
 
@@ -15,7 +15,7 @@ class BbCloudToolWindowTabResolverTest {
         val result = BbCloudToolWindowTabResolver.initialTab(isConfigured = isConfigured)
 
         // THEN
-        result shouldBe BbCloudToolWindowTab.ProjectOpenPrs
+        result shouldBe BbCloudToolWindowTab.ProjectPrs
     }
 
     @Test
@@ -31,7 +31,7 @@ class BbCloudToolWindowTabResolverTest {
     }
 
     @Test
-    fun `initialTab - should open the project open PRs tab while the configuration check is unresolved`() {
+    fun `initialTab - should open the current project PRs tab while the configuration check is unresolved`() {
         // GIVEN
         val isConfigured = null
 
@@ -39,6 +39,6 @@ class BbCloudToolWindowTabResolverTest {
         val result = BbCloudToolWindowTabResolver.initialTab(isConfigured = isConfigured)
 
         // THEN
-        result shouldBe BbCloudToolWindowTab.ProjectOpenPrs
+        result shouldBe BbCloudToolWindowTab.ProjectPrs
     }
 }

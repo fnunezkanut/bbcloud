@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## *1.3.0* - 2026-10-30
+* Changed: "Project - Open PRs" and "Project - Completed PRs" are merged into one "Current Project - PRs" tab
+* Changed: "Workspace - My PRs" and "Workspace - Assigned PRs" are merged into one "Workspace - PRs" tab
+* Added: "Exclude:" filters on both PR tabs — Resolved (on by default, Current Project - PRs only), Mine (hides PRs you created), Approved by me, Drafts (on by default); each tab remembers its choices
+* Added: Compatibility with IntelliJ 2026.3 Beta
+
 ## *1.2.0* - 2020-10-29
 * Changed: the add-comment icon in diff gutters uses the standard IDE "+" icon
 * Fixed: Clipping of comment boxes on multi-monitor (with different scales) setup

@@ -14,7 +14,11 @@ data class PullRequestSummary(
     val commentCount: Int,
     val webUrl: String,
     val state: PullRequestState,
-    val isDraft: Boolean
+    val isDraft: Boolean,
+    /** Bitbucket account uuid of the author (braces included, as Bitbucket returns it); null when the listing omitted it. */
+    val authorUuid: String? = null,
+    /** Account uuids of the participants who currently approve the pull request; empty when the listing omitted participants. */
+    val approverUuids: Set<String> = emptySet()
 )
 
 sealed class PullRequestListResult {
