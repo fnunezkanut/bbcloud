@@ -89,12 +89,18 @@ class BbCloudReviewQueueService(private val credentialStore: BbCloudCredentialSt
         }
         LOG.info("Checked ${repoSlugs.size} watched repositories: queried $queried, skipped $skipped, failed $failed")
 
-        return ReviewingPullRequestAssembler.assemble(
+        // Attach the reviewer uuid to the success so the Mine and Approved-by-me filters can key off it. The uuid was
+        // resolved above, so no extra request is made; an empty-repoSlugs load also flows through assemble and carries it.
+        val assembled = ReviewingPullRequestAssembler.assemble(
             workspace = workspace,
             queues = queues,
             isRepositoryListTruncated = isCapped,
             maxPullRequests = MAX_LISTED_PULL_REQUESTS
         )
+        return when (assembled) {
+            is ReviewingPullRequestListResult.Success -> assembled.copy(currentUserUuid = reviewerUuid)
+            is ReviewingPullRequestListResult.Failed -> assembled
+        }
     }
 
     companion object {

@@ -38,7 +38,7 @@ class BitbucketWorkspacePullRequestClientTest {
                 entries.single().repoSlug shouldBe "other-repo"
                 isTruncated shouldBe false
                 requests.single().url.encodedPath shouldBe "/2.0/workspaces/my-workspace/pullrequests/%7B5b10ac8d%7D"
-                requests.single().url.encodedQuery shouldBe "state=OPEN&sort=-updated_on&pagelen=50"
+                requests.single().url.encodedQuery shouldBe "state=OPEN&sort=-updated_on&pagelen=50&fields=%2Bvalues.participants"
                 requests.single().header("Authorization") shouldBe "Bearer token"
             }
         }

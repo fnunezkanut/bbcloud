@@ -8,7 +8,7 @@ package com.github.fnunezkanut.bbcloud.project
  * @property workspace The Bitbucket workspace slug the repository belongs to. This is an in-memory value produced by
  *   discovery (parsed from the origin remote) and used by the repository-existence check; it is no longer part of
  *   persistence. The watched map is persisted by repository slug alone (see [com.github.fnunezkanut.bbcloud.settings.BbCloudSettings.State.watchedRepos]).
- * @property watched True when the project is watched, so its pull requests appear on the Workspace - Assigned PRs
+ * @property watched True when the project is watched, so its pull requests appear on the Workspace - PRs
  *   tab. New scanned or verified mappings are unchecked by default; the user ticks a project on the Workspace -
  *   Watched Projects tab to watch it.
  */

@@ -1,7 +1,8 @@
-package com.github.fnunezkanut.bbcloud.ui.main
+package com.github.fnunezkanut.bbcloud.ui.otherprojects
 
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestState
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestSummary
+import com.github.fnunezkanut.bbcloud.bitbucket.ReviewingPullRequest
 import io.kotest.assertions.assertSoftly
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldNotBeEmpty
@@ -12,14 +13,14 @@ import kotlin.time.Duration.Companion.days
 import kotlin.time.Duration.Companion.hours
 
 @Tag("unit")
-class ProjectPullRequestsUiStateTest {
+class WorkspacePullRequestsUiStateTest {
     // Anchor the created/updated instants to "now" so they stay inside PullRequestRelativeTime's 7-day relative window.
     // The absolute fallback (DateFormatUtil.formatPrettyDateTime) needs a running IntelliJ Application, which a plain
     // unit test does not have, so fixed calendar dates would start NPE-ing once they aged past the relative cutoff.
     private val now = Clock.System.now()
 
     @Test
-    fun `buildProjectPullRequestRow - should map summary fields to card row`() {
+    fun `buildWorkspacePullRequestRow - should map summary fields to card row`() {
         // GIVEN
         val summary = PullRequestSummary(
             id = 42,
@@ -37,11 +38,10 @@ class ProjectPullRequestsUiStateTest {
         )
 
         // WHEN
-        val row = buildProjectPullRequestRow(
-            summary = summary,
+        val row = buildWorkspacePullRequestRow(
+            pullRequest = ReviewingPullRequest(summary = summary, workspace = "acme", repoSlug = "repo"),
             organizationUrl = "https://bitbucket.org",
-            workspace = "acme",
-            repoSlug = "repo",
+            authorAvatarUrl = summary.authorAvatarUrl,
             repoAvatarUrl = "https://bitbucket.org/avatar.png"
         )
 
@@ -64,7 +64,7 @@ class ProjectPullRequestsUiStateTest {
     }
 
     @Test
-    fun `buildProjectPullRequestRow - should preserve placeholder data for unresolved repository`() {
+    fun `buildWorkspacePullRequestRow - should preserve placeholder data for unresolved repository`() {
         // GIVEN
         val summary = PullRequestSummary(
             id = 7,
@@ -82,11 +82,10 @@ class ProjectPullRequestsUiStateTest {
         )
 
         // WHEN
-        val row = buildProjectPullRequestRow(
-            summary = summary,
+        val row = buildWorkspacePullRequestRow(
+            pullRequest = ReviewingPullRequest(summary = summary, workspace = "", repoSlug = ""),
             organizationUrl = "https://bitbucket.org",
-            workspace = "",
-            repoSlug = "",
+            authorAvatarUrl = null,
             repoAvatarUrl = null
         )
 

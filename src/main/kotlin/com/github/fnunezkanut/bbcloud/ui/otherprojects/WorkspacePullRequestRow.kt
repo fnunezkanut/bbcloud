@@ -7,14 +7,6 @@ import com.github.fnunezkanut.bbcloud.bitbucket.ReviewingPullRequest
 import com.github.fnunezkanut.bbcloud.ui.main.PullRequestRelativeTime
 import com.github.fnunezkanut.bbcloud.ui.main.PullRequestStateStyle
 
-enum class WorkspacePullRequestsCard {
-    NotConfigured,
-    Loading,
-    Listing,
-    Empty,
-    Error
-}
-
 data class WorkspacePullRequestRow(
     val pullRequest: ReviewingPullRequest,
     val repositoryWebUrl: String?,
@@ -34,37 +26,6 @@ data class WorkspacePullRequestRow(
     val createdRelative: String,
     val commentCount: Int
 )
-
-data class WorkspacePullRequestsUiState(
-    val card: WorkspacePullRequestsCard = WorkspacePullRequestsCard.Loading,
-    val rows: List<WorkspacePullRequestRow> = emptyList(),
-    val isTruncated: Boolean = false,
-    val scopeNoteVisible: Boolean = false,
-    val avatarRevision: Int = 0
-)
-
-enum class WorkspacePullRequestsTab(
-    val loadingMessageKey: String,
-    val emptyMessageKey: String,
-    val errorMessageKey: String,
-    val truncatedMessageKey: String,
-    val scopeNoteVisible: Boolean
-) {
-    MyPrs(
-        loadingMessageKey = "otherProjects.openedByMe.loading",
-        emptyMessageKey = "otherProjects.openedByMe.none",
-        errorMessageKey = "otherProjects.openedByMe.loadFailed",
-        truncatedMessageKey = "otherProjects.openedByMe.truncated",
-        scopeNoteVisible = false
-    ),
-    AssignedPrs(
-        loadingMessageKey = "otherProjects.attention.loading",
-        emptyMessageKey = "otherProjects.attention.none",
-        errorMessageKey = "otherProjects.attention.loadFailed",
-        truncatedMessageKey = "otherProjects.attention.truncated",
-        scopeNoteVisible = true
-    )
-}
 
 internal fun buildWorkspacePullRequestRow(
     pullRequest: ReviewingPullRequest,

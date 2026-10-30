@@ -13,7 +13,7 @@ plugins {
 }
 
 group = "com.github.fnunezkanut"
-version = "1.2.0"
+version = "1.3.0"
 
 val isLocalBuild = providers.environmentVariable("CI").orNull.isNullOrEmpty()
 
@@ -82,9 +82,7 @@ intellijPlatform {
         name = "Bitbucket Cloud PR Review"
         ideaVersion {
             sinceBuild = "262.10968.63"
-            // Capped to the 2026.2 line until the 2026.3 (263.*) builds are released and tested.
-            // Lift by widening or restoring an open-ended cap once 2026.3 compatibility is verified.
-            untilBuild = "262.*"
+            untilBuild = "263.*"
         }
     }
     pluginVerification {

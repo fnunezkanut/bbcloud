@@ -117,6 +117,21 @@ class BbCloudAuthoredPullRequestServiceTest {
         }
 
     @Test
+    fun `listAuthoredPullRequests - should carry the current user uuid the listing was keyed by`(): Unit =
+        runBlocking {
+            // GIVEN
+            val client = clientReturning(page = page(entries = listOf(entry(repoSlug = "other-repo"))))
+            val service = service(client = client, token = "token")
+
+            // WHEN
+            val result = service.listAuthoredPullRequests(organizationUrl = organizationUrl, excludedRepoSlug = null)
+
+            // THEN the success carries the uuid resolved from getCurrentUser, for the Mine and Approved-by-me filters
+            val success = result.shouldBeInstanceOf<AuthoredPullRequestListResult.Success>()
+            success.currentUserUuid shouldBe CURRENT_USER_UUID
+        }
+
+    @Test
     fun `listAuthoredPullRequests - should skip the current project repository`(): Unit =
         runBlocking {
             // GIVEN two repositories, one of them the current project

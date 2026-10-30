@@ -23,6 +23,8 @@ class BitbucketReviewQueueResponseParserTest {
             shouldContain("state%3D%22OPEN%22")
             shouldContain("sort=-updated_on")
             shouldContain("pagelen=50")
+            // The participants expansion must keep its leading `+` encoded as %2B, not a raw `+`.
+            shouldContain("fields=%2Bvalues.participants")
         }
     }
 

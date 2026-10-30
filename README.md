@@ -1,6 +1,8 @@
 # bbcloud
 
-IntelliJ IDEA plugin (`com.github.fnunezkanut.bbcloud`) for Bitbucket Cloud. It adds a **Bitbucket Cloud PR Review** tool window on the bottom right strip.
+IntelliJ IDEA plugin (`com.github.fnunezkanut.bbcloud`) for Bitbucket Cloud. It adds a **Bitbucket Cloud PR Review** tool window on the bottom right strip and more...
+
+[Get from IntelliJ Marketplace](https://plugins.jetbrains.com/plugin/35502-bitbucket-cloud-pr-review/)
 
 ## Main features
 
@@ -10,18 +12,30 @@ Click this icon ![plugin icon](docs/icon.png) in IntelliJ or goto `IntelliJ > Se
 * Interaction with Atlassian Bitbucket Cloud APIs using an API Token (with required scopes) [one can setup and revoke here](https://id.atlassian.com/manage-profile/security/api-tokens)
 * Specify "Projects Directory" where one usually checks out projects into from bitbucket
 
-### Project - Open PRs and Completed PRs
-Pages which show any currently open and completed PRs for the currently open project:
-* Clicking the title of the PR would open that PR in a separate "PR Work Tree" IntelliJ window which has its own git work tree so not to interfere with your work any any other PR reviews
+### Current Project - PRs
+One page which shows the open and the completed (merged or declined) PRs for the currently open project in a single listing:
+* Clicking the title of an open PR would open that PR in a separate "PR Work Tree" IntelliJ window which has its own git work tree so not to interfere with your work or any other PR reviews; clicking the title of a completed PR opens it in bitbucket cloud
+* The header shows the repository slug (a link to bitbucket cloud) and a pill with the number of open PRs
 * Refresh button checks bitbucket cloud for any new PRs in this project
 * You can also goto the PR view in bitbucket cloud from here
+* An `Exclude:` filter row lets you hide PRs you do not want to see; each checkbox is remembered across restarts:
+  * `Resolved` (on by default): hide merged and declined PRs (this checkbox is only shown on this tab)
+  * `Mine`: hide the PRs you created
+  * `Approved by me`: hide the PRs you have approved
+  * `Drafts` (on by default): hide draft PRs
 
-### Workspace - My PRs
-Page which shows any PRs you opened in your bitbucket workspace:
-* If the project exists in your Projects directory clicking the title of the PR would open that PR in a separate "PR Work Tree" IntelliJ window otherwise you be redirected to bitbucket cloud PR view
+#### What's a git worktree?
+[Good summary here](https://jonesrussell.github.io/blog/beginners-guide-git-worktrees/)
 
-### Workspace - Assigned PRs and Watched Projects
-Pages which shows any PRs you have been assigned to review from the list on the "Watched Projects" page only
+![whats a git worktree](docs/worktrees.jpeg)
+
+### Workspace - PRs
+One page which merges the PRs you opened across your bitbucket workspace and the PRs assigned to you for review (from your "Watched Projects") into a single listing, newest first:
+* If the project exists in your Projects directory clicking the title of a PR would open that PR in a separate "PR Work Tree" IntelliJ window otherwise you are redirected to bitbucket cloud PR view
+* The same `Exclude:` filter row is offered, remembered independently of the Current Project - PRs tab; `Mine`, `Approved by me` and `Drafts` are shown here (there is no `Resolved` checkbox, because this listing only holds open PRs)
+
+### Workspace - Watched Projects
+Page which lets you opt into which projects you want to "Watch"; only watched projects contribute PRs to the "Workspace - PRs" tab's review queue
 * Due to Bitbucket API limitations you have to opt into which project you want to "Watch", opting into too many projects may result in hitting api rate limits.
 
 ### PR View
@@ -109,3 +123,9 @@ After opening a pull request in the **Bitbucket Cloud PR Review** tool window, i
 ### Troubleshooting
 
 The sandbox IDE's log is at `.intellijPlatform/sandbox/bbcloud/IU-2026.2.3/log_runIde/idea.log` (in your own IDE, use **Help > Show Log in Finder**).
+
+## Contributions
+
+Pull requests and forks are welcome :) 
+
+Leave any feedback in Issue on github but please keep in mind this is a free plugin done on free time (with the selfish aim of helping myself review pull requests faster) and in some cases Atlassian *public* apis are lacking so feature parity with web version is hard to reach. This plugin is not for the hosted version of bitbucket.

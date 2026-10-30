@@ -48,6 +48,42 @@ class BbCloudSettings : SimplePersistentStateComponent<BbCloudSettings.State>(St
          * without an avatar has no entry here, which the UI renders as a neutral placeholder.
          */
         var repoAvatarUrls by map<String, String>()
+
+        /**
+         * The Exclude: checkbox states of the Current Project - PRs tab. Each is a view preference, persisted across
+         * restarts and independent of the Workspace - PRs tab's states (see [workspaceExcludeMinePullRequests] etc.).
+         * The option names are part of the persisted XML; do not rename them without a migration (see [watchedRepos]
+         * for the earlier corruption incident). `BaseState` omits values equal to the default, so existing installs
+         * get these defaults automatically with no migration.
+         *
+         * Default true: hide pull requests that are not Open (Merged, Declined).
+         */
+        var projectExcludeResolvedPullRequests by property(true)
+
+        /** Default false: when true, hide the PRs the current user authored. */
+        var projectExcludeMinePullRequests by property(false)
+
+        /** Default false: when true, hide the PRs the current user has approved. */
+        var projectExcludeApprovedByMePullRequests by property(false)
+
+        /** Default true: hide draft pull requests. */
+        var projectExcludeDraftPullRequests by property(true)
+
+        /**
+         * The Exclude: checkbox states of the Workspace - PRs tab. There is no workspace Resolved property: the two
+         * workspace sources request open pull requests only, so that option is neither shown nor persisted. Each is a
+         * view preference, persisted across restarts and independent of the Current Project - PRs states. The option
+         * names are part of the persisted XML; do not rename them without a migration.
+         *
+         * Default false: when true, hide the PRs the current user authored.
+         */
+        var workspaceExcludeMinePullRequests by property(false)
+
+        /** Default false: when true, hide the PRs the current user has approved. */
+        var workspaceExcludeApprovedByMePullRequests by property(false)
+
+        /** Default true: hide draft pull requests. */
+        var workspaceExcludeDraftPullRequests by property(true)
     }
 
     /** Legacy value kept only so existing installs can migrate the URL to a slug; see [organizationUrl]. */
@@ -142,6 +178,47 @@ class BbCloudSettings : SimplePersistentStateComponent<BbCloudSettings.State>(St
     fun clearWatchedProjects() {
         state.watchedRepos.clear()
         state.repoAvatarUrls.clear()
+    }
+
+    /**
+     * Reads the persisted Exclude: checkbox states of [scope]. For [PullRequestListScope.Workspace] the returned filter
+     * always carries `excludeResolved = false`, because that tab offers no Resolved checkbox.
+     */
+    fun pullRequestListFilter(scope: PullRequestListScope): PullRequestListFilter {
+        return when (scope) {
+            PullRequestListScope.CurrentProject -> PullRequestListFilter(
+                excludeResolved = state.projectExcludeResolvedPullRequests,
+                excludeMine = state.projectExcludeMinePullRequests,
+                excludeApprovedByMe = state.projectExcludeApprovedByMePullRequests,
+                excludeDrafts = state.projectExcludeDraftPullRequests
+            )
+            PullRequestListScope.Workspace -> PullRequestListFilter(
+                excludeResolved = false,
+                excludeMine = state.workspaceExcludeMinePullRequests,
+                excludeApprovedByMe = state.workspaceExcludeApprovedByMePullRequests,
+                excludeDrafts = state.workspaceExcludeDraftPullRequests
+            )
+        }
+    }
+
+    /**
+     * Persists the Exclude: checkbox states of [scope]. For [PullRequestListScope.Workspace], [filter]'s
+     * `excludeResolved` is ignored, because that tab has no Resolved checkbox to persist.
+     */
+    fun savePullRequestListFilter(scope: PullRequestListScope, filter: PullRequestListFilter) {
+        when (scope) {
+            PullRequestListScope.CurrentProject -> {
+                state.projectExcludeResolvedPullRequests = filter.excludeResolved
+                state.projectExcludeMinePullRequests = filter.excludeMine
+                state.projectExcludeApprovedByMePullRequests = filter.excludeApprovedByMe
+                state.projectExcludeDraftPullRequests = filter.excludeDrafts
+            }
+            PullRequestListScope.Workspace -> {
+                state.workspaceExcludeMinePullRequests = filter.excludeMine
+                state.workspaceExcludeApprovedByMePullRequests = filter.excludeApprovedByMe
+                state.workspaceExcludeDraftPullRequests = filter.excludeDrafts
+            }
+        }
     }
 
     companion object {

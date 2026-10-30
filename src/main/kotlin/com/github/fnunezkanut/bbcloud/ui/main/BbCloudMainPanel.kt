@@ -24,6 +24,7 @@ import com.github.fnunezkanut.bbcloud.bitbucket.ProjectRepositoryStatus
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestListResult
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestOrdering
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestSummary
+import com.github.fnunezkanut.bbcloud.bitbucket.ReviewingPullRequest
 import com.github.fnunezkanut.bbcloud.config.BbCloudConfigurationService
 import com.github.fnunezkanut.bbcloud.git.BbCloudBranchCheckoutService
 import com.github.fnunezkanut.bbcloud.git.BbCloudWorktreeService
@@ -39,6 +40,7 @@ import com.github.fnunezkanut.bbcloud.project.PullRequestWorktreeResolution
 import com.github.fnunezkanut.bbcloud.project.PullRequestWorktreeResolver
 import com.github.fnunezkanut.bbcloud.project.ResolvedProjectRepository
 import com.github.fnunezkanut.bbcloud.project.StaleWorktreePruneSelection
+import com.github.fnunezkanut.bbcloud.settings.PullRequestListScope
 import com.github.fnunezkanut.bbcloud.ui.components.CenteredContent
 import com.github.fnunezkanut.bbcloud.ui.components.NotConfiguredContent
 import com.github.fnunezkanut.bbcloud.ui.otherprojects.toComposeImageBitmap
@@ -46,6 +48,12 @@ import com.github.fnunezkanut.bbcloud.ui.pullrequest.create.BbCloudNewPullReques
 import com.github.fnunezkanut.bbcloud.ui.pullrequest.create.NewPullRequestContext
 import com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.BbCloudPendingEditorOpen
 import com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.BbCloudPullRequestEditorOpenQueue
+import com.github.fnunezkanut.bbcloud.ui.pullrequests.PullRequestExcludeCheckboxes
+import com.github.fnunezkanut.bbcloud.ui.pullrequests.PullRequestListEntry
+import com.github.fnunezkanut.bbcloud.ui.pullrequests.PullRequestListingSource
+import com.github.fnunezkanut.bbcloud.ui.pullrequests.PullRequestsCard
+import com.github.fnunezkanut.bbcloud.ui.pullrequests.PullRequestsListingBody
+import com.github.fnunezkanut.bbcloud.ui.pullrequests.PullRequestsViewModel
 import com.github.fnunezkanut.bbcloud.ui.worktree.WorktreeBranchCollisionDialog
 import com.intellij.icons.AllIcons
 import com.intellij.ide.BrowserUtil
@@ -73,27 +81,23 @@ import java.nio.file.Path
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.swing.JComponent
 
-/** The three cards a Project tab root can show. */
+/** The three cards the single Current Project - PRs tab root can show. */
 private enum class ViewCard {
     NotConfigured,
     Listing,
     ProjectStatus
 }
 
-/** The two Project tab roots: the Open PRs root and the Completed PRs root. */
-private enum class Root {
-    Open,
-    Completed
-}
-
-/** The centered status message that stands in for the whole body of a Project tab root. */
+/** The centered status message that stands in for the whole body of the Current Project - PRs tab root. */
 private data class CenteredProjectStatus(val icon: ImageBitmap?, val message: String)
 
 /**
- * The Compose body of one Project tab root.
+ * The Compose body of the single Current Project - PRs tab root.
  *
  * It switches between the not-configured card, the centered project-status card, and the listing with its
- * [ProjectStatusHeader] on top, driven by Compose state instead of the Swing CardLayout the panel used before.
+ * [ProjectStatusHeader] on top, driven by Compose state instead of the Swing CardLayout the panel used before. The
+ * [excludeContent] slot carries the Exclude: checkboxes inline into the header row; it is emitted only on the listing
+ * card, so the not-configured and centered-status cards show no checkboxes.
  */
 @Composable
 private fun ProjectRootContent(
@@ -104,6 +108,7 @@ private fun ProjectRootContent(
     onCreatePullRequestRequested: () -> Unit,
     onRepositoryLinkClicked: (String) -> Unit,
     onGoToSettings: () -> Unit,
+    excludeContent: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit,
     listing: @Composable () -> Unit
 ) {
     Box(modifier = Modifier.fillMaxSize().padding(8.dp)) {
@@ -115,7 +120,8 @@ private fun ProjectRootContent(
                     state = headerState,
                     onRefreshRequested = onRefreshRequested,
                     onCreatePullRequestRequested = onCreatePullRequestRequested,
-                    onRepositoryLinkClicked = onRepositoryLinkClicked
+                    onRepositoryLinkClicked = onRepositoryLinkClicked,
+                    excludeContent = excludeContent
                 )
                 Box(modifier = Modifier.weight(1f)) {
                     listing()
@@ -162,60 +168,85 @@ class BbCloudMainPanel(
     /** Guards duplicate worktree opens; all mutations happen on the EDT. */
     private val worktreesInProgress = mutableSetOf<Path>()
     private val pruneInProgress = AtomicBoolean(false)
-    private val openPullRequestsViewModel = ProjectOpenPullRequestsViewModel(
-        onOpenRequestedCallback = { summary -> openPullRequestInWorktree(summary) },
-        onOpenPrOnWebCallback = { summary -> openPullRequestOnWeb(summary) },
-        onOpenRepositoryCallback = { summary -> openRepositoryInOwnWindow(summary) }
+
+    /**
+     * The one reusable merged view model for the Current Project - PRs tab. Its two sources are the open and resolved
+     * project pull requests, which one listing request supplies together. The title-click behavior is routed per
+     * source by [openProjectPullRequestTitle]: an open row opens its own work tree (former Open tab behavior) and a
+     * resolved row opens the browser (former Completed tab behavior).
+     */
+    private val projectPullRequestsViewModel = PullRequestsViewModel(
+        logName = "Current Project - PRs",
+        sourcesOfTab = setOf(PullRequestListingSource.ProjectOpen, PullRequestListingSource.ProjectResolved),
+        scope = PullRequestListScope.CurrentProject,
+        initialFilter = configurationService.pullRequestListFilter(scope = PullRequestListScope.CurrentProject),
+        organizationUrl = { configurationService.organizationUrlOrNull() },
+        onFilterChangedCallback = { filter ->
+            configurationService.savePullRequestListFilter(scope = PullRequestListScope.CurrentProject, filter = filter)
+        },
+        onOpenTitleCallback = ::openProjectPullRequestTitle,
+        onOpenPrOnWebCallback = { entry -> openPullRequestOnWeb(entry.pullRequest.summary) },
+        onOpenRepositoryCallback = { entry -> openRepositoryInOwnWindow(entry.pullRequest.summary) },
+        onCountsChanged = ::updateOpenCount
     )
-    private val completedPullRequestsViewModel = ProjectCompletedPullRequestsViewModel(
-        onOpenInBrowserCallback = { summary -> BrowserUtil.browse(summary.webUrl) },
-        onOpenPrOnWebCallback = { summary -> openPullRequestOnWeb(summary) },
-        onOpenRepositoryCallback = { summary -> openRepositoryInOwnWindow(summary) }
-    )
-    private val openHeaderViewModel = ProjectStatusHeaderViewModel(
-        onRefreshRequested = { triggerLoadPullRequests(source = "refresh button") },
-        onCreatePullRequestRequested = { openNewPullRequestEditor() }
-    )
-    private val completedHeaderViewModel = ProjectStatusHeaderViewModel(
+    private val projectHeaderViewModel = ProjectStatusHeaderViewModel(
         onRefreshRequested = { triggerLoadPullRequests(source = "refresh button") },
         onCreatePullRequestRequested = { openNewPullRequestEditor() }
     )
 
-    /** The three cards of a Project tab root, driven by Compose state instead of a Swing CardLayout. */
-    private val openCard: MutableState<ViewCard> = mutableStateOf(ViewCard.Listing)
-    private val completedCard: MutableState<ViewCard> = mutableStateOf(ViewCard.Listing)
+    /** The three cards of the Current Project - PRs tab root, driven by Compose state instead of a Swing CardLayout. */
+    private val projectCard: MutableState<ViewCard> = mutableStateOf(ViewCard.Listing)
 
     /**
      * Stands in for the whole body when the project repository status cannot be resolved: the listing and
      * the reload button are both unavailable, so the message is centered instead of sitting in a status row
      * above an empty area. The warning color matches the icons used for the same states.
      */
-    private val openCenteredStatus: MutableState<CenteredProjectStatus?> = mutableStateOf(null)
-    private val completedCenteredStatus: MutableState<CenteredProjectStatus?> = mutableStateOf(null)
+    private val projectCenteredStatus: MutableState<CenteredProjectStatus?> = mutableStateOf(null)
 
-    val openTabComponent: JComponent = compose {
+    val projectPrsTabComponent: JComponent = compose {
         ProjectRootContent(
-            card = openCard.value,
-            headerState = openHeaderViewModel.state.value,
-            centeredStatus = openCenteredStatus.value,
-            onRefreshRequested = openHeaderViewModel::onRefreshClicked,
-            onCreatePullRequestRequested = openHeaderViewModel::onCreatePullRequestClicked,
-            onRepositoryLinkClicked = openHeaderViewModel::onRepositoryLinkClicked,
+            card = projectCard.value,
+            headerState = projectHeaderViewModel.state.value,
+            centeredStatus = projectCenteredStatus.value,
+            onRefreshRequested = projectHeaderViewModel::onRefreshClicked,
+            onCreatePullRequestRequested = projectHeaderViewModel::onCreatePullRequestClicked,
+            onRepositoryLinkClicked = projectHeaderViewModel::onRepositoryLinkClicked,
             onGoToSettings = onGoToSettings,
-            listing = { ProjectOpenPullRequestsScreen(viewModel = openPullRequestsViewModel) }
+            excludeContent = {
+                PullRequestExcludeCheckboxes(
+                    filter = projectPullRequestsViewModel.state.value.filter,
+                    viewModel = projectPullRequestsViewModel
+                )
+            },
+            listing = {
+                PullRequestsListingBody(
+                    viewModel = projectPullRequestsViewModel,
+                    emptyMessageKey = "pullRequests.project.none",
+                    errorMessageKey = "main.pullRequests.loadFailed",
+                    footer = { }
+                )
+            }
         )
     }
-    val completedTabComponent: JComponent = compose {
-        ProjectRootContent(
-            card = completedCard.value,
-            headerState = completedHeaderViewModel.state.value,
-            centeredStatus = completedCenteredStatus.value,
-            onRefreshRequested = completedHeaderViewModel::onRefreshClicked,
-            onCreatePullRequestRequested = completedHeaderViewModel::onCreatePullRequestClicked,
-            onRepositoryLinkClicked = completedHeaderViewModel::onRepositoryLinkClicked,
-            onGoToSettings = onGoToSettings,
-            listing = { ProjectCompletedPullRequestsScreen(viewModel = completedPullRequestsViewModel) }
-        )
+
+    /**
+     * Routes a title click on a Current Project - PRs row by its source: an open row opens its own work tree (former
+     * Open tab behavior), a resolved row opens the browser (former Completed tab behavior).
+     */
+    private fun openProjectPullRequestTitle(entry: PullRequestListEntry) {
+        when (entry.source) {
+            PullRequestListingSource.ProjectOpen -> {
+                openPullRequestInWorktree(summary = entry.pullRequest.summary)
+            }
+            PullRequestListingSource.ProjectResolved -> {
+                LOG.info("User opened resolved pull request #${entry.pullRequest.summary.id} in the browser via card")
+                BrowserUtil.browse(entry.pullRequest.summary.webUrl)
+            }
+            else -> {
+                LOG.info("Ignoring a ${entry.source} row on the Current Project - PRs tab")
+            }
+        }
     }
 
     fun refresh(project: Project, coroutineScope: CoroutineScope) {
@@ -225,19 +256,12 @@ class BbCloudMainPanel(
         repositoryWebUrl = null
         repositoryAvatarUrl = null
         currentRepository = null
-        openHeaderViewModel.reset()
-        completedHeaderViewModel.reset()
-        openHeaderViewModel.setRefreshVisible(visible = false)
-        completedHeaderViewModel.setRefreshVisible(visible = false)
-        openHeaderViewModel.setCreatePullRequestVisible(visible = false)
-        completedHeaderViewModel.setCreatePullRequestVisible(visible = false)
-        showCard(ViewCard.Listing, Root.Open)
-        showCard(ViewCard.Listing, Root.Completed)
-        openPullRequestsViewModel.showHidden()
-        completedPullRequestsViewModel.showHidden()
-        updateOpenCountIndicator()
-        openHeaderViewModel.showChecking()
-        completedHeaderViewModel.showChecking()
+        projectHeaderViewModel.reset()
+        projectHeaderViewModel.setRefreshVisible(visible = false)
+        projectHeaderViewModel.setCreatePullRequestVisible(visible = false)
+        showCard(ViewCard.Listing)
+        projectPullRequestsViewModel.showHidden()
+        projectHeaderViewModel.showChecking()
 
         coroutineScope.launch {
             val organizationUrl = configurationService.organizationUrlOrNull()
@@ -259,19 +283,17 @@ class BbCloudMainPanel(
         }
     }
 
-    /** Restores the Project - Open PRs listing without affecting open pull-request editor tabs or review state. */
-    fun showProjectOpenPullRequestsListing() {
-        LOG.info("Restoring the Project - Open PRs listing from a pull request editor")
-        showCard(ViewCard.Listing, Root.Open)
-        openPullRequestsViewModel.showCard(ProjectPullRequestsCard.Listing)
-        updateOpenCountIndicator()
+    /** Restores the Current Project - PRs listing without affecting open pull-request editor tabs or review state. */
+    fun showCurrentProjectPullRequestsListing() {
+        LOG.info("Restoring the Current Project - PRs listing from a pull request editor")
+        showCard(ViewCard.Listing)
+        projectPullRequestsViewModel.showListingCard()
     }
 
     /** Replaces the listing with the link to the Settings tab, used while the plugin is unconfigured. */
     fun showNotConfigured() {
         LOG.debug("Showing the unconfigured state; the organization URL or API token is missing")
-        showCard(ViewCard.NotConfigured, Root.Open)
-        showCard(ViewCard.NotConfigured, Root.Completed)
+        showCard(ViewCard.NotConfigured)
     }
 
     private fun applyProjectStatus(status: ProjectRepositoryStatus) {
@@ -284,12 +306,12 @@ class BbCloudMainPanel(
                     repoSlug = currentRepository?.repoSlug.orEmpty(),
                     avatarUrl = status.avatarUrl
                 )
-                openHeaderViewModel.showProjectFound(repositoryWebUrl = status.repositoryWebUrl)
-                completedHeaderViewModel.showProjectFound(repositoryWebUrl = status.repositoryWebUrl)
-                openHeaderViewModel.setRefreshVisible(visible = true)
-                completedHeaderViewModel.setRefreshVisible(visible = true)
-                openHeaderViewModel.setCreatePullRequestVisible(visible = true)
-                completedHeaderViewModel.setCreatePullRequestVisible(visible = true)
+                projectHeaderViewModel.showProjectFound(
+                    repositoryWebUrl = status.repositoryWebUrl,
+                    repositorySlug = currentRepository?.repoSlug.orEmpty()
+                )
+                projectHeaderViewModel.setRefreshVisible(visible = true)
+                projectHeaderViewModel.setCreatePullRequestVisible(visible = true)
                 loadPullRequests()
             }
             is ProjectRepositoryStatus.NotFound -> {
@@ -323,10 +345,8 @@ class BbCloudMainPanel(
      */
     private fun showCenteredProjectStatus(icon: ImageBitmap?, message: String) {
         val status = CenteredProjectStatus(icon = icon, message = message)
-        openCenteredStatus.value = status
-        completedCenteredStatus.value = status
-        showCard(ViewCard.ProjectStatus, Root.Open)
-        showCard(ViewCard.ProjectStatus, Root.Completed)
+        projectCenteredStatus.value = status
+        showCard(ViewCard.ProjectStatus)
     }
 
     private fun triggerLoadPullRequests(source: String) {
@@ -334,14 +354,18 @@ class BbCloudMainPanel(
         loadPullRequests()
     }
 
-    private fun updateOpenCountIndicator() {
-        val rows = openPullRequestsViewModel.state.value.rows.size
-        openHeaderViewModel.setOpenCount(
-            text = BbCloudBundle.message("main.pullRequests.section.open", rows),
-            visible = ProjectOpenPrCountIndicator.isVisible(
-                card = openPullRequestsViewModel.state.value.card,
-                rows = rows
-            )
+    /**
+     * Updates the open-count pill from the view model's counts callback. [openCount] is the number of visible open
+     * rows after the Exclude filters (decision 4c), so toggling an Exclude checkbox that hides open rows updates the
+     * pill. The pill is hidden on the Hidden, Loading, and Error cards, matching the former "Open (n)" indicator's
+     * visibility rule.
+     */
+    private fun updateOpenCount(openCount: Int, card: PullRequestsCard) {
+        projectHeaderViewModel.setOpenCount(
+            text = openCount.toString(),
+            visible = card != PullRequestsCard.Hidden &&
+                card != PullRequestsCard.Loading &&
+                card != PullRequestsCard.Error
         )
     }
 
@@ -350,54 +374,69 @@ class BbCloudMainPanel(
         val coroutineScope = boundCoroutineScope ?: return
         val organizationUrl = configurationService.organizationUrlOrNull() ?: return
 
-        openHeaderViewModel.setRefreshEnabled(false)
-        completedHeaderViewModel.setRefreshEnabled(false)
-        openPullRequestsViewModel.showLoading()
-        updateOpenCountIndicator()
+        projectHeaderViewModel.setRefreshEnabled(false)
+        val generation = projectPullRequestsViewModel.beginRefresh()
         coroutineScope.launch {
+            // The service caches the uuid per token, so only the first call makes a request; the Mine and
+            // Approved-by-me filters need it to match the current user.
+            val currentUserUuid = openPullRequestService.currentUserUuid(
+                projectBasePath = project.basePath,
+                organizationUrl = organizationUrl
+            )
             val result = openPullRequestService.listRecentPullRequests(
                 projectBasePath = project.basePath,
                 organizationUrl = organizationUrl
             )
             ApplicationManager.getApplication().invokeLater {
-                applyPullRequestListResult(result = result, coroutineScope = coroutineScope)
+                applyPullRequestListResult(
+                    result = result,
+                    generation = generation,
+                    currentUserUuid = currentUserUuid,
+                    coroutineScope = coroutineScope
+                )
             }
         }
     }
 
-    private fun applyPullRequestListResult(result: PullRequestListResult, coroutineScope: CoroutineScope) {
-        openHeaderViewModel.setRefreshEnabled(true)
-        completedHeaderViewModel.setRefreshEnabled(true)
+    private fun applyPullRequestListResult(result: PullRequestListResult, generation: Long, currentUserUuid: String?, coroutineScope: CoroutineScope) {
+        projectHeaderViewModel.setRefreshEnabled(true)
         when (result) {
             is PullRequestListResult.Success -> {
                 LOG.debug("Loaded ${result.pullRequests.size} pull requests")
-                if (result.pullRequests.isEmpty()) {
-                    openPullRequestsViewModel.showEmpty()
-                    completedPullRequestsViewModel.showEmpty()
-                } else {
-                    val listing = PullRequestOrdering.partitionForDisplay(result.pullRequests)
-                    val repository = currentRepository
-                    val workspace = repository?.workspace.orEmpty()
-                    val repoSlug = repository?.repoSlug.orEmpty()
-                    val repoAvatarUrl = repositoryAvatarUrl
-                    openPullRequestsViewModel.applyOpenRows(
-                        openPullRequests = listing.open,
-                        organizationUrl = configurationService.organizationUrlOrNull(),
-                        workspace = workspace,
-                        repoSlug = repoSlug,
-                        repoAvatarUrl = repoAvatarUrl,
-                        coroutineScope = coroutineScope
-                    )
-                    completedPullRequestsViewModel.applyClosedRows(
-                        closedPullRequests = listing.closed,
-                        organizationUrl = configurationService.organizationUrlOrNull(),
-                        workspace = workspace,
-                        repoSlug = repoSlug,
-                        repoAvatarUrl = repoAvatarUrl,
-                        coroutineScope = coroutineScope
-                    )
-                }
-                updateOpenCountIndicator()
+                val listing = PullRequestOrdering.partitionForDisplay(result.pullRequests)
+                val repository = currentRepository
+                val workspace = repository?.workspace.orEmpty()
+                val repoSlug = repository?.repoSlug.orEmpty()
+                val repoAvatarUrl = repositoryAvatarUrl
+                // An empty result makes both sources Loaded(empty), and the card derivation shows Empty.
+                projectPullRequestsViewModel.applySource(
+                    generation = generation,
+                    source = PullRequestListingSource.ProjectOpen,
+                    entries = listing.open.map { summary ->
+                        PullRequestListEntry(
+                            pullRequest = ReviewingPullRequest(summary = summary, workspace = workspace, repoSlug = repoSlug),
+                            source = PullRequestListingSource.ProjectOpen,
+                            repoAvatarUrl = repoAvatarUrl
+                        )
+                    },
+                    isTruncated = false,
+                    currentUserUuid = currentUserUuid,
+                    coroutineScope = coroutineScope
+                )
+                projectPullRequestsViewModel.applySource(
+                    generation = generation,
+                    source = PullRequestListingSource.ProjectResolved,
+                    entries = listing.closed.map { summary ->
+                        PullRequestListEntry(
+                            pullRequest = ReviewingPullRequest(summary = summary, workspace = workspace, repoSlug = repoSlug),
+                            source = PullRequestListingSource.ProjectResolved,
+                            repoAvatarUrl = repoAvatarUrl
+                        )
+                    },
+                    isTruncated = false,
+                    currentUserUuid = currentUserUuid,
+                    coroutineScope = coroutineScope
+                )
                 pruneStaleWorktrees()
             }
             is PullRequestListResult.Failed -> {
@@ -406,9 +445,8 @@ class BbCloudMainPanel(
                 } else {
                     LOG.warn("Could not load pull requests")
                 }
-                openPullRequestsViewModel.showError()
-                completedPullRequestsViewModel.showError()
-                updateOpenCountIndicator()
+                projectPullRequestsViewModel.failSource(generation = generation, source = PullRequestListingSource.ProjectOpen)
+                projectPullRequestsViewModel.failSource(generation = generation, source = PullRequestListingSource.ProjectResolved)
             }
         }
     }
@@ -905,12 +943,9 @@ class BbCloudMainPanel(
         return snapshot
     }
 
-    private fun showCard(card: ViewCard, root: Root) {
-        LOG.debug("Showing main panel card $card, $root")
-        when (root) {
-            Root.Open -> openCard.value = card
-            Root.Completed -> completedCard.value = card
-        }
+    private fun showCard(card: ViewCard) {
+        LOG.debug("Showing Current Project - PRs card $card")
+        projectCard.value = card
     }
 
     /** Opens (or focuses) the new pull request form in a `new.pr` editor tab of the current project. */

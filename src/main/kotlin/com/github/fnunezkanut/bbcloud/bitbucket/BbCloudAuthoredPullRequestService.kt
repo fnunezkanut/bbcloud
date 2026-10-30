@@ -64,7 +64,9 @@ class BbCloudAuthoredPullRequestService(private val credentialStore: BbCloudCred
         LOG.debug("Listed ${pullRequests.size} pull requests opened in $workspace")
         return AuthoredPullRequestListResult.Success(
             pullRequests = pullRequests,
-            isTruncated = page.isTruncated || droppedCount > 0
+            isTruncated = page.isTruncated || droppedCount > 0,
+            // The service already resolved this uuid above, so the Mine and Approved-by-me filters make no extra request.
+            currentUserUuid = currentUserUuid
         )
     }
 

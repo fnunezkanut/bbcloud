@@ -23,6 +23,8 @@ object BitbucketReviewQueueResponseParser {
             .addQueryParameter(name = "q", value = "state=\"OPEN\" AND reviewers.uuid=\"$reviewerUuid\" AND author.uuid!=\"$reviewerUuid\"")
             .addQueryParameter(name = "sort", value = NEWEST_FIRST_ORDER)
             .addQueryParameter(name = "pagelen", value = pageLen.toString())
+            // addQueryParameter encodes the leading `+` of the expansion as %2B, so the Approved-by-me filter can read approvals.
+            .addQueryParameter(name = "fields", value = BitbucketPullRequestResponseParser.LISTING_PARTICIPANTS_FIELDS)
             .build()
             .toString()
     }
