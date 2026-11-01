@@ -1,0 +1,57 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://github.com/fnunezkanut/bbcloud/tree/main/docs/parsed-bitbucket-email.json",
+    "title": "ParsedBitbucketEmail",
+    "description": "A Bitbucket pull request notification email parsed into a structured event.",
+    "type": "object",
+    "required": ["messageId", "category", "actorName", "isBot", "occurredAt"],
+    "additionalProperties": false,
+    "properties": {
+        "messageId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Email internetMessageId, used for deduplication."
+        },
+        "category": {
+            "$ref": "#/$defs/PrNotificationCategory"
+        },
+        "actorName": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Display name of the person or bot that caused the event."
+        },
+        "isBot": {
+            "type": "boolean",
+            "description": "True if the actor is a known bot (e.g. PR Ranger, Code Agent)."
+        },
+        "occurredAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "UTC timestamp of the event (email sentDateTime)."
+        },
+        "prNumber": {
+            "type": ["integer", "null"],
+            "minimum": 1,
+            "description": "Pull request number, if it could be parsed."
+        },
+        "repo": {
+            "type": ["string", "null"],
+            "pattern": "^[^/]+/[^/]+$",
+            "description": "Repository in workspace/repo form, e.g. inindca/wfm-opportunities."
+        }
+    },
+    "$defs": {
+        "PrNotificationCategory": {
+            "type": "string",
+            "enum": [
+                "COMMENTED",
+                "COMMITS_PUSHED",
+                "REVIEW_DECISION",
+                "RESOLVED",
+                "OPENED_OR_ASSIGNED",
+                "UNKNOWN"
+            ],
+            "description": "COMMENTED: comment created/updated/deleted, human or bot. COMMITS_PUSHED: PR updated with new commits. REVIEW_DECISION: approved, unapproved, changes requested/removed, left a review. RESOLVED: merged or declined. OPENED_OR_ASSIGNED: PR created, reviewer added/removed. UNKNOWN: could not be classified."
+        }
+    }
+}
