@@ -1,6 +1,8 @@
 package com.github.fnunezkanut.bbcloud.ui
 
 import com.github.fnunezkanut.bbcloud.BbCloudBundle
+import com.github.fnunezkanut.bbcloud.auth.BbCloudAccessTokenProvider
+import com.github.fnunezkanut.bbcloud.auth.BbCloudOAuthLoginService
 import com.github.fnunezkanut.bbcloud.bitbucket.BbCloudAuthoredPullRequestService
 import com.github.fnunezkanut.bbcloud.bitbucket.BbCloudOpenPullRequestService
 import com.github.fnunezkanut.bbcloud.bitbucket.BbCloudProjectRepositoryLinkService
@@ -9,7 +11,6 @@ import com.github.fnunezkanut.bbcloud.bitbucket.OkHttpBitbucketPullRequestClient
 import com.github.fnunezkanut.bbcloud.bitbucket.OkHttpBitbucketRepositoryClient
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestSummary
 import com.github.fnunezkanut.bbcloud.config.BbCloudConfigurationService
-import com.github.fnunezkanut.bbcloud.credentials.BbCloudCredentialStore
 import com.github.fnunezkanut.bbcloud.project.LocalProjectRepositorySlug
 import com.github.fnunezkanut.bbcloud.toolwindow.BbCloudToolWindowTab
 import com.github.fnunezkanut.bbcloud.toolwindow.BbCloudToolWindowTabResolver
@@ -44,7 +45,7 @@ import javax.swing.Icon
 import javax.swing.JComponent
 
 /**
- * Owns the four tool window tabs and the panels behind them. The Current Project - PRs tab opens by default once a
+ * Owns the four tool window tabs and the panels behind them. The Current Project tab opens by default once a
  * Bitbucket workspace and API token exist, otherwise the Settings tab opens. Tabs are never redirected: while the plugin
  * is unconfigured, the other tabs offer a link to the Settings tab instead.
  */
@@ -116,7 +117,7 @@ class BbCloudToolWindowPanel(private val project: Project) {
         return mainPanel.openCreatedPullRequest(summary = summary, localMainBranch = localMainBranch)
     }
 
-    /** Selects Current Project - PRs and restores its listing card without starting a reload. */
+    /** Selects Current Project and restores its listing card without starting a reload. */
     fun showCurrentProjectPullRequestsListing(): Boolean {
         val contentManager = contentManager ?: return false
         val content = contentByTab[BbCloudToolWindowTab.ProjectPrs] ?: return false
@@ -195,7 +196,7 @@ class BbCloudToolWindowPanel(private val project: Project) {
     }
 
     private fun refreshProjectPrs() {
-        LOG.debug("Refreshing the Current Project - PRs tab")
+        LOG.debug("Refreshing the Current Project tab")
         coroutineScope.launch {
             val configured = configurationService.isConfigured()
             ApplicationManager.getApplication().invokeLater {
@@ -212,7 +213,7 @@ class BbCloudToolWindowPanel(private val project: Project) {
     }
 
     private fun refreshWorkspacePrs() {
-        LOG.debug("Refreshing the Workspace - PRs tab")
+        LOG.debug("Refreshing the Workspace tab")
         coroutineScope.launch {
             val configured = configurationService.isConfigured()
             ApplicationManager.getApplication().invokeLater {
@@ -248,14 +249,20 @@ class BbCloudToolWindowPanel(private val project: Project) {
         }
     }
 
-    /** Reloads the Settings tab from the stored state: the token outline and projects-directory status. */
+    /** Reloads the Settings tab from the stored state: the token outline, OAuth status, and projects-directory status. */
     private fun bindSettingsState() {
         coroutineScope.launch {
             val hasStoredToken = configurationService.hasStoredToken()
+            val hasOAuthTokens = configurationService.hasStoredOAuthTokens()
+            val workingMethod = configurationService.authenticationMethod()
             val configured = configurationService.isConfigured()
             ApplicationManager.getApplication().invokeLater {
                 isConfigured = configured
-                settingsViewModel.bindSettingsState(hasStoredToken = hasStoredToken)
+                settingsViewModel.bindSettingsState(
+                    hasStoredToken = hasStoredToken,
+                    hasOAuthTokens = hasOAuthTokens,
+                    workingMethod = workingMethod
+                )
             }
         }
     }
@@ -309,7 +316,7 @@ class BbCloudToolWindowPanel(private val project: Project) {
     private fun iconFor(tab: BbCloudToolWindowTab): Icon {
         return when (tab) {
             BbCloudToolWindowTab.ProjectPrs -> AllIcons.Nodes.IdeaProject
-            BbCloudToolWindowTab.WorkspacePrs -> AllIcons.General.User
+            BbCloudToolWindowTab.WorkspacePrs -> AllIcons.Nodes.ModuleGroup
             BbCloudToolWindowTab.WorkspaceWatchedProjects -> AllIcons.Actions.Show
             BbCloudToolWindowTab.Settings -> AllIcons.General.Settings
         }
@@ -351,8 +358,12 @@ class BbCloudToolWindowPanel(private val project: Project) {
         return BbCloudSettingsViewModel(
             configurationService = configurationService,
             coroutineScope = coroutineScope,
+            oauthLoginService = ApplicationManager.getApplication().service<BbCloudOAuthLoginService>(),
             onSaveSuccess = { refreshAfterSave() },
             onTokenReset = { refreshAfterReset() },
+            // An OAuth login that finished or was cancelled from another project's Settings tab refreshes this tab's
+            // status so the working-method label stays correct (decision 13b).
+            onExternalAuthChanged = { bindSettingsState() },
             // Persists the chosen projects directory and triggers the exact scan that used to run from the Watched
             // Projects green button. otherProjectsPanel is read lazily here because this panel is built before it.
             onProjectsDirectoryChosenCallback = { absolutePath ->
@@ -367,6 +378,11 @@ class BbCloudToolWindowPanel(private val project: Project) {
         )
     }
 
+    /**
+     * Cancels only this project's coroutine scope. The OAuth login runs in the application-level
+     * [BbCloudOAuthLoginService], so closing one project does not cancel a login started from another project's
+     * Settings tab.
+     */
     fun disposePanel() {
         LOG.debug("Disposing Bitbucket Cloud PR Review tool window panel for project ${project.name}")
         coroutineScope.cancel()
@@ -378,7 +394,7 @@ class BbCloudToolWindowPanel(private val project: Project) {
         private fun createDefaultProjectRepositoryLinkService(configurationService: BbCloudConfigurationService): BbCloudProjectRepositoryLinkService {
             val application = ApplicationManager.getApplication()
             return BbCloudProjectRepositoryLinkService(
-                credentialStore = application.service<BbCloudCredentialStore>(),
+                accessTokenProvider = application.service<BbCloudAccessTokenProvider>(),
                 repositoryClient = OkHttpBitbucketRepositoryClient(),
                 configurationService = configurationService
             )
@@ -387,7 +403,7 @@ class BbCloudToolWindowPanel(private val project: Project) {
         private fun createDefaultOpenPullRequestService(configurationService: BbCloudConfigurationService): BbCloudOpenPullRequestService {
             val application = ApplicationManager.getApplication()
             return BbCloudOpenPullRequestService(
-                credentialStore = application.service<BbCloudCredentialStore>(),
+                accessTokenProvider = application.service<BbCloudAccessTokenProvider>(),
                 pullRequestClient = OkHttpBitbucketPullRequestClient(),
                 configurationService = configurationService
             )
@@ -396,7 +412,7 @@ class BbCloudToolWindowPanel(private val project: Project) {
         private fun createDefaultReviewQueueService(): BbCloudReviewQueueService {
             val application = ApplicationManager.getApplication()
             return BbCloudReviewQueueService(
-                credentialStore = application.service<BbCloudCredentialStore>(),
+                accessTokenProvider = application.service<BbCloudAccessTokenProvider>(),
                 pullRequestClient = OkHttpBitbucketPullRequestClient()
             )
         }
@@ -405,7 +421,7 @@ class BbCloudToolWindowPanel(private val project: Project) {
         private fun createDefaultAuthoredPullRequestService(): BbCloudAuthoredPullRequestService {
             val application = ApplicationManager.getApplication()
             return BbCloudAuthoredPullRequestService(
-                credentialStore = application.service<BbCloudCredentialStore>(),
+                accessTokenProvider = application.service<BbCloudAccessTokenProvider>(),
                 pullRequestClient = OkHttpBitbucketPullRequestClient()
             )
         }

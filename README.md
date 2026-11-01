@@ -1,21 +1,42 @@
 # bbcloud
 
-IntelliJ IDEA plugin (`com.github.fnunezkanut.bbcloud`) for Bitbucket Cloud. It adds a **Bitbucket Cloud PR Review** tool window on the bottom right strip and more...
+Free IntelliJ IDEA plugin for Bitbucket Cloud, which helps streamline pull request review without leaving your IDE
 
-[Get from IntelliJ Marketplace](https://plugins.jetbrains.com/plugin/35502-bitbucket-cloud-pr-review/)
+[Install **Bitbucket Cloud PR Review** from the JetBrains Marketplace](https://plugins.jetbrains.com/plugin/35502-bitbucket-cloud-pr-review/)
+
+[There is also a Chrome Extension](bbcloud-chrome-ext/README.md) one can use which works on bitbucket.org with this plugin!
 
 ## Main features
+
+Helps you review Bitbucket Cloud pull requests without leaving your Jetbrains IDE (and its excellent tooling) with help of [Work Trees](docs/worktrees.md), inline comments and much more.
+
+
+* 🔐 **Secure authentication** signs you in to Bitbucket Cloud with OAuth so tokens are obtained and stored safely through the IDE.
+* 🪟 A **Bitbucket Cloud PR Review** tool window on the bottom strip keeps pull request triage inside IntelliJ instead of the browser.
+* 🌳 Opening a PR spins up a separate **PR Work Tree** project window with its own git [work tree](docs/worktrees.md) so reviews never clash with your main branch or other PRs.
+* 📂 The **Current Project** tab shows open and completed PRs for the repo in your IDE, with repo links, open-PR counts, reviewer avatars, refresh, and persistent **Exclude** filters.
+* 🧭 The **Workspace** tab merges PRs you opened and review assignments from watched projects into one newest-first list across your Bitbucket workspace.
+* 👀 **Watched Projects** controls which repositories contribute to the workspace queue, with search by slug, folder, PR number, or branch and a master checkbox for matching rows.
+* 📋 Each PR gets a dedicated **`<prNum>.pr`** tab plus a blue header stripe with line-change stats, refresh, file changes, and merge, approve, draft, or decline actions.
+* 🕐 The PR **Activity** timeline mixes commits, approvals, tasks, builds, and file or inline comment threads in time order, with a box to add PR-scoped comments and reply in threads.
+* 📁 The **PR Changes** tool window lists every file in the diff; picking a file opens it in the editor or diff view driven from the stripe’s **Show pull request file changes** button.
+* ✏️ **Modified File View** and **Diff View** surface existing comments and let you add line-level feedback from the gutter or context menu, view add/remove counts, and mark files reviewed.
+* 🚀 **Create Pull Request** walks you through title, description, source and destination branches, reviewers (including defaults), remote cleanup after merge, then opens the new PR in a work tree window.
 
 ### Setup and Settings
 
 Click this icon ![plugin icon](docs/icon.png) in IntelliJ or goto `IntelliJ > Settings > Tools > Bitbucket Cloud PR Review` and configure:
-* Interaction with Atlassian Bitbucket Cloud APIs using an API Token (with required scopes) [one can setup and revoke here](https://id.atlassian.com/manage-profile/security/api-tokens)
 * Specify "Projects Directory" where one usually checks out projects into from bitbucket
+* Work with Atlassian Bitbucket Cloud APIs using either:
 
-### Current Project - PRs
+* * Bitbucket Oauth authentication
+* * or an API Token (with required scopes) [one can setup and revoke here](https://id.atlassian.com/manage-profile/security/api-tokens)
+
+### Current Project
 One page which shows the open and the completed (merged or declined) PRs for the currently open project in a single listing:
 * Clicking the title of an open PR would open that PR in a separate "PR Work Tree" IntelliJ window which has its own git work tree so not to interfere with your work or any other PR reviews; clicking the title of a completed PR opens it in bitbucket cloud
 * The header shows the repository slug (a link to bitbucket cloud) and a pill with the number of open PRs
+* Each open PR shows up to two reviewer avatars (a green check marks reviewers who approved, a warning badge marks reviewers who requested changes) and a `+N` circle for the remaining reviewers; hover an avatar or the circle to see names and review status
 * Refresh button checks bitbucket cloud for any new PRs in this project
 * You can also goto the PR view in bitbucket cloud from here
 * An `Exclude:` filter row lets you hide PRs you do not want to see; each checkbox is remembered across restarts:
@@ -24,18 +45,15 @@ One page which shows the open and the completed (merged or declined) PRs for the
   * `Approved by me`: hide the PRs you have approved
   * `Drafts` (on by default): hide draft PRs
 
-#### What's a git worktree?
-[Good summary here](https://jonesrussell.github.io/blog/beginners-guide-git-worktrees/)
 
-![whats a git worktree](docs/worktrees.jpeg)
-
-### Workspace - PRs
+### Workspace
 One page which merges the PRs you opened across your bitbucket workspace and the PRs assigned to you for review (from your "Watched Projects") into a single listing, newest first:
 * If the project exists in your Projects directory clicking the title of a PR would open that PR in a separate "PR Work Tree" IntelliJ window otherwise you are redirected to bitbucket cloud PR view
-* The same `Exclude:` filter row is offered, remembered independently of the Current Project - PRs tab; `Mine`, `Approved by me` and `Drafts` are shown here (there is no `Resolved` checkbox, because this listing only holds open PRs)
+* Each PR shows the same reviewer avatars as the Current Project tab
+* The same `Exclude:` filter row is offered, remembered independently of the Current Project tab; `Mine`, `Approved by me` and `Drafts` are shown here (there is no `Resolved` checkbox, because this listing only holds open PRs)
 
-### Workspace - Watched Projects
-Page which lets you opt into which projects you want to "Watch"; only watched projects contribute PRs to the "Workspace - PRs" tab's review queue
+### Watched Projects
+Page which lets you opt into which projects you want to "Watch"; only watched projects contribute PRs to the "Workspace" tab's review queue. A search field above the table filters the projects by slug, local folder, PR number, or branch name; the master checkbox then watches or unwatches only the matching projects.
 * Due to Bitbucket API limitations you have to opt into which project you want to "Watch", opting into too many projects may result in hitting api rate limits.
 
 ### PR View
@@ -43,11 +61,9 @@ Each pull request opens in its own git work tree, so not to interfere with any o
 A blue stripe would contain critical PR information and several buttons such as "Show pull request file changes" and "Refresh" as well as lines changed indicator for PR.
 Also, a new tab appear in your main editor window titled `<prNum>.pr` this contains important details for the current PR related to this PR work tree for you to review:
 
-* "Overview" tab containing (builds, checks, reviewers and tasks) as well as the pull request description, alongside: Merge, Approve, Mark as Draft, Decline buttons
-* "Conversation" tab where one can leave PR scoped comments, as well as view and reply to File and Inline scoped comment threads
-* "Changes" tab which shows which files changed and other PR and branch related activities
+* One page with the pull request description, an "Activity" timeline, and the builds, checks, reviewers and tasks cards, alongside: Merge, Approve, Mark as Draft, Decline buttons. The timeline starts with a box to leave PR scoped comments, then shows the commits, approvals, tasks and builds with the File and Inline scoped comment threads interleaved by the time they were written, and lets you view and reply to those threads
 
-You can click on any file, and it will open in its own editor and / or diff view
+The files the pull request changes are listed in the "PR Changes" tool window, opened with "Show pull request file changes" in the blue stripe. You can click on any file, and it will open in its own editor and / or diff view
 
 ### Modified File View
 The normal file editor is enriched with comments, you can also leave further comments by hovering over the line number gutter or right-clicking and leaving a comment.
@@ -66,13 +82,25 @@ One can create a new PR for their branch
 ## Changelog
 [Changelog](CHANGELOG.md)
 
-## Requirements
+## Contributions
+
+Pull requests and forks are welcome :)
+
+Leave any feedback on [Issues page](https://github.com/fnunezkanut/bbcloud/issues) but please keep in mind this is a **free** plugin maintained on free time, with the selfish aim of helping myself review pull requests faster.
+In some cases Atlassian *public* apis are lacking so feature parity with web version is hard to reach. This plugin is not for the hosted version of bitbucket.
+
+
+## Plugin Development
+
+### Requirements
 
 - **JDK 25.** The build uses `jvmToolchain(25)`, matching the JetBrains Runtime bundled with IntelliJ IDEA 2026.2. [`.sdkmanrc`](.sdkmanrc) pins `java=25.0.4-amzn`; run `sdk env` to switch to it.
-- **Gradle 9.8.1.** Provided by the Gradle wrapper (`./gradlew`), so no separate install is needed. It is also pinned in `.sdkmanrc`.
-- **IntelliJ IDEA 2026.2.3 (build `262.10968.63`)**
+- **Gradle 9.8.2.** Provided by the Gradle wrapper (`./gradlew`), so no separate install is needed. It is also pinned in `.sdkmanrc`.
+- **IntelliJ IDEA 2026.2.3 (build `262.10968.63`) and newer**
 
-## Build
+### Build
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for how the source is organized.
 
 ```bash
 ./gradlew build
@@ -101,9 +129,9 @@ Kotlin style is enforced with [ktlint](https://pinterest.github.io/ktlint/latest
 
 On a local machine, `./gradlew build` runs the formatter first, then compile and tests. In CI (`CI` or `JENKINS_URL` set), lint violations fail the build. The `build` task also runs `lintKotlin` through Gradle’s `check` lifecycle.
 
-## Test in IntelliJ
+### Test in IntelliJ
 
-### Your own IDE
+#### Your own IDE
 
 1. Build the plugin with `./gradlew build`.
 2. In IntelliJ IDEA, open **Settings > Plugins**, click the gear icon, and choose **Install Plugin from Disk...**.
@@ -111,21 +139,8 @@ On a local machine, `./gradlew build` runs the formatter first, then compile and
 
 Always install the zip, not a jar from `build/libs`. The jars there contain only the plugin classes, without bundled libraries such as OkHttp, and fail at runtime with `NoClassDefFoundError`.
 
-### Files changed tab (manual check)
-
-After opening a pull request in the **Bitbucket Cloud PR Review** tool window, if the working tree is clean or the PR source branch is already checked out, the source branch is checked out automatically. If there are uncommitted changes on a different branch, a confirmation dialog appears asking to stash or commit outstanding work before switching. Once confirmed or if no warning is needed, the source branch is checked out:
-
-1. Open the **Files changed** tab and confirm a hierarchical file list loads (same style as the IDE **Changes** browser).
-2. Compare the list with `git diff <destination>...<source>` in the project repository; paths should match for up-to-date remotes.
-3. Double-click a file (or select it and press **Ctrl+D** / **Cmd+D**) and confirm the IntelliJ diff viewer opens.
-4. Use **Refresh** on the tab after a new commit and confirm the list updates.
 
 ### Troubleshooting
 
 The sandbox IDE's log is at `.intellijPlatform/sandbox/bbcloud/IU-2026.2.3/log_runIde/idea.log` (in your own IDE, use **Help > Show Log in Finder**).
 
-## Contributions
-
-Pull requests and forks are welcome :) 
-
-Leave any feedback in Issue on github but please keep in mind this is a free plugin done on free time (with the selfish aim of helping myself review pull requests faster) and in some cases Atlassian *public* apis are lacking so feature parity with web version is hard to reach. This plugin is not for the hosted version of bitbucket.

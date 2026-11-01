@@ -23,7 +23,7 @@ import org.jetbrains.jewel.ui.component.Text
 import org.jetbrains.jewel.ui.icons.AllIconsKeys
 
 /**
- * The project status row of the Current Project - PRs tab: when the repository is resolved it reads
+ * The project status row of the Current Project tab: when the repository is resolved it reads
  * <green tick icon> <repo_slug link> <num_open pill>, then the inline [excludeContent] slot (the Exclude: checkboxes),
  * then a flexible spacer, then the Create new PR and Refresh buttons. When the repository is not resolved it instead
  * shows the status icon and message (for example "Checking..."). The former "Project:" prefix has been removed.

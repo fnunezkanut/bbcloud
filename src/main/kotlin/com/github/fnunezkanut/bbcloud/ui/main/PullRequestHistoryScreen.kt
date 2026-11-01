@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -67,62 +68,172 @@ private val HISTORY_GUTTER_LINE_WIDTH = 2.dp
 private val HISTORY_ENTRY_GAP = 16.dp
 private const val HISTORY_SHORT_HASH_LENGTH = 7
 
+/** The gap between the "Activity" title, the top-level composer, and the first notice or entry. */
+private val ACTIVITY_COMPOSER_GAP = 12.dp
+
 /**
- * The Jewel History feed of the Overview tab. It renders the same information as the old Swing activity feed
- * section: the day headers, the entry rows with their avatar, actor, action and relative time, and the
- * partial-failure and truncation notices.
+ * The Jewel Activity timeline of the pull-request page. The card title, the top-level comment composer, and then the
+ * activity entries and the comment threads of each day, interleaved by time. It renders the same information as the old
+ * Swing activity feed section, plus the comment threads, and the partial-failure and truncation notices.
  */
 @Composable
-internal fun PullRequestHistoryFeedScreen(viewModel: PullRequestHistoryViewModel, modifier: Modifier = Modifier) {
-    val state by viewModel.state
+internal fun PullRequestActivityFeedScreen(
+    historyViewModel: PullRequestHistoryViewModel,
+    conversationViewModel: PullRequestConversationViewModel,
+    modifier: Modifier = Modifier
+) {
+    val state by historyViewModel.state
     Column(modifier = modifier.fillMaxWidth()) {
         Text(
             text = state.title,
             fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(bottom = 4.dp)
         )
-        if (state.showPartialFailure) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(bottom = 8.dp)
-            ) {
-                Icon(key = AllIconsKeys.General.BalloonWarning, contentDescription = null)
-                Text(
-                    text = BbCloudBundle.message("main.branch.history.partialFailure"),
-                    color = JewelTheme.globalColors.text.info
-                )
-            }
-        }
-        val groups = state.groups
-        groups.forEachIndexed { groupIndex, group ->
-            Text(
-                text = historyDayHeaderText(group.day),
-                fontWeight = FontWeight.Bold,
-                color = JewelTheme.globalColors.text.info,
-                modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)
-            )
-            group.entries.forEachIndexed { entryIndex, entry ->
-                val activityEntry = entry as? ActivityFeedEntry ?: return@forEachIndexed
-                val isLast = groupIndex == groups.lastIndex && entryIndex == group.entries.lastIndex
-                HistoryEntryRow(
-                    entry = activityEntry,
-                    isLast = isLast,
-                    avatarRevision = state.avatarRevision,
-                    viewModel = viewModel
-                )
-            }
-        }
-        if (state.showTruncation) {
-            Text(
-                text = BbCloudBundle.message("main.branch.history.truncated"),
-                color = JewelTheme.globalColors.text.info
-            )
-        }
+        TopLevelCommentComposer(conversationViewModel = conversationViewModel)
+        ActivityBody(state = state, historyViewModel = historyViewModel, conversationViewModel = conversationViewModel)
+    }
+}
+
+/** The composer of a new top-level comment, always above every notice and timeline entry. */
+@Composable
+private fun TopLevelCommentComposer(conversationViewModel: PullRequestConversationViewModel) {
+    val conversationState by conversationViewModel.state
+    val pullRequestId = conversationViewModel.currentPullRequestId()
+    val input = remember(pullRequestId) { conversationViewModel.topLevelCommentInput() }
+    val composerViewModel = remember(pullRequestId) { CommentComposerViewModel(input = input) }
+    CommentComposerScreen(
+        viewModel = composerViewModel,
+        avatarIcon = conversationViewModel.avatarIconFor(conversationState.currentUserAvatarUrl),
+        modifier = Modifier.padding(bottom = ACTIVITY_COMPOSER_GAP),
+        showsDottedBorder = true
+    )
+}
+
+/** The part of the card below the composer: a loading or error message, or the notices and the timeline. */
+@Composable
+private fun ActivityBody(
+    state: PullRequestHistoryUiState,
+    historyViewModel: PullRequestHistoryViewModel,
+    conversationViewModel: PullRequestConversationViewModel
+) {
+    when (state.loadState) {
+        PullRequestHistoryLoadState.Loading -> ActivityMessage(BbCloudBundle.message("main.branch.history.loading"))
+        PullRequestHistoryLoadState.Error -> ActivityMessage(BbCloudBundle.message("main.branch.history.error"))
+        PullRequestHistoryLoadState.Loaded -> ActivityTimeline(
+            state = state,
+            historyViewModel = historyViewModel,
+            conversationViewModel = conversationViewModel
+        )
     }
 }
 
 @Composable
+private fun ActivityTimeline(
+    state: PullRequestHistoryUiState,
+    historyViewModel: PullRequestHistoryViewModel,
+    conversationViewModel: PullRequestConversationViewModel
+) {
+    if (state.showPartialFailure) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(bottom = 8.dp)
+        ) {
+            Icon(key = AllIconsKeys.General.BalloonWarning, contentDescription = null)
+            Text(
+                text = BbCloudBundle.message("main.branch.history.partialFailure"),
+                color = JewelTheme.globalColors.text.info
+            )
+        }
+    }
+    state.groups.forEachIndexed { groupIndex, group ->
+        Text(
+            text = historyDayHeaderText(group.day),
+            fontWeight = FontWeight.Bold,
+            color = JewelTheme.globalColors.text.info,
+            modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)
+        )
+        val isLastGroup = groupIndex == state.groups.lastIndex
+        activityRows(group = group, isLastGroup = isLastGroup).forEach { row ->
+            when (row) {
+                is ActivityRow.Activity -> HistoryEntryRow(
+                    entry = row.entry,
+                    isLast = row.isLast,
+                    avatarRevision = state.avatarRevision,
+                    viewModel = historyViewModel
+                )
+                // The key keeps an open reply or edit composer alive when a refresh inserts rows above it.
+                is ActivityRow.Thread -> key(row.thread.root.id) {
+                    HistoryThreadRow(
+                        thread = row.thread,
+                        isLast = row.isLast,
+                        host = conversationViewModel
+                    )
+                }
+            }
+        }
+    }
+    if (state.showTruncation) {
+        Text(
+            text = BbCloudBundle.message("main.branch.history.truncated"),
+            color = JewelTheme.globalColors.text.info
+        )
+    }
+}
+
+@Composable
+private fun ActivityMessage(text: String) {
+    Text(text = text, color = JewelTheme.globalColors.text.info)
+}
+
+@Composable
 private fun HistoryEntryRow(entry: ActivityFeedEntry, isLast: Boolean, avatarRevision: Int, viewModel: PullRequestHistoryViewModel) {
+    HistoryTimelineRow(
+        isLast = isLast,
+        icon = activityEntryIcon(entry),
+        iconTint = activityEntryIconTint(entry) ?: Color.Unspecified
+    ) {
+        if (entry !is TimelineEntry.BuildUpdated) {
+            val avatarUrl = entry.actor?.avatarUrl
+            val bitmap = remember(avatarUrl, avatarRevision) {
+                viewModel.avatarIconFor(avatarUrl).toComposeImageBitmap()
+            }
+            Image(
+                bitmap = bitmap,
+                contentDescription = "Author avatar",
+                modifier = Modifier.size(HISTORY_AVATAR_SIZE),
+                filterQuality = FilterQuality.High
+            )
+        }
+        Column(modifier = Modifier.padding(start = 8.dp)) {
+            HistoryHeadline(entry = entry, viewModel = viewModel)
+            HistoryBody(entry = entry, viewModel = viewModel)
+        }
+    }
+}
+
+/** A comment thread as a timeline row: the same gutter as the activity entries, with the thread card as its content. */
+@Composable
+private fun HistoryThreadRow(thread: TimelineEntry.CommentThread, isLast: Boolean, host: CommentThreadCardHost) {
+    HistoryTimelineRow(
+        isLast = isLast,
+        icon = AllIconsKeys.General.Balloon,
+        iconTint = Color.Unspecified
+    ) {
+        // The thread card shows the author avatar, name, time and location itself, so no headline is drawn here.
+        PullRequestCommentThreadCard(
+            thread = thread,
+            host = host,
+            modifier = Modifier.weight(1f)
+        )
+    }
+}
+
+/**
+ * One row of the timeline: the gutter with the entry icon, then the [content] beside it. Activity entries and comment
+ * threads share this layout, so their gutters line up.
+ */
+@Composable
+private fun HistoryTimelineRow(isLast: Boolean, icon: IconKey, iconTint: Color, content: @Composable RowScope.() -> Unit) {
     val gutterLineColor = JewelTheme.globalColors.borders.normal
     val gutterCircleColor = JewelTheme.globalColors.panelBackground
     Row(
@@ -142,9 +253,9 @@ private fun HistoryEntryRow(entry: ActivityFeedEntry, isLast: Boolean, avatarRev
             contentAlignment = Alignment.TopCenter
         ) {
             Icon(
-                key = activityEntryIcon(entry),
+                key = icon,
                 contentDescription = null,
-                tint = activityEntryIconTint(entry) ?: Color.Unspecified,
+                tint = iconTint,
                 modifier = Modifier
                     .padding(top = (HISTORY_GUTTER_DIAMETER - HISTORY_GUTTER_ICON_SIZE) / 2)
                     .size(HISTORY_GUTTER_ICON_SIZE)
@@ -154,25 +265,9 @@ private fun HistoryEntryRow(entry: ActivityFeedEntry, isLast: Boolean, avatarRev
             modifier = Modifier
                 .weight(1f)
                 .padding(start = 8.dp),
-            verticalAlignment = Alignment.Top
-        ) {
-            if (entry !is TimelineEntry.BuildUpdated) {
-                val avatarUrl = entry.actor?.avatarUrl
-                val bitmap = remember(avatarUrl, avatarRevision) {
-                    viewModel.avatarIconFor(avatarUrl).toComposeImageBitmap()
-                }
-                Image(
-                    bitmap = bitmap,
-                    contentDescription = "Author avatar",
-                    modifier = Modifier.size(HISTORY_AVATAR_SIZE),
-                    filterQuality = FilterQuality.High
-                )
-            }
-            Column(modifier = Modifier.padding(start = 8.dp)) {
-                HistoryHeadline(entry = entry, viewModel = viewModel)
-                HistoryBody(entry = entry, viewModel = viewModel)
-            }
-        }
+            verticalAlignment = Alignment.Top,
+            content = content
+        )
     }
 }
 

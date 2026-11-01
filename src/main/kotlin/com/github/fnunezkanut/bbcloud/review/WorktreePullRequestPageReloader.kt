@@ -10,7 +10,7 @@ import com.intellij.openapi.project.Project
  * The single entry point for reloading the whole pull request page of a work tree, callable from any editor tab.
  *
  * The `<prNum>.pr` editor session owns the rich panel reload (it re-fetches Bitbucket, rebinds the detail panel, and
- * preserves the selected tab), so when that editor is open the reloader simply delegates to the session's handler. The
+ * refreshes the in-place page), so when that editor is open the reloader simply delegates to the session's handler. The
  * worktree banner shows on every editor, though, including ones opened before the `.pr` editor was ever visited, so a
  * reload also has to work when no session handler is registered. In that case the reloader falls back to reloading the
  * [BbCloudWorktreePullRequestContext], which re-fetches the pull request and refreshes the editor notifications so the
@@ -26,16 +26,16 @@ class WorktreePullRequestPageReloader(private val project: Project) {
      * manages the detail panel's own refresh-enabled state, so the handler is self-contained.
      */
     @Volatile
-    private var sessionReloadHandler: (() -> Unit)? = null
+    private var sessionReloadHandler: ((revealNewestActivity: Boolean) -> Unit)? = null
 
     /** Registers the session's full-panel reload handler; the matching [unregisterSessionReloadHandler] clears it. */
-    fun registerSessionReloadHandler(handler: () -> Unit) {
+    fun registerSessionReloadHandler(handler: (revealNewestActivity: Boolean) -> Unit) {
         sessionReloadHandler = handler
         LOG.debug("Registered the pull request page reload handler of the editor session")
     }
 
     /** Clears the session's reload handler, leaving the context-only fallback for later reloads. */
-    fun unregisterSessionReloadHandler(handler: () -> Unit) {
+    fun unregisterSessionReloadHandler(handler: (revealNewestActivity: Boolean) -> Unit) {
         if (sessionReloadHandler === handler) {
             sessionReloadHandler = null
             LOG.debug("Unregistered the pull request page reload handler of the editor session")
@@ -45,12 +45,15 @@ class WorktreePullRequestPageReloader(private val project: Project) {
     /**
      * Reloads the pull request page. Delegates to the session handler when the `.pr` editor is open; otherwise reloads
      * the work tree context so the banner refreshes without requiring an open detail panel.
+     *
+     * [revealNewestActivity] asks the session to scroll its left pane to the newest activity after the reload; the
+     * context-only fallback ignores it, because there is no detail panel to scroll.
      */
-    fun requestReload() {
+    fun requestReload(revealNewestActivity: Boolean = false) {
         val handler = sessionReloadHandler
         if (handler != null) {
             LOG.info("Reloading the pull request page through the editor session")
-            handler()
+            handler(revealNewestActivity)
             return
         }
         reloadContextOnly()

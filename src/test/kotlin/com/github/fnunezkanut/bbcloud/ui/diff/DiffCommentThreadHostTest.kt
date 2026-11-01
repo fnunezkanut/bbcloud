@@ -377,15 +377,15 @@ class DiffCommentThreadHostTest {
         }
 
         @Test
-        fun `hideHostEditorData - should not hide or inject the paste provider`() {
+        fun `hideHostEditorData - should hide the paste provider so the host editor does not receive paste`() {
             // GIVEN a relaxed data sink
             val sink = mockk<DataSink>(relaxed = true)
 
             // WHEN the host editor data is hidden
             hideHostEditorData(sink = sink)
 
-            // THEN no call touches the paste provider, which the Jewel wrapper inside the host supplies
-            verify(exactly = 0) { sink.setNull(PlatformDataKeys.PASTE_PROVIDER) }
+            // THEN the paste provider is explicitly null, so the keystroke reaches the Compose text field instead of the editor
+            verify(exactly = 1) { sink.setNull(PlatformDataKeys.PASTE_PROVIDER) }
             verify(exactly = 0) { sink.set(PlatformDataKeys.PASTE_PROVIDER, any()) }
         }
 
@@ -397,13 +397,14 @@ class DiffCommentThreadHostTest {
             // WHEN the host editor data is hidden
             hideHostEditorData(sink = sink)
 
-            // THEN every recorded call is one of the seven explicit setNull calls
+            // THEN every recorded call is one of the eight explicit setNull calls
             verify(exactly = 1) { sink.setNull(CommonDataKeys.EDITOR) }
             verify(exactly = 1) { sink.setNull(CommonDataKeys.HOST_EDITOR) }
             verify(exactly = 1) { sink.setNull(CommonDataKeys.CARET) }
             verify(exactly = 1) { sink.setNull(CommonDataKeys.EDITOR_VIRTUAL_SPACE) }
             verify(exactly = 1) { sink.setNull(PlatformDataKeys.COPY_PROVIDER) }
             verify(exactly = 1) { sink.setNull(PlatformDataKeys.CUT_PROVIDER) }
+            verify(exactly = 1) { sink.setNull(PlatformDataKeys.PASTE_PROVIDER) }
             verify(exactly = 1) { sink.setNull(PlatformDataKeys.DELETE_ELEMENT_PROVIDER) }
             confirmVerified(sink)
         }

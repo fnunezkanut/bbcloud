@@ -15,8 +15,10 @@ import com.github.fnunezkanut.bbcloud.review.BbCloudWorktreePullRequestContext
 import com.github.fnunezkanut.bbcloud.review.PullRequestThreadFingerprint
 import com.github.fnunezkanut.bbcloud.review.PullRequestViewedThreadKey
 import com.github.fnunezkanut.bbcloud.ui.main.AuthorAvatarCache
+import com.github.fnunezkanut.bbcloud.ui.main.CommentComposerViewModel
 import com.github.fnunezkanut.bbcloud.ui.main.CommentInput
 import com.github.fnunezkanut.bbcloud.ui.main.CommentThreadCardHost
+import com.github.fnunezkanut.bbcloud.ui.main.ComposerDraftCache
 import com.github.fnunezkanut.bbcloud.ui.main.ConversationComposerKind
 import com.github.fnunezkanut.bbcloud.ui.main.ConversationComposerTarget
 import com.github.fnunezkanut.bbcloud.ui.main.PullRequestCommentFileOpener
@@ -38,6 +40,18 @@ internal class EditorCommentThreadController(
     private val avatarCache: AuthorAvatarCache = AuthorAvatarCache(avatarSize = 16)
 ) : CommentThreadCardHost {
     private val viewedThreads = BbCloudPullRequestViewedThreads.getInstance()
+
+    /**
+     * Keeps the composer drafts (one per `(target, scope)` where scope is the host editor) and the focus-restore
+     * request alive across inlay rebuilds. Accessed only on the EDT, like all composer state here.
+     */
+    private val draftCache = ComposerDraftCache { target, comment ->
+        val input = when (target.kind) {
+            ConversationComposerKind.Reply -> replyInput(commentId = target.commentId)
+            ConversationComposerKind.Edit -> editInput(comment = comment)
+        }
+        CommentComposerViewModel(input = input, startsExpanded = true)
+    }
 
     override var openComposer: ConversationComposerTarget? by mutableStateOf(null)
         private set
@@ -103,16 +117,45 @@ internal class EditorCommentThreadController(
 
     override fun openReply(commentId: Long) {
         LOG.info("User opened reply for comment $commentId in pull request #$pullRequestIdValue")
-        openComposer = ConversationComposerTarget(commentId = commentId, kind = ConversationComposerKind.Reply)
+        switchComposerTarget(target = ConversationComposerTarget(commentId = commentId, kind = ConversationComposerKind.Reply))
     }
 
     override fun openEdit(commentId: Long) {
         LOG.info("User opened edit for comment $commentId in pull request #$pullRequestIdValue")
-        openComposer = ConversationComposerTarget(commentId = commentId, kind = ConversationComposerKind.Edit)
+        switchComposerTarget(target = ConversationComposerTarget(commentId = commentId, kind = ConversationComposerKind.Edit))
+    }
+
+    /** Only one composer is open per controller, so moving to another target drops the drafts of the previous one. */
+    private fun switchComposerTarget(target: ConversationComposerTarget) {
+        if (openComposer != target) {
+            draftCache.clear()
+        }
+        openComposer = target
     }
 
     override fun closeComposer() {
         openComposer = null
+        draftCache.clear()
+        draftCache.clearFocusRestore()
+    }
+
+    override fun composerViewModel(target: ConversationComposerTarget, comment: PullRequestComment, scope: Any): CommentComposerViewModel {
+        return draftCache.composerViewModel(target = target, comment = comment, scope = scope)
+    }
+
+    /** Drops the cached drafts whose surface scope is [scope]; called when an editor that showed the card is released. */
+    fun forgetScope(scope: Any) {
+        draftCache.forgetScope(scope = scope)
+    }
+
+    /** Records that the composer of [commentId] in [editor] should take keyboard focus after the next inlay rebuild. */
+    fun markFocusRestore(editor: Any, commentId: Long) {
+        draftCache.markFocusRestore(editor = editor, commentId = commentId)
+    }
+
+    /** Consumes a pending focus-restore request for [editor] and [threadCommentIds]; see [ComposerDraftCache]. */
+    fun consumeFocusRestore(editor: Any, threadCommentIds: Set<Long>): Boolean {
+        return draftCache.consumeFocusRestore(editor = editor, threadCommentIds = threadCommentIds, openCommentId = openComposer?.commentId)
     }
 
     override fun applyCommentChange(change: CommentChange, onResult: (Boolean) -> Unit) {

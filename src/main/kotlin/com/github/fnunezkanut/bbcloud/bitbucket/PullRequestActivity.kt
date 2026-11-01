@@ -102,11 +102,11 @@ sealed interface TimelineEntry {
     }
 }
 
-/** Sealed sub-interface for entries that belong to the activity feed (Overview tab). [CommentThread] does not implement this. */
+/** Sealed sub-interface for entries that belong to the activity feed (the Activity timeline). [CommentThread] does not implement this. */
 sealed interface ActivityFeedEntry : TimelineEntry
 
 /**
- * Comment threads for the Conversation tab.
+ * Comment threads for the Activity timeline of the pull-request page.
  * Threads are sorted newest first.
  * [mentions] maps a normalized account UUID to the display name shown for `@{uuid}` mentions; unresolved UUIDs map to
  * the localized unknown-user label.
@@ -120,7 +120,7 @@ data class PullRequestConversation(
 )
 
 /**
- * Non-comment activity entries for the Overview tab.
+ * Non-comment activity entries for the Activity timeline of the pull-request page.
  * Entries are sorted newest first.
  * [isTruncated] is true when activity or commits listing stopped at the page limit.
  * [hasPartialFailure] is true when commits, tasks, builds, or activity could not be loaded.

@@ -22,7 +22,6 @@ import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestActionResult
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestComment
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestDeclineDecision
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestDetails
-import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestFileCommentCounts
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestInlineCommentIndex
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestNotOpenCheck
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestReviewer
@@ -37,14 +36,12 @@ import com.github.fnunezkanut.bbcloud.config.BbCloudConfigurationService
 import com.github.fnunezkanut.bbcloud.git.BbCloudBranchCheckoutService
 import com.github.fnunezkanut.bbcloud.git.BbCloudPrBranchUpdateService
 import com.github.fnunezkanut.bbcloud.git.BbCloudPullRequestBranchDiffService
-import com.github.fnunezkanut.bbcloud.git.BranchDiffResult
 import com.github.fnunezkanut.bbcloud.git.LocalBehindRemoteDecision
 import com.github.fnunezkanut.bbcloud.git.PrBranchUpdateResult
 import com.github.fnunezkanut.bbcloud.git.WorktreeHead
 import com.github.fnunezkanut.bbcloud.project.PullRequestWorktreeMatch
 import com.github.fnunezkanut.bbcloud.review.BbCloudPullRequestReviewState
 import com.github.fnunezkanut.bbcloud.review.BbCloudWorktreePullRequestContext
-import com.github.fnunezkanut.bbcloud.review.PullRequestChangedFilePaths
 import com.github.fnunezkanut.bbcloud.review.WorktreePullRequestPageReloader
 import com.github.fnunezkanut.bbcloud.review.WorktreeTodoBannerViewModel
 import com.github.fnunezkanut.bbcloud.ui.diff.BbCloudPullRequestDiffCommentService
@@ -52,7 +49,6 @@ import com.github.fnunezkanut.bbcloud.ui.main.CheckedOutBranchPanel
 import com.github.fnunezkanut.bbcloud.ui.main.CommentEditor
 import com.github.fnunezkanut.bbcloud.ui.main.DescriptionEditor
 import com.github.fnunezkanut.bbcloud.ui.main.PullRequestActionVisibility
-import com.github.fnunezkanut.bbcloud.ui.main.PullRequestDetailTab
 import com.github.fnunezkanut.bbcloud.ui.main.ReviewerEditor
 import com.github.fnunezkanut.bbcloud.ui.main.TaskEditor
 import com.github.fnunezkanut.bbcloud.ui.pullrequest.decline.BbCloudDeclineReasonDialog
@@ -66,6 +62,7 @@ import com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.BbCloudPullRequestEd
 import com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.BbCloudPullRequestEditorRestorationRequest
 import com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.BbCloudPullRequestReviewBarRefresh
 import com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.BbCloudPullRequestVirtualFile
+import com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.WorktreePullRequestChangedFilesToolWindowOpener
 import com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.selectedVirtualFile
 import com.intellij.ide.BrowserUtil
 import com.intellij.notification.NotificationGroupManager
@@ -85,7 +82,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -138,8 +134,6 @@ class BbCloudPullRequestEditorSession(
     private var isTaskUpdateInProgress = false
     private var isCommentUpdateInProgress = false
     private var isDescriptionUpdateInProgress = false
-    private var loadedFilesChangedKey: String? = null
-    private var filesChangedLoadInProgress = false
     private var loadedInlineCommentsPullRequestId: Long? = null
     private var loadedInlineComments: List<PullRequestComment>? = null
     private var inlineCommentIndex: PullRequestInlineCommentIndex? = null
@@ -205,14 +199,6 @@ class BbCloudPullRequestEditorSession(
                 submitDescriptionUpdate(content = content, onResult = onResult)
             }
         },
-        onChangesTabSelected = {
-            loadPullRequestFilesChanged(force = false)
-            loadPullRequestInlineComments(force = false)
-        },
-        onFilesChangedRefreshRequested = {
-            loadPullRequestFilesChanged(force = true)
-            loadPullRequestInlineComments(force = true)
-        },
         onUpdateLocalBranchRequested = { updateLocalBranch() }
     )
 
@@ -225,7 +211,15 @@ class BbCloudPullRequestEditorSession(
      * refresh button drives the same full-panel reload as the editor header did. Held as a field so dispose can
      * unregister exactly this handler.
      */
-    private val reloadHandler: () -> Unit = { reloadPullRequestPage() }
+    private val reloadHandler: (revealNewestActivity: Boolean) -> Unit = { revealNewestActivity ->
+        reloadPullRequestPage(revealNewestActivity = revealNewestActivity)
+    }
+
+    /**
+     * Carries the "reveal the newest activity" flag of a reload that was skipped because [isReloadInProgress] was
+     * already true, so the running reload applies it. Reset once consumed.
+     */
+    private var pendingRevealNewestActivity = false
 
     init {
         Disposer.register(parentDisposable, sessionDisposable)
@@ -337,7 +331,7 @@ class BbCloudPullRequestEditorSession(
         }
     }
 
-    private fun bind(summary: PullRequestSummary, resetSelectedTab: Boolean = true, inPlaceRefresh: Boolean = false) {
+    private fun bind(summary: PullRequestSummary, inPlaceRefresh: Boolean = false, revealNewestActivity: Boolean = false) {
         val previousPullRequestId = displayedPullRequestId
         displayedSummary = summary
         displayedPullRequestId = summary.id
@@ -356,19 +350,51 @@ class BbCloudPullRequestEditorSession(
             workspace = BitbucketRepositoryUrls.workspaceFromOrganizationUrl(file.pullRequestPath.workspaceUrl).orEmpty(),
             repositorySlug = file.pullRequestPath.repositorySlug,
             repositoryAvatarUrl = configurationService.repoAvatarUrlsForCurrentWorkspace()[file.pullRequestPath.repositorySlug],
-            coroutineScope = coroutineScope,
-            resetSelectedTab = resetSelectedTab
+            coroutineScope = coroutineScope
         )
-        loadPullRequestCounts(summary.id)
         loadPullRequestLineTotals(summary)
-        loadPullRequestOverview(summary = summary, inPlaceRefresh = inPlaceRefresh)
+        loadPullRequestOverview(summary = summary, inPlaceRefresh = inPlaceRefresh, revealNewestActivity = revealNewestActivity)
         loadPullRequestInlineComments(force = true)
         loadPullRequestDetails(pullRequestId = summary.id, refresh = DetailsRefresh.Initial)
         startStatefulPoller()
         refreshLocalBehindRemote()
+        // Open the PR Changes tool window on the left as if "Show Changes" had been clicked, but only when the page
+        // first shows a PR (not on an in-place reload of the same PR), so a refresh does not re-activate the tool
+        // window under the user. The opener no-ops safely when the project is disposed or the tool window is not
+        // available (for example not a worktree).
+        if (!inPlaceRefresh && previousPullRequestId != summary.id) {
+            autoOpenChangedFiles(summary)
+        }
     }
 
-    private fun reloadPullRequestPage() {
+    /**
+     * Shows and activates the plugin's PR Changes tool window for [summary]'s three-dot branch diff, mirroring the
+     * worktree banner's "Show Changes" button. Dispatched on the EDT because the opener is [RequiresEdt]; it exits
+     * quietly when the branch names are missing or the tool window is unavailable.
+     */
+    private fun autoOpenChangedFiles(summary: PullRequestSummary) {
+        val destinationBranch = summary.destinationBranch
+        val sourceBranch = summary.sourceBranch
+        if (destinationBranch.isBlank() || sourceBranch.isBlank()) {
+            LOG.info("Not auto-opening changed files for pull request #${summary.id}: branch names are not resolved")
+            return
+        }
+        LOG.info("Auto-opening the changed files tool window for pull request #${summary.id}")
+        invokeOnEdt {
+            if (summary.id != displayedPullRequestId) {
+                LOG.debug("Skipping auto-open of changed files for #${summary.id}; this editor now shows #$displayedPullRequestId")
+                return@invokeOnEdt
+            }
+            WorktreePullRequestChangedFilesToolWindowOpener.open(
+                project = project,
+                pullRequestId = summary.id,
+                destinationBranch = destinationBranch,
+                sourceBranch = sourceBranch
+            )
+        }
+    }
+
+    private fun reloadPullRequestPage(revealNewestActivity: Boolean = false) {
         val pullRequestId = displayedPullRequestId ?: boundPullRequestId
         if (disposed) {
             LOG.debug("Skipping pull request page reload for #$pullRequestId; editor is disposed")
@@ -379,6 +405,8 @@ class BbCloudPullRequestEditorSession(
             return
         }
         if (isReloadInProgress) {
+            // Remember the reveal so the running reload applies it, instead of losing it to the overlap.
+            pendingRevealNewestActivity = pendingRevealNewestActivity || revealNewestActivity
             LOG.debug("Skipping pull request page reload for #$pullRequestId; reload is already in progress")
             return
         }
@@ -388,9 +416,8 @@ class BbCloudPullRequestEditorSession(
             LOG.info("Cannot reload pull request page for #$pullRequestId: project base path or organization URL is unavailable")
             return
         }
-        val tabBeforeReload = checkedOutBranchPanel.selectedTab()
         LOG.info("Reloading pull request page for #$pullRequestId")
-        LOG.debug("Preserving the $tabBeforeReload tab while reloading pull request #$pullRequestId")
+        LOG.debug("Reloading pull request #$pullRequestId in place")
         isReloadInProgress = true
         setReloadRefreshEnabled(false)
         resetReloadableState()
@@ -427,14 +454,10 @@ class BbCloudPullRequestEditorSession(
                 repositoryWebUrl = summary.webUrl
                 branchName = summary.sourceBranch
                 organizationUrl = url
-                bind(
-                    summary = summary,
-                    resetSelectedTab = false,
-                    inPlaceRefresh = tabBeforeReload == PullRequestDetailTab.Conversation
-                )
-                if (tabBeforeReload == PullRequestDetailTab.Changes) {
-                    loadPullRequestFilesChanged(force = true)
-                }
+                // Apply the reveal asked for by this reload, plus any reveal remembered from a reload that overlapped it.
+                val revealActivity = revealNewestActivity || pendingRevealNewestActivity
+                pendingRevealNewestActivity = false
+                bind(summary = summary, inPlaceRefresh = true, revealNewestActivity = revealActivity)
                 refreshWorkTreePullRequestContext(pullRequestId = summary.id)
             }
         }
@@ -452,11 +475,9 @@ class BbCloudPullRequestEditorSession(
     }
 
     private fun resetReloadableState() {
-        loadedFilesChangedKey = null
         loadedInlineCommentsPullRequestId = null
         loadedInlineComments = null
         inlineCommentIndex = null
-        filesChangedLoadInProgress = false
     }
 
     private fun buildTakeoverComponent(webUrl: String): JComponent {
@@ -647,26 +668,7 @@ class BbCloudPullRequestEditorSession(
         BackgroundPoll
     }
 
-    private fun loadPullRequestCounts(pullRequestId: Long) {
-        val basePath = project.basePath ?: return
-        val url = organizationUrl ?: configurationService.organizationUrlOrNull() ?: return
-        coroutineScope.launch {
-            val counts = openPullRequestService.pullRequestCounts(
-                projectBasePath = basePath,
-                organizationUrl = url,
-                pullRequestId = pullRequestId
-            )
-            invokeOnEdt {
-                if (pullRequestId != displayedPullRequestId) {
-                    LOG.debug("Ignoring counts for pull request #$pullRequestId; this editor shows #$displayedPullRequestId")
-                    return@invokeOnEdt
-                }
-                checkedOutBranchPanel.showCounts(counts)
-            }
-        }
-    }
-
-    private fun loadPullRequestOverview(summary: PullRequestSummary, inPlaceRefresh: Boolean = false) {
+    private fun loadPullRequestOverview(summary: PullRequestSummary, inPlaceRefresh: Boolean = false, revealNewestActivity: Boolean = false) {
         val basePath = project.basePath ?: return
         val url = organizationUrl ?: configurationService.organizationUrlOrNull() ?: return
         coroutineScope.launch {
@@ -685,7 +687,8 @@ class BbCloudPullRequestEditorSession(
                     overview = overview,
                     destinationBranch = summary.destinationBranch,
                     coroutineScope = coroutineScope,
-                    inPlaceRefresh = inPlaceRefresh
+                    inPlaceRefresh = inPlaceRefresh,
+                    revealNewestActivity = revealNewestActivity
                 )
             }
         }
@@ -702,7 +705,6 @@ class BbCloudPullRequestEditorSession(
             }
             PullRequestFileCommentCountsLoadState.Request.AlreadyLoaded -> {
                 LOG.debug("Skipping inline comment reload; already loaded for pull request #$pullRequestId")
-                pushFileCommentCountsForCurrentComments()
                 return
             }
             PullRequestFileCommentCountsLoadState.Request.Started -> {
@@ -752,28 +754,10 @@ class BbCloudPullRequestEditorSession(
                 if (reviewState.updateInlineComments(pullRequestId = pullRequestId, index = index)) {
                     BbCloudPullRequestDiffCommentService.getInstance(project).refreshOpenEditors()
                 }
-                applyFileCommentCounts(pullRequestId = pullRequestId, counts = completion.counts)
                 if (completion.shouldReload) {
                     loadPullRequestInlineComments(force = true)
                 }
             }
-        }
-    }
-
-    private fun applyFileCommentCounts(pullRequestId: Long, counts: PullRequestFileCommentCounts?) {
-        if (pullRequestId != displayedPullRequestId) {
-            LOG.debug("Ignoring comment counts for pull request #$pullRequestId; this editor shows #$displayedPullRequestId")
-            return
-        }
-        checkedOutBranchPanel.setFilesChangedCommentCounts(counts)
-    }
-
-    private fun pushFileCommentCountsForCurrentComments() {
-        val pullRequestId = displayedPullRequestId ?: return
-        val counts = fileCommentCountsLoadState.filesChangedCompleted(pullRequestId) ?: return
-        LOG.debug("Computed comment counts for ${counts.pathsWithComments().size} files for pull request #$pullRequestId")
-        invokeOnEdt {
-            applyFileCommentCounts(pullRequestId = pullRequestId, counts = counts)
         }
     }
 
@@ -898,85 +882,6 @@ class BbCloudPullRequestEditorSession(
         }
     }
 
-    private fun loadPullRequestFilesChanged(force: Boolean) {
-        val summary = displayedSummary ?: return
-        val cacheKey = filesChangedCacheKey(summary)
-        if (!force && cacheKey == loadedFilesChangedKey) {
-            return
-        }
-        if (filesChangedLoadInProgress && !force) {
-            return
-        }
-        filesChangedLoadInProgress = true
-        checkedOutBranchPanel.showFilesChangedLoading()
-        coroutineScope.launch {
-            val result = withContext(Dispatchers.IO) {
-                // Load the diff and the per-file line counts in parallel: both resolve the same branches, but the
-                // numstat is independent of the diff, so the tree does not wait on two sequential Git commands.
-                val changesDeferred = async {
-                    branchDiffService.loadPullRequestChanges(
-                        project = project,
-                        destinationBranch = summary.destinationBranch,
-                        sourceBranch = summary.sourceBranch
-                    )
-                }
-                val lineCountsDeferred = async {
-                    branchDiffService.loadPullRequestFileLineCounts(
-                        project = project,
-                        destinationBranch = summary.destinationBranch,
-                        sourceBranch = summary.sourceBranch
-                    )
-                }
-                val diffResult = changesDeferred.await()
-                val lineCounts = lineCountsDeferred.await()
-                // Attach the per-file line counts only to a successful diff. A numstat failure returns an empty map,
-                // so the tree renders without line badges rather than surfacing a card-level error.
-                if (diffResult is BranchDiffResult.Success) {
-                    diffResult.copy(fileLineCounts = lineCounts)
-                } else {
-                    diffResult
-                }
-            }
-            invokeOnEdt {
-                filesChangedLoadInProgress = false
-                if (summary.id != displayedPullRequestId) {
-                    LOG.debug("Ignoring file changes for pull request #${summary.id}; this editor shows #$displayedPullRequestId")
-                    return@invokeOnEdt
-                }
-                if (result is BranchDiffResult.Success) {
-                    loadedFilesChangedKey = cacheKey
-                } else {
-                    loadedFilesChangedKey = null
-                }
-                checkedOutBranchPanel.showFilesChangedResult(result)
-                pushFileCommentCountsForCurrentComments()
-                recordChangedFilePaths(summary = summary, result = result)
-            }
-        }
-    }
-
-    /**
-     * Records the files the pull request changes so the editor review bar knows which files it belongs to.
-     *
-     * The review bar is absent until the changed files are known, because the bar only shows in the files the pull
-     * request touches.
-     */
-    private fun recordChangedFilePaths(summary: PullRequestSummary, result: BranchDiffResult) {
-        if (result !is BranchDiffResult.Success) {
-            return
-        }
-        val projectBasePath = project.basePath
-        val paths = PullRequestChangedFilePaths.from(projectBasePath = projectBasePath, changes = result.changes)
-        val reviewState = BbCloudPullRequestReviewState.getInstance(project)
-        if (!reviewState.updateChangedFilePaths(pullRequestId = summary.id, paths = paths)) {
-            LOG.debug("Ignoring the changed files of pull request #${summary.id}; this editor shows #$displayedPullRequestId")
-            return
-        }
-        LOG.debug("Recorded ${paths.size} changed file(s) of pull request #${summary.id}")
-        EditorNotifications.getInstance(project).updateAllNotifications()
-        refreshWorkTreePullRequestContext(pullRequestId = summary.id)
-    }
-
     /**
      * Resolves the work tree pull request context again after the editor reloaded the pull request.
      *
@@ -994,10 +899,6 @@ class BbCloudPullRequestEditorSession(
             return
         }
         context.reload(reason = "pull request editor refreshed")
-    }
-
-    private fun filesChangedCacheKey(summary: PullRequestSummary): String {
-        return "${summary.id}:${summary.destinationBranch}:${summary.sourceBranch}"
     }
 
     private fun loadPullRequestDetails(pullRequestId: Long, refresh: DetailsRefresh): Boolean {

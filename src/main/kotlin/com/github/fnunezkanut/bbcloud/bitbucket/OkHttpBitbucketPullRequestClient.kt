@@ -1,5 +1,6 @@
 package com.github.fnunezkanut.bbcloud.bitbucket
 
+import com.github.fnunezkanut.bbcloud.auth.BbCloudBearerRetryAuthenticator
 import com.intellij.openapi.diagnostic.logger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -7,7 +8,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import java.io.IOException
+import okhttp3.Response
 import java.util.concurrent.TimeUnit
 
 class OkHttpBitbucketPullRequestClient(private val httpClient: OkHttpClient = sharedHttpClient) : BitbucketPullRequestClient {
@@ -429,6 +430,10 @@ class OkHttpBitbucketPullRequestClient(private val httpClient: OkHttpClient = sh
     }
 
     private fun executeCreate(request: Request): CreatePullRequestResult {
+        if (!BitbucketApiUrlPolicy.isTrustedApiUrl(request.url.toString())) {
+            LOG.warn("Refusing to send the API token to an untrusted URL (${BitbucketApiUrlPolicy.describeRejected(request.url.toString())})")
+            return CreatePullRequestResult.Failed(message = null)
+        }
         val description = "${request.method} ${request.url}"
         LOG.debug(description)
         val startNanos = System.nanoTime()
@@ -708,6 +713,10 @@ class OkHttpBitbucketPullRequestClient(private val httpClient: OkHttpClient = sh
     }
 
     private fun executeAction(request: Request): PullRequestActionResult {
+        if (!BitbucketApiUrlPolicy.isTrustedApiUrl(request.url.toString())) {
+            LOG.warn("Refusing to send the API token to an untrusted URL (${BitbucketApiUrlPolicy.describeRejected(request.url.toString())})")
+            return PullRequestActionResult.Failed(message = null)
+        }
         val description = "${request.method} ${request.url}"
         LOG.debug(description)
         val startNanos = System.nanoTime()
@@ -731,89 +740,54 @@ class OkHttpBitbucketPullRequestClient(private val httpClient: OkHttpClient = sh
     }
 
     private fun fetchBody(url: String, apiToken: String): String? {
-        val request = buildGetRequest(url = url, apiToken = apiToken)
-        LOG.debug("GET $url")
-        val startNanos = System.nanoTime()
-        return try {
-            httpClient.newCall(request).execute().use { response ->
-                LOG.debug("GET $url -> ${response.code} in ${elapsedMillis(startNanos = startNanos)} ms")
-                if (!response.isSuccessful) {
-                    LOG.warn("Unexpected HTTP status ${response.code} for GET $url${BitbucketHttpErrors.describe(response)}")
-                    return null
-                }
-                response.body.string().takeIf { it.isNotBlank() }
-            }
-        } catch (exception: Exception) {
-            LOG.debug("GET $url failed after ${elapsedMillis(startNanos = startNanos)} ms", exception)
-            null
-        }
+        return fetchParsed(url = url, apiToken = apiToken, emptyValue = null) { body -> body }
     }
 
     private fun fetchReviewerQueue(url: String, apiToken: String): ReviewerQueueQueryResult {
-        val request = buildGetRequest(url = url, apiToken = apiToken)
-        LOG.debug("GET $url")
-        val startNanos = System.nanoTime()
-        return try {
-            httpClient.newCall(request).execute().use { response ->
-                LOG.debug("GET $url -> ${response.code} in ${elapsedMillis(startNanos = startNanos)} ms")
-                when (response.code) {
-                    in 200..299 -> {
-                        val body = response.body.string()
-                        if (body.isBlank()) {
-                            LOG.debug("GET $url returned an empty body")
-                            return ReviewerQueueQueryResult.Listed(emptyList())
-                        }
-                        val pullRequests = runCatching { BitbucketPullRequestResponseParser.parsePullRequests(body) }
-                            .onFailure { exception -> LOG.debug("Could not parse the review queue of $url", exception) }
-                            .getOrNull()
-                        if (pullRequests == null) {
-                            return ReviewerQueueQueryResult.Failed()
-                        }
-                        LOG.debug("Parsed ${pullRequests.size} reviewing pull requests for $url")
-                        ReviewerQueueQueryResult.Listed(pullRequests)
+        return executeGet(
+            url = url,
+            apiToken = apiToken,
+            onFailure = { exception -> ReviewerQueueQueryResult.Failed(exception) }
+        ) { response ->
+            when (response.code) {
+                in 200..299 -> {
+                    val body = response.body.string()
+                    if (body.isBlank()) {
+                        LOG.debug("GET $url returned an empty body")
+                        return@executeGet ReviewerQueueQueryResult.Listed(emptyList())
                     }
-                    401 -> {
-                        LOG.warn("Unexpected HTTP status 401 for GET $url${BitbucketHttpErrors.describe(response)}")
-                        ReviewerQueueQueryResult.Unauthorized
+                    val pullRequests = runCatching { BitbucketPullRequestResponseParser.parsePullRequests(body) }
+                        .onFailure { exception -> LOG.debug("Could not parse the review queue of $url", exception) }
+                        .getOrNull()
+                    if (pullRequests == null) {
+                        return@executeGet ReviewerQueueQueryResult.Failed()
                     }
-                    in 400..499 -> {
-                        LOG.debug("GET $url -> ${response.code} (skipped)")
-                        ReviewerQueueQueryResult.Skipped
-                    }
-                    else -> {
-                        LOG.warn("Unexpected HTTP status ${response.code} for GET $url${BitbucketHttpErrors.describe(response)}")
-                        ReviewerQueueQueryResult.Failed()
-                    }
+                    LOG.debug("Parsed ${pullRequests.size} reviewing pull requests for $url")
+                    ReviewerQueueQueryResult.Listed(pullRequests)
+                }
+                401 -> {
+                    LOG.warn("Unexpected HTTP status 401 for GET $url${BitbucketHttpErrors.describe(response)}")
+                    ReviewerQueueQueryResult.Unauthorized
+                }
+                in 400..499 -> {
+                    LOG.debug("GET $url -> ${response.code} (skipped)")
+                    ReviewerQueueQueryResult.Skipped
+                }
+                else -> {
+                    LOG.warn("Unexpected HTTP status ${response.code} for GET $url${BitbucketHttpErrors.describe(response)}")
+                    ReviewerQueueQueryResult.Failed()
                 }
             }
-        } catch (exception: Exception) {
-            LOG.debug("GET $url failed after ${elapsedMillis(startNanos = startNanos)} ms", exception)
-            ReviewerQueueQueryResult.Failed(exception)
         }
     }
 
     private fun fetchBuildStatusPage(url: String, apiToken: String): BuildStatusPage? {
-        val request = buildGetRequest(url = url, apiToken = apiToken)
-        LOG.debug("GET $url")
-        val startNanos = System.nanoTime()
-        return try {
-            httpClient.newCall(request).execute().use { response ->
-                LOG.debug("GET $url -> ${response.code} in ${elapsedMillis(startNanos = startNanos)} ms")
-                if (!response.isSuccessful) {
-                    LOG.warn("Unexpected HTTP status ${response.code} for GET $url${BitbucketHttpErrors.describe(response)}")
-                    return null
-                }
-                val body = response.body.string()
-                if (body.isBlank()) {
-                    LOG.debug("GET $url returned an empty body")
-                    return BuildStatusPage(statuses = emptyList(), nextUrl = null)
-                }
-                BitbucketPullRequestResponseParser.parseBuildStatusesPage(body)
-            }
-        } catch (exception: Exception) {
-            LOG.debug("GET $url failed after ${elapsedMillis(startNanos = startNanos)} ms", exception)
-            null
-        }
+        return fetchParsed(
+            url = url,
+            apiToken = apiToken,
+            emptyValue = BuildStatusPage(statuses = emptyList(), nextUrl = null),
+            parse = BitbucketPullRequestResponseParser::parseBuildStatusesPage
+        )
     }
 
     private fun countPaginated(firstUrl: String, apiToken: String, maxPages: Int): ItemCount? {
@@ -839,26 +813,74 @@ class OkHttpBitbucketPullRequestClient(private val httpClient: OkHttpClient = sh
     }
 
     private fun fetchCountPage(url: String, apiToken: String): CountPage? {
+        return fetchParsed(
+            url = url,
+            apiToken = apiToken,
+            emptyValue = CountPage(size = null, valueCount = 0, nextUrl = null),
+            parse = BitbucketPullRequestResponseParser::parseCountPage
+        )
+    }
+
+    private fun fetchPage(url: String, apiToken: String): PageFetchResult {
+        return executeGet(
+            url = url,
+            apiToken = apiToken,
+            onFailure = { exception -> PageFetchResult.Failed(PullRequestListResult.Failed(exception)) }
+        ) { response ->
+            if (!response.isSuccessful) {
+                LOG.warn("Unexpected HTTP status ${response.code} for GET $url${BitbucketHttpErrors.describe(response)}")
+                return@executeGet PageFetchResult.Failed(PullRequestListResult.Failed())
+            }
+            val body = response.body.string()
+            if (body.isBlank()) {
+                LOG.debug("GET $url returned an empty body")
+                return@executeGet PageFetchResult.Success(PullRequestPage(pullRequests = emptyList(), nextUrl = null))
+            }
+            PageFetchResult.Success(BitbucketPullRequestResponseParser.parsePullRequestsPage(body))
+        }
+    }
+
+    /**
+     * GETs [url] and parses a successful body with [parse]. An unexpected status, a transport failure, or a parse
+     * failure returns null; a blank body returns [emptyValue].
+     */
+    private fun <T> fetchParsed(url: String, apiToken: String, emptyValue: T?, parse: (String) -> T): T? {
+        return executeGet(url = url, apiToken = apiToken, onFailure = { null }) { response ->
+            if (!response.isSuccessful) {
+                LOG.warn("Unexpected HTTP status ${response.code} for GET $url${BitbucketHttpErrors.describe(response)}")
+                return@executeGet null
+            }
+            val body = response.body.string()
+            if (body.isBlank()) {
+                LOG.debug("GET $url returned an empty body")
+                return@executeGet emptyValue
+            }
+            parse(body)
+        }
+    }
+
+    /**
+     * Runs one authenticated GET and hands the response to [onResponse]. Refuses to attach the API token to a URL that
+     * [BitbucketApiUrlPolicy] does not trust (for example a tampered pagination `next` link) and returns
+     * [onFailure] with no cause instead. Exceptions thrown while executing the call or inside [onResponse] are logged
+     * at `debug` and mapped through [onFailure].
+     */
+    private fun <T> executeGet(url: String, apiToken: String, onFailure: (Exception?) -> T, onResponse: (Response) -> T): T {
+        if (!BitbucketApiUrlPolicy.isTrustedApiUrl(url)) {
+            LOG.warn("Refusing to send the API token to an untrusted URL (${BitbucketApiUrlPolicy.describeRejected(url)})")
+            return onFailure(null)
+        }
         val request = buildGetRequest(url = url, apiToken = apiToken)
         LOG.debug("GET $url")
         val startNanos = System.nanoTime()
         return try {
             httpClient.newCall(request).execute().use { response ->
                 LOG.debug("GET $url -> ${response.code} in ${elapsedMillis(startNanos = startNanos)} ms")
-                if (!response.isSuccessful) {
-                    LOG.warn("Unexpected HTTP status ${response.code} for GET $url${BitbucketHttpErrors.describe(response)}")
-                    return null
-                }
-                val body = response.body.string()
-                if (body.isBlank()) {
-                    LOG.debug("GET $url returned an empty body")
-                    return CountPage(size = null, valueCount = 0, nextUrl = null)
-                }
-                BitbucketPullRequestResponseParser.parseCountPage(body)
+                onResponse(response)
             }
         } catch (exception: Exception) {
             LOG.debug("GET $url failed after ${elapsedMillis(startNanos = startNanos)} ms", exception)
-            null
+            onFailure(exception)
         }
     }
 
@@ -868,33 +890,6 @@ class OkHttpBitbucketPullRequestClient(private val httpClient: OkHttpClient = sh
             .header("Authorization", "Bearer $apiToken")
             .get()
             .build()
-    }
-
-    private fun fetchPage(url: String, apiToken: String): PageFetchResult {
-        val request = buildGetRequest(url = url, apiToken = apiToken)
-        LOG.debug("GET $url")
-        val startNanos = System.nanoTime()
-        return try {
-            httpClient.newCall(request).execute().use { response ->
-                LOG.debug("GET $url -> ${response.code} in ${elapsedMillis(startNanos = startNanos)} ms")
-                if (!response.isSuccessful) {
-                    LOG.warn("Unexpected HTTP status ${response.code} for GET $url${BitbucketHttpErrors.describe(response)}")
-                    return PageFetchResult.Failed(PullRequestListResult.Failed())
-                }
-                val body = response.body.string()
-                if (body.isBlank()) {
-                    LOG.debug("GET $url returned an empty body")
-                    return PageFetchResult.Success(PullRequestPage(pullRequests = emptyList(), nextUrl = null))
-                }
-                PageFetchResult.Success(BitbucketPullRequestResponseParser.parsePullRequestsPage(body))
-            }
-        } catch (exception: IOException) {
-            LOG.debug("GET $url failed after ${elapsedMillis(startNanos = startNanos)} ms", exception)
-            PageFetchResult.Failed(PullRequestListResult.Failed(exception))
-        } catch (exception: Exception) {
-            LOG.debug("GET $url failed after ${elapsedMillis(startNanos = startNanos)} ms", exception)
-            PageFetchResult.Failed(PullRequestListResult.Failed(exception))
-        }
     }
 
     private sealed interface PageFetchResult {
@@ -923,6 +918,7 @@ class OkHttpBitbucketPullRequestClient(private val httpClient: OkHttpClient = sh
         private val sharedHttpClient: OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
+            .authenticator(BbCloudBearerRetryAuthenticator())
             .build()
 
         private fun elapsedMillis(startNanos: Long): Long {

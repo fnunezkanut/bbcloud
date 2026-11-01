@@ -47,6 +47,15 @@ class BbCloudBranchCheckoutService {
         }
     }
 
+    /**
+     * Returns the git root of [project]'s checkout, or null when no repository is discovered. Uses the same lookup as
+     * the checkout and status probes (the base-path repository first, then the single repository), so the branch-
+     * collision flow compares against the same root the switch would act on.
+     */
+    fun currentCheckoutRoot(project: Project): Path? {
+        return findRepository(project)?.root?.toNioPath()
+    }
+
     /** Returns the current branch name and whether the working tree has uncommitted changes. */
     suspend fun workingTreeStatus(project: Project): WorkingTreeStatus? {
         val repository = findRepository(project)

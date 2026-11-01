@@ -28,8 +28,8 @@ private object WorkspaceHeaderLogCategory
 private val LOG = logger<WorkspaceHeaderLogCategory>()
 
 /**
- * The workspace header of the Workspace - PRs tab: a green tick icon, the workspace-name link to the Bitbucket
- * workspace overview, and the open-PR count pill (mirroring the Current Project - PRs header), then the inline
+ * The workspace header of the Workspace tab: a green tick icon, the workspace-name link to the Bitbucket
+ * workspace overview, and the open-PR count pill (mirroring the Current Project header), then the inline
  * [excludeContent] slot (the Exclude: checkboxes), then a flexible spacer and the refresh action. The Watched Projects
  * tab passes no [excludeContent], so it shows no checkboxes.
  */
@@ -46,7 +46,7 @@ internal fun WorkspaceHeader(
         horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         // A green tick (the bundled platform InspectionsOK icon) marks the resolved workspace, followed by the
-        // workspace-name link to its Bitbucket overview, mirroring the Current Project - PRs header's tick + repo link.
+        // workspace-name link to its Bitbucket overview, mirroring the Current Project header's tick + repo link.
         val workspaceUrl = state.workspaceUrl
         if (workspaceUrl != null) {
             Icon(key = AllIconsKeys.General.InspectionsOK, contentDescription = null)

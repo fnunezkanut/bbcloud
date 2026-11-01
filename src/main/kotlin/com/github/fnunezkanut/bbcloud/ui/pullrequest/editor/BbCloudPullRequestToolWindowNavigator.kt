@@ -6,19 +6,19 @@ import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.ToolWindowManager
 
-/** Selects the Bitbucket Cloud PR Review Current Project - PRs listing from an editor-owned project link. */
+/** Selects the Bitbucket Cloud PR Review Current Project listing from an editor-owned project link. */
 class BbCloudPullRequestToolWindowNavigator(private val project: Project) {
     fun showCurrentProjectPullRequests() {
         val toolWindow = ToolWindowManager.getInstance(project).getToolWindow(TOOL_WINDOW_ID)
         if (toolWindow == null) {
-            LOG.info("Cannot navigate to Current Project - PRs: Bitbucket Cloud PR Review tool window is unavailable")
+            LOG.info("Cannot navigate to Current Project: Bitbucket Cloud PR Review tool window is unavailable")
             return
         }
-        LOG.info("User navigated from a pull request editor to Current Project - PRs")
+        LOG.info("User navigated from a pull request editor to Current Project")
         val panel = project.service<BbCloudToolWindowPanel>()
         toolWindow.show {
             if (!panel.showCurrentProjectPullRequestsListing()) {
-                LOG.info("Cannot navigate to Current Project - PRs: listing content is unavailable")
+                LOG.info("Cannot navigate to Current Project: listing content is unavailable")
             }
         }
     }

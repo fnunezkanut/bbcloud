@@ -1,8 +1,12 @@
 @file:Suppress("ktlint:standard:function-naming")
-@file:OptIn(ExperimentalJewelApi::class)
+@file:OptIn(
+    ExperimentalJewelApi::class,
+    ExperimentalFoundationApi::class
+)
 
 package com.github.fnunezkanut.bbcloud.ui.setup
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -12,23 +16,25 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.github.fnunezkanut.bbcloud.BbCloudBundle
+import com.github.fnunezkanut.bbcloud.auth.BbCloudAuthenticationMethod
 import com.intellij.ide.BrowserUtil
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.fileChooser.FileChooser
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
+import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.ui.InputValidator
 import com.intellij.openapi.ui.Messages
 import org.jetbrains.jewel.foundation.ExperimentalJewelApi
@@ -45,7 +51,9 @@ import org.jetbrains.jewel.ui.component.OutlinedButton
 import org.jetbrains.jewel.ui.component.Text
 import org.jetbrains.jewel.ui.component.TextField
 import org.jetbrains.jewel.ui.component.VerticallyScrollableContainer
+import org.jetbrains.jewel.ui.icon.IconKey
 import org.jetbrains.jewel.ui.icons.AllIconsKeys
+import java.awt.datatransfer.StringSelection
 import javax.swing.SwingUtilities
 
 private val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(
@@ -57,13 +65,6 @@ private val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(
 fun BbCloudSettingsScreen(viewModel: BbCloudSettingsViewModel) {
     val state by viewModel.state
     val hostComponent = LocalComponent.current
-    var tokenFieldValue by remember { mutableStateOf(TextFieldValue()) }
-
-    LaunchedEffect(state.tokenFieldText) {
-        if (tokenFieldValue.text != state.tokenFieldText) {
-            tokenFieldValue = TextFieldValue(state.tokenFieldText)
-        }
-    }
 
     VerticallyScrollableContainer(Modifier.fillMaxWidth()) {
         Column(
@@ -85,27 +86,53 @@ fun BbCloudSettingsScreen(viewModel: BbCloudSettingsViewModel) {
                     }
                 }
             )
-            ApiTokenSection(
+            AuthenticationSection(
                 state = state,
-                tokenFieldValue = tokenFieldValue,
-                onTokenChange = { value ->
-                    tokenFieldValue = value
-                    viewModel.setTokenFieldText(value.text)
-                },
-                onSave = viewModel::onSaveClicked
+                onOAuthLogin = viewModel::onOAuthLoginClicked,
+                onOAuthCancel = viewModel::onOAuthLoginCancelClicked,
+                onApiToken = {
+                    viewModel.onApiTokenDialogOpened()
+                    // Compose click handlers run on the EDT, so showing the modal here is safe. show() blocks until
+                    // the dialog closes and needs nothing afterwards.
+                    BbCloudApiTokenDialog(parent = hostComponent, viewModel = viewModel).show()
+                }
             )
             ResetSection(
                 isBusy = state.isBusy,
                 onReset = viewModel::onResetClicked
             )
             Divider(orientation = Orientation.Horizontal, modifier = Modifier.fillMaxWidth())
-            Text(
-                text = state.pluginVersionFooter,
-                color = JewelTheme.globalColors.text.info,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
+            FooterContent(footer = state.pluginVersionFooter)
         }
+    }
+}
+
+/**
+ * Renders the Settings footer with the plugin-name label as a clickable link to the project on GitHub, followed by the
+ * version and disclaimer remainder as plain text. The stored [footer] is "<label><suffix>", so the known label prefix
+ * is split off to keep a single source of truth for the footer text in [SetupFooterText].
+ */
+@Composable
+private fun FooterContent(footer: String) {
+    val label = SetupFooterText.label()
+    val suffix = footer.removePrefix(label)
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Link(
+            text = label,
+            onClick = {
+                LOG.info("User opened the plugin project link ${SetupFooterText.PROJECT_URL}")
+                BrowserUtil.browse(SetupFooterText.PROJECT_URL)
+            }
+        )
+        Text(
+            text = suffix,
+            color = JewelTheme.globalColors.text.info,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 
@@ -117,7 +144,7 @@ private fun ProjectsDirectorySection(state: SettingsUiState, onSelectDirectory: 
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        OutlinedButton(onClick = onSelectDirectory) {
+        OutlinedButton(onClick = onSelectDirectory, modifier = handModifier()) {
             ButtonContent(
                 icon = AllIconsKeys.Nodes.Folder,
                 iconDescription = "Projects directory",
@@ -142,8 +169,146 @@ private fun ProjectsDirectorySection(state: SettingsUiState, onSelectDirectory: 
     }
 }
 
+/**
+ * The Authentication section: an intro line, the OAuth and API Token buttons, OAuth login progress with a Cancel link
+ * (and a browser-fallback URL when the browser could not be opened), an OAuth status message, and a status label that
+ * reflects the working authentication method.
+ */
 @Composable
-private fun ApiTokenSection(state: SettingsUiState, tokenFieldValue: TextFieldValue, onTokenChange: (TextFieldValue) -> Unit, onSave: () -> Unit) {
+private fun AuthenticationSection(state: SettingsUiState, onOAuthLogin: () -> Unit, onOAuthCancel: () -> Unit, onApiToken: () -> Unit) {
+    GroupHeader(text = BbCloudBundle.message("setup.section.authentication.title"))
+    Text(text = BbCloudBundle.message("setup.authentication.intro"))
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        // OAuth login runs in the application login service; the button is disabled while a login or save is active.
+        DefaultButton(
+            onClick = onOAuthLogin,
+            enabled = !state.isBusy && !state.isOAuthLoginInProgress,
+            modifier = handModifier()
+        ) {
+            ButtonContent(
+                icon = AllIconsKeys.General.User,
+                iconDescription = "OAuth login",
+                text = BbCloudBundle.message("setup.authentication.oauth.button")
+            )
+        }
+        OutlinedButton(onClick = onApiToken, enabled = !state.isBusy, modifier = handModifier()) {
+            ButtonContent(
+                icon = AllIconsKeys.Actions.MenuSaveall,
+                iconDescription = "API token",
+                text = BbCloudBundle.message("setup.authentication.apiToken.button")
+            )
+        }
+    }
+    if (state.isOAuthLoginInProgress) {
+        OAuthLoginProgress(fallbackUrl = state.oauthBrowserFallbackUrl, onCancel = onOAuthCancel)
+    }
+    if (state.oauthMessage != null) {
+        if (state.oauthMessageIsError) {
+            StatusContent(
+                icon = AllIconsKeys.General.Warning,
+                iconDescription = "OAuth error",
+                text = state.oauthMessage,
+                color = JewelTheme.globalColors.text.warning
+            )
+        } else {
+            StatusContent(
+                icon = AllIconsKeys.General.InspectionsOK,
+                iconDescription = "OAuth success",
+                text = state.oauthMessage,
+                color = SUCCESS_COLOR
+            )
+        }
+    }
+    AuthenticationStatus(state = state)
+}
+
+/** The waiting line and Cancel link while an OAuth login runs, plus the browser-fallback URL and a Copy URL link. */
+@Composable
+private fun OAuthLoginProgress(fallbackUrl: String?, onCancel: () -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(text = BbCloudBundle.message("setup.authentication.oauth.waiting"))
+            Link(text = BbCloudBundle.message("setup.authentication.oauth.cancel"), onClick = onCancel)
+        }
+        if (fallbackUrl != null) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = BbCloudBundle.message("setup.authentication.oauth.error.browser", fallbackUrl),
+                    color = JewelTheme.globalColors.text.warning,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Link(
+                    text = BbCloudBundle.message("setup.authentication.oauth.copyUrl"),
+                    onClick = {
+                        LOG.info("User copied the OAuth authorize URL")
+                        CopyPasteManager.getInstance().setContents(StringSelection(fallbackUrl))
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AuthenticationStatus(state: SettingsUiState) {
+    if (state.hasStoredButNotWorkingCredentials) {
+        StatusContent(
+            icon = AllIconsKeys.General.Warning,
+            iconDescription = "Credentials not working",
+            text = BbCloudBundle.message("setup.authentication.status.notWorking"),
+            color = JewelTheme.globalColors.text.warning
+        )
+        return
+    }
+    val method = state.authenticationMethod
+    val text = AuthenticationStatusText.build(method = method, workspaceSlug = state.workspaceSlug)
+    when (method) {
+        BbCloudAuthenticationMethod.None -> StatusContent(
+            icon = AllIconsKeys.General.Warning,
+            iconDescription = "Not authenticated",
+            text = text,
+            color = JewelTheme.globalColors.text.warning
+        )
+
+        BbCloudAuthenticationMethod.ApiToken -> StatusContent(
+            icon = AllIconsKeys.General.InspectionsOK,
+            iconDescription = "Authenticated with API token",
+            text = text,
+            color = SUCCESS_COLOR
+        )
+
+        BbCloudAuthenticationMethod.OAuth -> StatusContent(
+            icon = AllIconsKeys.General.InspectionsOK,
+            iconDescription = "Authenticated with OAuth",
+            text = text,
+            color = OAUTH_COLOR
+        )
+    }
+}
+
+/**
+ * The API token component: the token field, the Save button, the inline error/success status, and the token-creation
+ * instructions. Kept as a shared composable so the Settings tab's API token dialog and any future host render exactly
+ * the same control.
+ */
+@Composable
+internal fun ApiTokenSection(state: SettingsUiState, tokenFieldValue: TextFieldValue, onTokenChange: (TextFieldValue) -> Unit, onSave: () -> Unit) {
     GroupHeader(text = BbCloudBundle.message("setup.section.apiToken.title"))
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -170,7 +335,7 @@ private fun ApiTokenSection(state: SettingsUiState, tokenFieldValue: TextFieldVa
             visualTransformation = PasswordVisualTransformation(),
             keyboardOptions = KeyboardOptions.Default
         )
-        DefaultButton(onClick = onSave, enabled = !state.isBusy) {
+        DefaultButton(onClick = onSave, enabled = !state.isBusy, modifier = handModifier()) {
             ButtonContent(
                 icon = AllIconsKeys.Actions.MenuSaveall,
                 iconDescription = "Save API token",
@@ -197,7 +362,7 @@ private fun ApiTokenSection(state: SettingsUiState, tokenFieldValue: TextFieldVa
 }
 
 @Composable
-private fun InstructionsBlock() {
+internal fun InstructionsBlock() {
     Column(
         modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -259,12 +424,12 @@ private fun ScopeRow(scope: String, access: String, isHeader: Boolean, rowIndex:
         Text(
             text = access,
             modifier = Modifier.width(72.dp),
-            fontWeight = if (isHeader) androidx.compose.ui.text.font.FontWeight.Bold else null
+            fontWeight = if (isHeader) FontWeight.Bold else null
         )
         Text(
             text = scope,
             modifier = Modifier.weight(1f),
-            fontWeight = if (isHeader) androidx.compose.ui.text.font.FontWeight.Bold else null
+            fontWeight = if (isHeader) FontWeight.Bold else null
         )
     }
 }
@@ -272,7 +437,7 @@ private fun ScopeRow(scope: String, access: String, isHeader: Boolean, rowIndex:
 @Composable
 private fun ResetSection(isBusy: Boolean, onReset: () -> Unit) {
     GroupHeader(text = BbCloudBundle.message("setup.section.resetPlugin.title"))
-    OutlinedButton(onClick = onReset, enabled = !isBusy) {
+    OutlinedButton(onClick = onReset, enabled = !isBusy, modifier = handModifier()) {
         ButtonContent(
             icon = AllIconsKeys.Actions.GC,
             iconDescription = "Reset plugin",
@@ -283,7 +448,7 @@ private fun ResetSection(isBusy: Boolean, onReset: () -> Unit) {
 }
 
 @Composable
-private fun ButtonContent(icon: org.jetbrains.jewel.ui.icon.IconKey, iconDescription: String, text: String, color: Color = Color.Unspecified) {
+internal fun ButtonContent(icon: IconKey, iconDescription: String, text: String, color: Color = Color.Unspecified) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         Icon(key = icon, contentDescription = iconDescription, tint = color)
         Text(text = text, color = color)
@@ -291,7 +456,7 @@ private fun ButtonContent(icon: org.jetbrains.jewel.ui.icon.IconKey, iconDescrip
 }
 
 @Composable
-private fun StatusContent(icon: org.jetbrains.jewel.ui.icon.IconKey, iconDescription: String, text: String, color: Color) {
+internal fun StatusContent(icon: IconKey, iconDescription: String, text: String, color: Color) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -330,7 +495,9 @@ private fun <T> runOnEdtAndWait(action: () -> T): T {
         return action()
     }
     var result: T? = null
-    ApplicationManager.getApplication().invokeAndWait { result = action() }
+    // ModalityState.any() lets the workspace chooser run on the EDT even while the API token modal is showing;
+    // the default modality would queue the runnable until the modal closes, deadlocking the Save that opened it.
+    ApplicationManager.getApplication().invokeAndWait({ result = action() }, ModalityState.any())
     @Suppress("UNCHECKED_CAST")
     return result as T
 }
@@ -345,4 +512,12 @@ private class WorkspaceSlugValidator(private val slugs: List<String>) : InputVal
     }
 }
 
-private val SUCCESS_COLOR = Color(0xFF4CAF50)
+/** The clickable-hand hover cursor used on every actionable Settings button, matching the rest of the plugin UI. */
+private fun handModifier(): Modifier {
+    return Modifier.pointerHoverIcon(PointerIcon.Hand)
+}
+
+internal val SUCCESS_COLOR = Color(0xFF4CAF50)
+
+// IntelliJ New UI link blue, used for the OAuth authentication status label when OAuth is the working method.
+private val OAUTH_COLOR = Color(0xFF3574F0)

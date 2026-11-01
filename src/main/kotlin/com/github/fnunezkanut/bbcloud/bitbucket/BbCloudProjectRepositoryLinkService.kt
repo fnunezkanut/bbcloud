@@ -1,7 +1,7 @@
 package com.github.fnunezkanut.bbcloud.bitbucket
 
+import com.github.fnunezkanut.bbcloud.auth.BbCloudAccessTokenProvider
 import com.github.fnunezkanut.bbcloud.config.BbCloudConfigurationService
-import com.github.fnunezkanut.bbcloud.credentials.BbCloudCredentialStore
 import com.github.fnunezkanut.bbcloud.git.BitbucketGitRemoteReader
 import com.github.fnunezkanut.bbcloud.project.ProjectRepositoryResolver
 import com.intellij.openapi.diagnostic.thisLogger
@@ -20,7 +20,7 @@ sealed class ProjectRepositoryStatus {
 }
 
 class BbCloudProjectRepositoryLinkService(
-    private val credentialStore: BbCloudCredentialStore,
+    private val accessTokenProvider: BbCloudAccessTokenProvider,
     private val repositoryClient: BitbucketRepositoryClient,
     private val readRemoteUrl: (Path) -> String? = BitbucketGitRemoteReader::readRemoteUrl,
     private val configurationService: BbCloudConfigurationService? = null
@@ -52,9 +52,9 @@ class BbCloudProjectRepositoryLinkService(
             return ProjectRepositoryStatus.CheckFailed(repositoryWebUrl = null)
         }
 
-        val apiToken = credentialStore.getToken()
+        val apiToken = accessTokenProvider.bearerTokenOrNull()
         if (apiToken == null) {
-            thisLogger().info("Cannot verify repository: no stored API token")
+            thisLogger().info("Cannot verify repository: no Bitbucket credentials")
             return ProjectRepositoryStatus.CheckFailed(repositoryWebUrl = repositoryWebUrl)
         }
 

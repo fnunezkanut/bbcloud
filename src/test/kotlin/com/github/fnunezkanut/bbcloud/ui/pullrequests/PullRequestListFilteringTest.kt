@@ -2,7 +2,9 @@ package com.github.fnunezkanut.bbcloud.ui.pullrequests
 
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestState
 import com.github.fnunezkanut.bbcloud.settings.PullRequestListFilter
+import io.kotest.assertions.assertSoftly
 import io.kotest.matchers.collections.shouldContainExactly
+import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
@@ -222,6 +224,61 @@ class PullRequestListFilteringTest {
 
             // THEN both open rows stay
             kept.map { it.pullRequest.summary.id } shouldContainExactly listOf(1L, 2L)
+        }
+    }
+
+    @Nested
+    inner class IsApprovedBy {
+        @Test
+        fun `isApprovedBy - should be true when the user uuid is among the approvers`() {
+            // GIVEN a pull request approved by the current user
+            val summary = listEntry(id = 1, source = PullRequestListingSource.ProjectOpen, approverUuids = setOf(CURRENT_USER)).pullRequest.summary
+
+            // WHEN
+            val approved = PullRequestListFiltering.isApprovedBy(summary = summary, userUuid = CURRENT_USER)
+
+            // THEN
+            approved shouldBe true
+        }
+
+        @Test
+        fun `isApprovedBy - should be false when the user uuid is not among the approvers`() {
+            // GIVEN a pull request approved only by someone else
+            val summary = listEntry(id = 1, source = PullRequestListingSource.ProjectOpen, approverUuids = setOf("{other}")).pullRequest.summary
+
+            // WHEN
+            val approved = PullRequestListFiltering.isApprovedBy(summary = summary, userUuid = CURRENT_USER)
+
+            // THEN
+            approved shouldBe false
+        }
+
+        @Test
+        fun `isApprovedBy - should match a brace and case mismatch`() {
+            // GIVEN the approver uuid written without braces and in upper case
+            val summary = listEntry(id = 1, source = PullRequestListingSource.ProjectOpen, approverUuids = setOf("5B10AC8D")).pullRequest.summary
+
+            // WHEN
+            val approved = PullRequestListFiltering.isApprovedBy(summary = summary, userUuid = CURRENT_USER)
+
+            // THEN
+            approved shouldBe true
+        }
+
+        @Test
+        fun `isApprovedBy - should be false for a null or blank user uuid even when approvers exist`() {
+            // GIVEN a pull request with approvers
+            val summary = listEntry(id = 1, source = PullRequestListingSource.ProjectOpen, approverUuids = setOf(CURRENT_USER)).pullRequest.summary
+
+            // WHEN
+            val approvedByNull = PullRequestListFiltering.isApprovedBy(summary = summary, userUuid = null)
+            val approvedByBlank = PullRequestListFiltering.isApprovedBy(summary = summary, userUuid = " ")
+
+            // THEN
+            assertSoftly {
+                approvedByNull shouldBe false
+                approvedByBlank shouldBe false
+            }
         }
     }
 }

@@ -1,7 +1,6 @@
 package com.github.fnunezkanut.bbcloud.ui.pullrequest.session
 
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestComment
-import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestFileCommentCounts
 
 /** Coordinates raw comment loads and keeps their results scoped to the displayed pull request. */
 internal class PullRequestFileCommentCountsLoadState {
@@ -13,7 +12,7 @@ internal class PullRequestFileCommentCountsLoadState {
         data object AlreadyLoaded : Request
     }
 
-    data class Completion(val counts: PullRequestFileCommentCounts?, val shouldReload: Boolean, val isForDisplayedPullRequest: Boolean)
+    data class Completion(val shouldReload: Boolean, val isForDisplayedPullRequest: Boolean)
 
     private var displayedPullRequestId: Long? = null
     private val loadedComments = mutableMapOf<Long, List<PullRequestComment>?>()
@@ -38,19 +37,6 @@ internal class PullRequestFileCommentCountsLoadState {
         return Request.Started
     }
 
-    fun countsForDisplayedPullRequest(): PullRequestFileCommentCounts? {
-        val pullRequestId = displayedPullRequestId ?: return null
-        val comments = loadedComments[pullRequestId] ?: return null
-        return PullRequestFileCommentCounts.from(comments = comments)
-    }
-
-    fun filesChangedCompleted(pullRequestId: Long): PullRequestFileCommentCounts? {
-        if (pullRequestId != displayedPullRequestId) {
-            return null
-        }
-        return countsForDisplayedPullRequest()
-    }
-
     fun complete(pullRequestId: Long, comments: List<PullRequestComment>?): Completion {
         inFlightPullRequestIds.remove(pullRequestId)
         val shouldReload = reloadRequestedPullRequestIds.remove(pullRequestId) &&
@@ -59,13 +45,7 @@ internal class PullRequestFileCommentCountsLoadState {
         if (isForDisplayedPullRequest) {
             loadedComments[pullRequestId] = comments
         }
-        val counts = if (isForDisplayedPullRequest) {
-            comments?.let { items -> PullRequestFileCommentCounts.from(comments = items) }
-        } else {
-            null
-        }
         return Completion(
-            counts = counts,
             shouldReload = shouldReload,
             isForDisplayedPullRequest = isForDisplayedPullRequest
         )

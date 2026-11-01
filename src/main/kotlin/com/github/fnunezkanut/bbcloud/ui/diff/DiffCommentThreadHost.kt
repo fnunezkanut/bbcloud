@@ -38,8 +38,8 @@ import kotlin.math.max
  * and for height changes of the embedded [ComposePanel], re-measuring and relaying the inlay on either.
  *
  * The host is also a [UiDataProvider] that hides the host editor data (see [hideHostEditorData]) from the embedded
- * content, so editor actions such as Backspace and Select All do not run on the diff editor while the comment box has
- * the focus.
+ * content, so editor actions such as Backspace, Select All, copy, cut and paste do not run on the diff editor while
+ * the comment box has the focus.
  */
 internal class DiffCommentThreadHost(private val editor: EditorEx) :
     JPanel(BorderLayout()),
@@ -61,6 +61,12 @@ internal class DiffCommentThreadHost(private val editor: EditorEx) :
 
     /** Whether an [applyComposeContentHeight] run is already queued on the EDT. */
     private var contentHeightSyncScheduled: Boolean = false
+
+    /**
+     * Set by [requestComposeFocus] when AWT focus could not be moved yet because the inlay is not showing. The next
+     * [remeasureInlayWidth] (driven by [scheduleDeferredInlayRemeasure]) retries the focus request once.
+     */
+    private var pendingFocus: Boolean = false
 
     /** The scrollbar-flip math only depends on the scroll pane client property, so it is computed once. */
     private val verticalScrollbarFlipped: Boolean = run {
@@ -117,6 +123,33 @@ internal class DiffCommentThreadHost(private val editor: EditorEx) :
     /** Re-measures Compose at the current viewport width and relays the inlay (for deferred layout after insert). */
     fun remeasureInlayWidth() {
         refreshWidth()
+        if (pendingFocus) {
+            pendingFocus = false
+            requestComposeFocus()
+        }
+    }
+
+    /**
+     * Moves AWT keyboard focus to the embedded [ComposePanel], so a Compose `FocusRequester` inside it can take effect.
+     *
+     * The inlay hosts the bare [ComposePanel] (see [attachComposePanel]), so Jewel's click-to-focus AWT listener on the
+     * wrapper is inactive; AWT focus has to be moved to the panel explicitly before the text area inside Compose can be
+     * focused. Returns early when the panel is not attached, or when the host is not showing yet: the inlay is inserted
+     * and measured asynchronously, so a focus request can arrive before the panel is on screen. In that case the retry
+     * flag is set and [remeasureInlayWidth] moves the focus on the next layout pass. Must run on the EDT.
+     */
+    fun requestComposeFocus() {
+        val panel = composePanel
+        if (panel == null) {
+            LOG.debug("Cannot focus the inline comment composer: the Compose panel is not attached yet")
+            return
+        }
+        if (!isShowing) {
+            pendingFocus = true
+            LOG.debug("Inline comment composer not showing yet; deferring the focus request to the next layout pass")
+            return
+        }
+        panel.requestFocusInWindow()
     }
 
     /**
@@ -286,7 +319,15 @@ internal fun liftInlayWrapperWidthCap(wrapper: Container): Boolean {
  * actions such as Backspace ("This view is read-only") and Select All run on the editor and consume the keystroke
  * before Compose receives it.
  *
- * The paste provider is deliberately not hidden: the Jewel wrapper inside the host supplies its own paste provider.
+ * The paste provider must be hidden for the same reason. [DiffCommentThreadHost.attachComposePanel] hosts the bare
+ * [ComposePanel], so Jewel's wrapper and the paste provider it installs are not in the component hierarchy. Without an
+ * explicit null, the platform `BasicUiDataRule` derives the copy, cut, paste and delete providers from the parent
+ * `EditorComponentImpl`, so the keystroke runs on the host editor: paste then shows "This view is read-only" on a
+ * read-only diff, or pastes into the file in a writable work-tree editor. With the providers null and no enabled editor
+ * action for the keystroke, the focused Compose text field handles the keystroke natively.
+ *
+ * Known limitation: because the Jewel paste provider is bypassed, Edit > Paste, the context-menu Paste and Paste from
+ * History do not target the comment box; only the Cmd+V / Ctrl+V keystroke pastes into it.
  */
 internal fun hideHostEditorData(sink: DataSink) {
     sink.setNull(CommonDataKeys.EDITOR)
@@ -295,6 +336,7 @@ internal fun hideHostEditorData(sink: DataSink) {
     sink.setNull(CommonDataKeys.EDITOR_VIRTUAL_SPACE)
     sink.setNull(PlatformDataKeys.COPY_PROVIDER)
     sink.setNull(PlatformDataKeys.CUT_PROVIDER)
+    sink.setNull(PlatformDataKeys.PASTE_PROVIDER)
     sink.setNull(PlatformDataKeys.DELETE_ELEMENT_PROVIDER)
 }
 

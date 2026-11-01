@@ -16,7 +16,8 @@ import org.jetbrains.jewel.ui.component.Text
 
 /**
  * The shared Jewel card chrome: a 1dp border with rounded corners and 8dp of padding around an optional bold title.
- * It is the Jewel equivalent of the Swing `TitledCard`, and it is shared by the Overview and the Changes tabs.
+ * It is the Jewel equivalent of the Swing `TitledCard`, and it is shared by the pull-request page and the PR Changes
+ * tool window.
  */
 @Composable
 internal fun TitledCardBox(title: String? = null, content: @Composable () -> Unit) {

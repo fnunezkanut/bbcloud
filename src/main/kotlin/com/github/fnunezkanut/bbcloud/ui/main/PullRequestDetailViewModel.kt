@@ -3,17 +3,9 @@ package com.github.fnunezkanut.bbcloud.ui.main
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
 import com.github.fnunezkanut.bbcloud.BbCloudBundle
-import com.github.fnunezkanut.bbcloud.bitbucket.ItemCount
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestAction
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestDetails
 import com.intellij.openapi.diagnostic.logger
-
-/** The three tabs of the pull-request detail view. */
-enum class PullRequestDetailTab {
-    Overview,
-    Conversation,
-    Changes
-}
 
 /** The merge-check loading result used to gate the Merge action. */
 enum class MergeChecksState {
@@ -28,35 +20,25 @@ enum class MergeChecksState {
 }
 
 /**
- * The immutable state of the pull-request detail view: the selected tab, the action buttons, the refresh button, and
- * the counters of the Conversation and Changes tabs.
+ * The immutable state of the pull-request detail view: the action buttons and the refresh button.
  *
  * An action is effectively enabled only when [actionsEnabled] is true and it is not in [disabledActions].
  */
 data class PullRequestDetailUiState(
-    val selectedTab: PullRequestDetailTab = PullRequestDetailTab.Overview,
     val actions: List<PullRequestAction> = emptyList(),
     val actionsEnabled: Boolean = true,
     val disabledActions: Set<PullRequestAction> = emptySet(),
     val actionTooltips: Map<PullRequestAction, String> = emptyMap(),
-    val refreshEnabled: Boolean = true,
-    val conversationCount: ItemCount? = null,
-    val changesCount: ItemCount? = null
+    val refreshEnabled: Boolean = true
 )
 
 /**
- * Owns the state of the pull-request detail view: the selected tab, the action buttons and their enabled state, the
- * refresh button, and the counters of the Conversation and Changes tabs.
+ * Owns the state of the pull-request detail view: the action buttons and their enabled state, and the refresh button.
  *
  * The id of the pull request the view currently reflects is tracked so stale responses for a different pull request
  * are ignored.
  */
-class PullRequestDetailViewModel(
-    private val onActionRequested: (PullRequestAction) -> Unit,
-    private val onRefreshRequested: () -> Unit,
-    private val onConversationTabSelected: () -> Unit,
-    private val onChangesTabSelected: () -> Unit
-) {
+class PullRequestDetailViewModel(private val onActionRequested: (PullRequestAction) -> Unit, private val onRefreshRequested: () -> Unit) {
     val state: MutableState<PullRequestDetailUiState> = mutableStateOf(PullRequestDetailUiState())
 
     private var displayedPullRequestId: Long? = null
@@ -68,7 +50,7 @@ class PullRequestDetailViewModel(
         val pullRequestChanged = pullRequestId != displayedPullRequestId
         if (pullRequestChanged) {
             // Preserve the last merge-check signal during an in-place refresh of the same PR to avoid button flicker;
-            // this follows the tab-preserving editor refresh behavior.
+            // this follows the in-place editor refresh behavior.
             mergeChecksState = MergeChecksState.Unknown
             displayedDetails = null
         }
@@ -159,34 +141,6 @@ class PullRequestDetailViewModel(
         state.value = state.value.copy(refreshEnabled = enabled)
     }
 
-    fun setConversationCount(count: ItemCount?) {
-        state.value = state.value.copy(conversationCount = count)
-    }
-
-    fun setChangesCount(count: ItemCount?) {
-        state.value = state.value.copy(changesCount = count)
-    }
-
-    /** Returns to Overview when a new pull request is displayed, without running tab-selection work. */
-    fun resetTab() {
-        state.value = state.value.copy(selectedTab = PullRequestDetailTab.Overview)
-    }
-
-    /** Selects a tab and runs the work that tab needs when it becomes visible. */
-    fun selectTab(tab: PullRequestDetailTab) {
-        if (state.value.selectedTab == tab) {
-            return
-        }
-        state.value = state.value.copy(selectedTab = tab)
-        LOG.info("User selected the ${tab.title()} tab on the checked-out branch view")
-        when (tab) {
-            PullRequestDetailTab.Conversation -> onConversationTabSelected()
-            PullRequestDetailTab.Changes -> onChangesTabSelected()
-            // Overview: no scroll-to-top behavior.
-            PullRequestDetailTab.Overview -> Unit
-        }
-    }
-
     /** Reloads the pull request. */
     fun onRefreshClicked() {
         LOG.info("User clicked refresh on the pull request page")
@@ -199,21 +153,12 @@ class PullRequestDetailViewModel(
             LOG.debug("Ignoring click on disabled $action for pull request #$displayedPullRequestId")
             return
         }
-        LOG.info("User clicked the $action button on the tab row of pull request #$displayedPullRequestId")
+        LOG.info("User clicked the $action button on the action row of pull request #$displayedPullRequestId")
         state.value = state.value.copy(actionsEnabled = false)
         onActionRequested(action)
     }
 
     companion object {
         private val LOG = logger<PullRequestDetailViewModel>()
-    }
-}
-
-/** The title of a tab, as it is shown in the tab strip. */
-internal fun PullRequestDetailTab.title(): String {
-    return when (this) {
-        PullRequestDetailTab.Overview -> BbCloudBundle.message("main.branch.tab.overview")
-        PullRequestDetailTab.Conversation -> BbCloudBundle.message("main.branch.tab.conversation")
-        PullRequestDetailTab.Changes -> BbCloudBundle.message("main.branch.tab.changes")
     }
 }

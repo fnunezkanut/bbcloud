@@ -1,5 +1,10 @@
 package com.github.fnunezkanut.bbcloud.config
 
+import com.github.fnunezkanut.bbcloud.auth.BbCloudAccessTokenProvider
+import com.github.fnunezkanut.bbcloud.auth.BbCloudAuthService
+import com.github.fnunezkanut.bbcloud.auth.BbCloudAuthenticationMethod
+import com.github.fnunezkanut.bbcloud.auth.BbCloudCredentialValidator
+import com.github.fnunezkanut.bbcloud.auth.OAuthTokens
 import com.github.fnunezkanut.bbcloud.bitbucket.BitbucketRepositoryUrls
 import com.github.fnunezkanut.bbcloud.bitbucket.BitbucketWorkspaceClient
 import com.github.fnunezkanut.bbcloud.bitbucket.OkHttpBitbucketRepositoryClient
@@ -26,7 +31,9 @@ class BbCloudConfigurationService(
     private val settings: BbCloudSettings,
     private val credentialStore: BbCloudCredentialStore,
     private val workspaceClient: BitbucketWorkspaceClient,
-    private val discoveryService: BbCloudWatchedProjectsDiscoveryService
+    private val discoveryService: BbCloudWatchedProjectsDiscoveryService,
+    private val accessTokenProvider: BbCloudAccessTokenProvider,
+    private val credentialValidator: BbCloudCredentialValidator
 ) {
     /**
      * Serializes [rescanWatchedProjects] so the scan triggers (a chosen projects directory, a workspace slug change or
@@ -37,11 +44,19 @@ class BbCloudConfigurationService(
     private val rescanMutex = Mutex()
 
     /**
-     * Whether the plugin is fully configured. True only when the workspace slug is set, an API token is stored, and the
-     * projects directory is set and resolves to an existing directory on disk. "Valid directory" means the stored path
-     * points to an existing directory (see [isExistingDirectory]), so a stored-but-deleted folder counts as not
-     * configured. This is the single source of truth the tool window consults to gate every non-Settings tab behind the
-     * centered go-to-settings link.
+     * Whether the plugin is fully configured. True only when the workspace slug is set, the projects directory is set
+     * and resolves to an existing directory on disk, and at least one authentication method (OAuth or the API token) is
+     * verified working online by [BbCloudCredentialValidator]. "Valid directory" means the stored path points to an
+     * existing directory (see [isExistingDirectory]), so a stored-but-deleted folder counts as not configured. This is
+     * the single source of truth the tool window consults to gate every non-Settings tab behind the centered
+     * go-to-settings link.
+     *
+     * The credential check is an online `GET /2.0/user` whose result is cached for 5 minutes. When Bitbucket cannot be
+     * reached, the validator falls back to the last known working method (or treats a stored credential as working), so
+     * being offline does not lock the UI; the data requests surface their own errors.
+     *
+     * The cheap slug and directory checks run first, so the online credential check is skipped entirely when either is
+     * missing.
      *
      * The work tree root is no longer a separate configured directory: it is derived as `$projectsDirectory/.worktrees`
      * (see [workTreeDirectoryOrNull]) and is created on demand by the worktree flow, so its prior existence on disk is
@@ -54,12 +69,12 @@ class BbCloudConfigurationService(
             thisLogger().info("Not configured: no workspace slug")
             return false
         }
-        if (!credentialStore.hasToken()) {
-            thisLogger().info("Not configured: no stored token")
-            return false
-        }
         if (!isExistingDirectory(projectsDirectoryOrNull())) {
             thisLogger().info("Not configured: projects directory not set or not an existing directory")
+            return false
+        }
+        if (credentialValidator.workingMethod() == BbCloudAuthenticationMethod.None) {
+            thisLogger().info("Not configured: no working Bitbucket credentials (OAuth or API token)")
             return false
         }
         return true
@@ -76,6 +91,55 @@ class BbCloudConfigurationService(
     /** Whether an API token is stored; the Settings panel reports this through the token field's own state. */
     suspend fun hasStoredToken(): Boolean {
         return credentialStore.hasToken()
+    }
+
+    /** The working authentication method as verified online (cached), used by the Settings status label. */
+    suspend fun authenticationMethod(): BbCloudAuthenticationMethod {
+        return credentialValidator.workingMethod()
+    }
+
+    /** Whether an OAuth login is stored; independent of the API token since both may coexist. */
+    suspend fun hasStoredOAuthTokens(): Boolean {
+        return credentialStore.getOAuthTokens() != null
+    }
+
+    /**
+     * Persists an OAuth login: stores the [tokens] and sets the [workspaceSlug]. The API token (if any) is kept, since
+     * both credentials may coexist with OAuth preferred (decision 2a). The access-token provider and the credential
+     * validator are notified so the next request and configured check reflect the new session.
+     *
+     * The watched map is rebuilt only when the workspace slug actually changed (decision 6b): the stored entries are
+     * scoped to a workspace, so a credential change on the same workspace keeps them. A slug change empties and rescans.
+     */
+    suspend fun saveOAuthSetup(workspaceSlug: String, tokens: OAuthTokens): Result<Unit> {
+        val normalizedSlug = BitbucketWorkspaceValidator.validate(workspaceSlug).getOrElse { error ->
+            thisLogger().info("OAuth setup rejected: invalid workspace slug (${error::class.simpleName})")
+            return Result.failure(SaveException.WorkspaceRequired)
+        }
+
+        val oauthPreviouslyStored = credentialStore.getOAuthTokens() != null
+        val oldSlug = storedWorkspaceSlug()
+
+        credentialStore.saveOAuthTokens(tokens = tokens)
+        settings.workspaceSlug = normalizedSlug
+        accessTokenProvider.onOAuthTokensChanged()
+        credentialValidator.invalidate()
+
+        val slugChanged = oldSlug != normalizedSlug
+        thisLogger().info(
+            "OAuth setup saved: workspaceSlug=$normalizedSlug, slugChanged=$slugChanged, oauthPreviouslyStored=$oauthPreviouslyStored"
+        )
+
+        // Only a workspace-slug change invalidates the watched map; a pure credential change on the same workspace
+        // keeps the existing watched choices, which still refer to the same workspace's repositories.
+        if (slugChanged) {
+            clearWatchedProjects()
+            if (projectsDirectoryOrNull() != null) {
+                rescanWatchedProjects(clearFirst = true)
+            }
+        }
+
+        return Result.success(Unit)
     }
 
     suspend fun saveSetup(workspaceSlug: String, apiTokenInput: String): Result<Unit> {
@@ -104,6 +168,9 @@ class BbCloudConfigurationService(
         if (tokenUpdated) {
             credentialStore.saveToken(tokenTrimmed)
         }
+
+        // The stored credential changed (or the workspace did), so a cached online check result is now stale.
+        credentialValidator.invalidate()
 
         val slugChanged = oldSlug != normalizedSlug
         thisLogger().info(
@@ -223,6 +290,7 @@ class BbCloudConfigurationService(
      */
     suspend fun resetApiToken() {
         credentialStore.clearToken()
+        credentialValidator.invalidate()
         clearWatchedProjects()
         thisLogger().info("Bitbucket Cloud PR Review API token reset")
     }
@@ -231,12 +299,16 @@ class BbCloudConfigurationService(
      * Wipes every persisted plugin setting and the stored API token: the token, the workspace slug, the legacy
      * organization URL, the projects directory, and all watched project mappings. The plugin is unconfigured
      * afterwards, so the Settings tab must be filled in again before the plugin can be used. Called by the Settings
-     * tab's Reset Plugin button, which is a wider reset than [resetApiToken]. The derived work tree root is not deleted
-     * from disk (deleting user-adjacent directories is out of scope); clearing the projects directory is enough for
+     * tab's Reset Plugin button, which is a wider reset than [resetApiToken]. It also removes the stored OAuth login,
+     * which is the only way to sign out of OAuth (decision 4a). The derived work tree root is not deleted from disk
+     * (deleting user-adjacent directories is out of scope); clearing the projects directory is enough for
      * [workTreeDirectoryOrNull] to report null until a projects directory is saved again.
      */
     suspend fun resetAll() {
         credentialStore.clearToken()
+        credentialStore.clearOAuthTokens()
+        accessTokenProvider.onOAuthTokensChanged()
+        credentialValidator.invalidate()
         settings.workspaceSlug = ""
         settings.organizationUrl = ""
         settings.projectsDirectory = ""
@@ -412,7 +484,7 @@ class BbCloudConfigurationService(
         return rescanMutex.withLock {
             val projectsDirectory = projectsDirectoryOrNull()
             val workspaceSlug = workspaceSlugOrNull()
-            val apiToken = storedTokenOrNull()
+            val apiToken = accessTokenProvider.bearerTokenOrNull()
 
             if (projectsDirectory.isNullOrEmpty() || workspaceSlug.isNullOrEmpty() || apiToken.isNullOrEmpty()) {
                 thisLogger().info("Cannot rescan watched projects: not configured")
@@ -512,11 +584,14 @@ class BbCloudConfigurationService(
         fun getInstance(): BbCloudConfigurationService {
             val application = ApplicationManager.getApplication()
             val discoveryService = BbCloudWatchedProjectsDiscoveryService(OkHttpBitbucketRepositoryClient())
+            val authService = BbCloudAuthService.getInstance()
             return BbCloudConfigurationService(
                 settings = BbCloudSettings.getInstance(),
                 credentialStore = application.service<BbCloudCredentialStore>(),
                 workspaceClient = OkHttpBitbucketWorkspaceClient(),
-                discoveryService = discoveryService
+                discoveryService = discoveryService,
+                accessTokenProvider = authService,
+                credentialValidator = authService.credentialValidator
             )
         }
     }

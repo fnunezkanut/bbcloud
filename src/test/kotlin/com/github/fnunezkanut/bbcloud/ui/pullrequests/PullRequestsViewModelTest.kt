@@ -1,6 +1,8 @@
 package com.github.fnunezkanut.bbcloud.ui.pullrequests
 
+import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestReviewer
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestState
+import com.github.fnunezkanut.bbcloud.bitbucket.ReviewerStatus
 import com.github.fnunezkanut.bbcloud.settings.PullRequestListFilter
 import com.github.fnunezkanut.bbcloud.settings.PullRequestListScope
 import io.kotest.matchers.collections.shouldContainExactly
@@ -189,6 +191,85 @@ class PullRequestsViewModelTest {
         }
     }
 
+    @Test
+    fun `applySource - should flag rows approved by the current user and update once the user uuid arrives`() {
+        // GIVEN a project view model whose first load happens before the current user uuid is known
+        val viewModel = projectViewModel(initialFilter = PullRequestListFilter(excludeResolved = false, excludeDrafts = false))
+        val scope = CoroutineScope(SupervisorJob())
+        try {
+            val generation = viewModel.beginRefresh()
+            val entries = listOf(
+                listEntry(id = 1, source = PullRequestListingSource.ProjectOpen, approverUuids = setOf(CURRENT_USER)),
+                listEntry(id = 2, source = PullRequestListingSource.ProjectOpen, approverUuids = setOf("{other}"))
+            )
+            viewModel.applySource(
+                generation = generation,
+                source = PullRequestListingSource.ProjectOpen,
+                entries = entries,
+                isTruncated = false,
+                currentUserUuid = null,
+                coroutineScope = scope
+            )
+            viewModel.state.value.rows.associate { it.pullRequest.summary.id to it.isApprovedByMe } shouldBe
+                mapOf(1L to false, 2L to false)
+
+            // WHEN the current user uuid becomes known on the next source response
+            viewModel.applySource(
+                generation = generation,
+                source = PullRequestListingSource.ProjectOpen,
+                entries = entries,
+                isTruncated = false,
+                currentUserUuid = CURRENT_USER,
+                coroutineScope = scope
+            )
+
+            // THEN only the pull request the user approved is flagged
+            viewModel.state.value.rows.associate { it.pullRequest.summary.id to it.isApprovedByMe } shouldBe
+                mapOf(1L to true, 2L to false)
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun `applySource - should populate the reviewer stack of a loaded open row`() {
+        // GIVEN an open entry carrying three reviewers
+        val viewModel = projectViewModel(initialFilter = PullRequestListFilter(excludeResolved = false, excludeDrafts = false))
+        val scope = CoroutineScope(SupervisorJob())
+        try {
+            val generation = viewModel.beginRefresh()
+            val reviewers = listOf(
+                reviewer(uuid = "{a}"),
+                reviewer(uuid = "{b}"),
+                reviewer(uuid = "{c}")
+            )
+            loadBothProjectSources(
+                viewModel = viewModel,
+                generation = generation,
+                openEntries = listOf(
+                    listEntry(id = 1, source = PullRequestListingSource.ProjectOpen, reviewers = reviewers)
+                ),
+                scope = scope
+            )
+
+            // THEN the row's reviewer stack shows two and folds the third
+            val stack = viewModel.state.value.rows.single().reviewerStack
+            stack.visible.map { it.uuid } shouldContainExactly listOf("{a}", "{b}")
+            stack.hiddenCount shouldBe 1
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    private fun reviewer(uuid: String): PullRequestReviewer {
+        return PullRequestReviewer(
+            uuid = uuid,
+            displayName = "Reviewer $uuid",
+            avatarUrl = null,
+            status = ReviewerStatus.None
+        )
+    }
+
     private fun loadBothProjectSources(
         viewModel: PullRequestsViewModel,
         generation: Long,
@@ -221,7 +302,7 @@ class PullRequestsViewModelTest {
         initialFilter: PullRequestListFilter = PullRequestListFilter()
     ): PullRequestsViewModel {
         return PullRequestsViewModel(
-            logName = "Current Project - PRs",
+            logName = "Current Project",
             sourcesOfTab = setOf(PullRequestListingSource.ProjectOpen, PullRequestListingSource.ProjectResolved),
             scope = PullRequestListScope.CurrentProject,
             initialFilter = initialFilter,
@@ -236,7 +317,7 @@ class PullRequestsViewModelTest {
 
     private fun workspaceViewModel(initialFilter: PullRequestListFilter = PullRequestListFilter()): PullRequestsViewModel {
         return PullRequestsViewModel(
-            logName = "Workspace - PRs",
+            logName = "Workspace",
             sourcesOfTab = setOf(PullRequestListingSource.WorkspaceAuthored, PullRequestListingSource.WorkspaceAssigned),
             scope = PullRequestListScope.Workspace,
             initialFilter = initialFilter,

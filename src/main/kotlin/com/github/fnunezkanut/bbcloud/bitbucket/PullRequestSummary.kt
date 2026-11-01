@@ -18,7 +18,12 @@ data class PullRequestSummary(
     /** Bitbucket account uuid of the author (braces included, as Bitbucket returns it); null when the listing omitted it. */
     val authorUuid: String? = null,
     /** Account uuids of the participants who currently approve the pull request; empty when the listing omitted participants. */
-    val approverUuids: Set<String> = emptySet()
+    val approverUuids: Set<String> = emptySet(),
+    /**
+     * The pull request's reviewers, read from the listing's participants (role `REVIEWER`); empty when the listing
+     * omitted participants or the pull request has no reviewers.
+     */
+    val reviewers: List<PullRequestReviewer> = emptyList()
 )
 
 sealed class PullRequestListResult {

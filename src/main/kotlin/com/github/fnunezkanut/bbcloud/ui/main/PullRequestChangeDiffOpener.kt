@@ -8,6 +8,7 @@ import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vcs.changes.Change
 import com.intellij.openapi.vcs.changes.actions.diff.ChangeDiffRequestProducer
+import com.intellij.openapi.vcs.changes.actions.diff.ShowDiffAction
 
 /**
  * Opens the platform diff of a changed file, the way the old changes browser did when a file was double clicked.
@@ -27,6 +28,18 @@ internal object PullRequestChangeDiffOpener {
                 LOG.info("Opened the diff of a changed file of the pull request")
             } catch (exception: Exception) {
                 LOG.warn("Failed to open the diff of a changed file", exception)
+            }
+        }
+    }
+
+    /** Opens the diff chain of all [changes] positioned at [index], so the file navigation of the diff covers the whole pull request. */
+    fun openInChain(project: Project, changes: List<Change>, index: Int) {
+        ApplicationManager.getApplication().invokeLater {
+            try {
+                ShowDiffAction.showDiffForChange(project, changes, index)
+                LOG.info("Opened the diff chain of ${changes.size} changed file(s) of the pull request at index $index")
+            } catch (exception: Exception) {
+                LOG.warn("Failed to open the diff chain of the changed files", exception)
             }
         }
     }

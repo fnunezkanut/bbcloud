@@ -8,7 +8,8 @@ import javax.swing.JComponent
 
 /**
  * Hides the tool window name the platform draws to the left of the header tabs, so the Bitbucket Cloud PR Review header shows only the
- * Current Projects, Other Projects and Settings tabs.
+ * Current Projects, Other Projects and Settings tabs. The PR Changes tool window uses the same helper, so its header shows only the
+ * `source > destination` content tab.
  *
  * The platform evaluates this only while rebuilding the header, and it walks up from the tool window content component
  * rather than down into the content we contribute, so the property has to be in place before the first content is added
@@ -23,7 +24,7 @@ object BbCloudToolWindowIdLabel {
      * the property up.
      */
     fun hide(component: JComponent) {
-        LOG.debug("Hiding the tool window name to the left of the Bitbucket Cloud PR Review tabs")
+        LOG.debug("Hiding the tool window name in the header of tool window component $component")
         var current: Component? = component
         while (current != null && current !is Window) {
             (current as? JComponent)?.putClientProperty(ToolWindowContentUi.HIDE_ID_LABEL, "true")

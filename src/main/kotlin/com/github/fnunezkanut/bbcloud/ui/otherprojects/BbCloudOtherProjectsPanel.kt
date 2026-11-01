@@ -12,6 +12,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.github.fnunezkanut.bbcloud.BbCloudBundle
+import com.github.fnunezkanut.bbcloud.auth.BbCloudAccessTokenProvider
 import com.github.fnunezkanut.bbcloud.bitbucket.AuthoredPullRequestListResult
 import com.github.fnunezkanut.bbcloud.bitbucket.BbCloudAuthoredPullRequestService
 import com.github.fnunezkanut.bbcloud.bitbucket.BbCloudOpenPullRequestService
@@ -21,18 +22,15 @@ import com.github.fnunezkanut.bbcloud.bitbucket.OkHttpBitbucketPullRequestClient
 import com.github.fnunezkanut.bbcloud.bitbucket.ReviewingPullRequest
 import com.github.fnunezkanut.bbcloud.bitbucket.ReviewingPullRequestListResult
 import com.github.fnunezkanut.bbcloud.config.BbCloudConfigurationService
-import com.github.fnunezkanut.bbcloud.credentials.BbCloudCredentialStore
+import com.github.fnunezkanut.bbcloud.git.BbCloudBranchCheckoutService
 import com.github.fnunezkanut.bbcloud.git.BbCloudWorktreeService
-import com.github.fnunezkanut.bbcloud.git.BitbucketGitRemoteReader
 import com.github.fnunezkanut.bbcloud.git.WorktreeRemovalResult
-import com.github.fnunezkanut.bbcloud.git.WorktreeSetupResult
 import com.github.fnunezkanut.bbcloud.project.LocalRepositoryProjectOpener
 import com.github.fnunezkanut.bbcloud.project.ProjectPruneOutcome
 import com.github.fnunezkanut.bbcloud.project.PullRequestOpenCheck
 import com.github.fnunezkanut.bbcloud.project.PullRequestOpenCheckResult
 import com.github.fnunezkanut.bbcloud.project.PullRequestWorktreeListing
 import com.github.fnunezkanut.bbcloud.project.PullRequestWorktreeResolution
-import com.github.fnunezkanut.bbcloud.project.PullRequestWorktreeResolver
 import com.github.fnunezkanut.bbcloud.project.WatchedProjectMapping
 import com.github.fnunezkanut.bbcloud.project.WatchedProjectWorktreeRow
 import com.github.fnunezkanut.bbcloud.project.WatchedProjectsDiscoveryResult
@@ -41,15 +39,15 @@ import com.github.fnunezkanut.bbcloud.project.WorktreePruneDecision
 import com.github.fnunezkanut.bbcloud.project.WorktreePruneSummary
 import com.github.fnunezkanut.bbcloud.settings.PullRequestListScope
 import com.github.fnunezkanut.bbcloud.ui.components.NotConfiguredContent
-import com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.BbCloudPendingEditorOpen
-import com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.BbCloudPullRequestEditorOpenQueue
+import com.github.fnunezkanut.bbcloud.ui.pullrequest.help.BbCloudWorktreesHelpEditorOpener
 import com.github.fnunezkanut.bbcloud.ui.pullrequests.PullRequestExcludeCheckboxes
-import com.github.fnunezkanut.bbcloud.ui.pullrequests.PullRequestListEntry
 import com.github.fnunezkanut.bbcloud.ui.pullrequests.PullRequestListingSource
-import com.github.fnunezkanut.bbcloud.ui.pullrequests.PullRequestsCard
 import com.github.fnunezkanut.bbcloud.ui.pullrequests.PullRequestsListingBody
 import com.github.fnunezkanut.bbcloud.ui.pullrequests.PullRequestsViewModel
+import com.github.fnunezkanut.bbcloud.ui.worktree.PullRequestWorktreeOpener
 import com.github.fnunezkanut.bbcloud.ui.worktree.WorktreeBranchCollisionDialog
+import com.github.fnunezkanut.bbcloud.ui.worktree.WorktreeBranchCollisionResolver
+import com.github.fnunezkanut.bbcloud.ui.worktree.WorktreeOpenOutcome
 import com.intellij.ide.BrowserUtil
 import com.intellij.notification.NotificationAction
 import com.intellij.notification.NotificationGroupManager
@@ -77,7 +75,7 @@ import kotlinx.coroutines.coroutineScope as coroutineScopeBlock
 
 /**
  * Coordinator for the Workspace scope that owns the shared data and UI for:
- *   - The Workspace - PRs tab: one merged listing of the pull requests the user opened and the pull requests assigned
+ *   - The Workspace tab: one merged listing of the pull requests the user opened and the pull requests assigned
  *     to the user for review, driven by the reusable PullRequestsViewModel (sources WorkspaceAuthored and
  *     WorkspaceAssigned).
  *   - The Workspace - Watched Projects tab: projects directory selection and the discovered project list.
@@ -97,16 +95,25 @@ class BbCloudOtherProjectsPanel(
 
     /** Re-checks with Bitbucket whether a pull request is still open at click time, keyed by the row's workspace and slug. */
     private val openPullRequestService = BbCloudOpenPullRequestService(
-        credentialStore = ApplicationManager.getApplication().service<BbCloudCredentialStore>(),
+        accessTokenProvider = ApplicationManager.getApplication().service<BbCloudAccessTokenProvider>(),
         pullRequestClient = OkHttpBitbucketPullRequestClient()
+    )
+
+    /** Switches the current checkout off a colliding PR branch; used only when the colliding clone is this window's own. */
+    private val branchCheckoutService = BbCloudBranchCheckoutService()
+
+    /** Shared resolution of a work-tree branch collision: switch this window to main, or warn, or fall back to the modal. */
+    private val collisionResolver = WorktreeBranchCollisionResolver(
+        branchCheckoutService = branchCheckoutService,
+        openPullRequestService = openPullRequestService
     )
 
     /** Prevents repeated prune requests for all watched projects while the first request is running. */
     private val pruneAllInProgress = AtomicBoolean(false)
 
-    // The one merged Workspace - PRs view model (sources WorkspaceAuthored and WorkspaceAssigned).
+    // The one merged Workspace view model (sources WorkspaceAuthored and WorkspaceAssigned).
     private val workspacePullRequestsViewModel = PullRequestsViewModel(
-        logName = "Workspace - PRs",
+        logName = "Workspace",
         sourcesOfTab = setOf(PullRequestListingSource.WorkspaceAuthored, PullRequestListingSource.WorkspaceAssigned),
         scope = PullRequestListScope.Workspace,
         initialFilter = configurationService.pullRequestListFilter(scope = PullRequestListScope.Workspace),
@@ -117,33 +124,44 @@ class BbCloudOtherProjectsPanel(
         onOpenTitleCallback = { entry -> startOpenPullRequestInWorktree(pullRequest = entry.pullRequest) },
         onOpenPrOnWebCallback = { entry -> openPrOnWebForPullRequest(entry.pullRequest) },
         onOpenRepositoryCallback = { entry -> openRepositoryForPullRequest(entry.pullRequest) },
-        onCountsChanged = { openCount, card -> updateWorkspaceOpenCount(openCount = openCount, card = card) }
+        onCountsChanged = { openCount, card -> workspaceHeaderViewModel.setOpenCount(openCount = openCount, card = card) }
     )
     private val watchedProjectsViewModel = WatchedProjectsViewModel(
         coroutineScope = coroutineScope,
-        onWatchedChangedCallback = { mapping, watched ->
-            configurationService.setWatched(mapping = mapping, watched = watched)
-            refreshWatchedRows()
+        dataSource = ConfigurationWatchedProjectsDataSource(configurationService = configurationService),
+        onShowContentCallback = { watchedProjectsCard.value = ViewCard.Content },
+        onShowNotConfiguredCallback = ::showWatchedProjectsNotConfigured,
+        onProjectsDirectoryUnreadableCallback = {
+            Messages.showWarningDialog(
+                watchedProjectsTabComponent,
+                BbCloudBundle.message("workspace.watchedProjects.sync.unreadable.message"),
+                BbCloudBundle.message("workspace.watchedProjects.sync.unreadable.title")
+            )
         },
-        onAllWatchedChangedCallback = { watched ->
-            configurationService.setAllWatched(watched = watched)
-            refreshWatchedRows()
-        },
-        onSyncRequestedCallback = { rescanWatchedProjects() },
         onOpenLocalProjectCallback = ::openLocalCheckoutProject,
         onOpenWorktreeCallback = ::openWatchedPrWorktree,
-        onPruneWorktreesCallback = ::pruneAllWatchedWorktrees
+        onPruneWorktreesCallback = ::pruneAllWatchedWorktrees,
+        onOpenWorktreesHelpCallback = ::openWorktreesHelp
     )
 
-    // One workspace header for the merged Workspace - PRs tab root.
+    // One workspace header for the merged Workspace tab root.
     private val workspaceHeaderViewModel = WorkspaceHeaderViewModel(onRefreshRequested = onRefreshRequested)
 
     /** The two cards of each Workspace tab root, driven by Compose state instead of a Swing CardLayout. */
     private val workspacePrsCard: MutableState<ViewCard> = mutableStateOf(ViewCard.Content)
     private val watchedProjectsCard: MutableState<ViewCard> = mutableStateOf(ViewCard.Content)
 
-    /** Counter so overlapping loads keep the refresh button disabled until all finish. */
-    private var activeLoadCount = 0
+    private val workspacePullRequestsLoader = WorkspacePullRequestsLoader(
+        pullRequestsViewModel = workspacePullRequestsViewModel,
+        headerViewModel = workspaceHeaderViewModel,
+        dataSource = ServiceWorkspacePullRequestsDataSource(
+            configurationService = configurationService,
+            authoredPullRequestService = authoredPullRequestService,
+            reviewQueueService = reviewQueueService
+        ),
+        onShowContentCallback = { workspacePrsCard.value = ViewCard.Content },
+        onShowNotConfiguredCallback = { workspacePrsCard.value = ViewCard.NotConfigured }
+    )
 
     val workspacePrsTabComponent: JComponent = compose {
         WorkspaceRootContent(
@@ -178,53 +196,9 @@ class BbCloudOtherProjectsPanel(
         )
     }
 
-    /**
-     * Shows the persisted mappings of the current workspace on the Watched Projects tab, or routes to the generic
-     * not-configured card when no projects directory is set. Does not rescan: a rescan runs only after a directory is
-     * chosen, or a workspace slug change is saved in Settings (see [rescanWatchedProjects] and
-     * [BbCloudConfigurationService.saveSetup]).
-     */
+    /** See [WatchedProjectsViewModel.bindWatchedProjects]. */
     fun bindWatchedProjects() {
-        LOG.debug("Binding the Workspace - Watched Projects tab")
-        val projectsDirectory = configurationService.projectsDirectoryOrNull()
-        if (projectsDirectory == null) {
-            LOG.info("Watched Projects: projects directory not set; prompting for Settings")
-            // Route to the generic centered not-configured card (R2) rather than the directory-specific prompt with
-            // the status row still visible. Hide the Sync button as well, since the content card is not shown.
-            watchedProjectsViewModel.setSyncVisible(false)
-            showWatchedProjectsNotConfigured()
-            return
-        }
-        watchedProjectsViewModel.setSyncVisible(true)
-        watchedProjectsViewModel.setSyncEnabled(true)
-        // Avatar URLs come from plugin storage (written on Sync), so this bind makes no Bitbucket API call. The only
-        // network is the unauthenticated public-CDN image prefetch kicked off inside showResult.
-        watchedProjectsViewModel.showResult(
-            mappings = configurationService.watchedProjectsForCurrentWorkspaceWithLocalPaths(),
-            organizationUrl = configurationService.organizationUrlOrNull(),
-            avatarUrlBySlug = configurationService.repoAvatarUrlsForCurrentWorkspace(),
-            coroutineScope = coroutineScope,
-            workTreeDirectory = watchedWorkTreeDirectoryOrNull()
-        )
-        watchedProjectsCard.value = ViewCard.Content
-    }
-
-    /**
-     * Reloads the rows of the Watched Projects table from the stored list after a watched flag changed. No rescan runs:
-     * the flag is a local choice and the list itself does not change.
-     */
-    private fun refreshWatchedRows() {
-        // A watched-flag toggle does not change the avatar-URL set, so no avatar rebind is needed here; the ViewModel
-        // keeps resolving icons from the already-bound slug-to-URL map.
-        watchedProjectsViewModel.refreshRows(
-            mappings = configurationService.watchedProjectsForCurrentWorkspaceWithLocalPaths(),
-            workTreeDirectory = watchedWorkTreeDirectoryOrNull(),
-            coroutineScope = coroutineScope
-        )
-    }
-
-    private fun watchedWorkTreeDirectoryOrNull(): Path? {
-        return configurationService.workTreeDirectoryOrNull()?.let { directory -> Path.of(directory) }
+        watchedProjectsViewModel.bindWatchedProjects()
     }
 
     /**
@@ -238,77 +212,11 @@ class BbCloudOtherProjectsPanel(
     }
 
     /**
-     * Scans and verifies the projects directory, then shows the outcome of the rescan on the Workspace - Watched
-     * Projects tab. Public so the tool window can trigger the scan after the Settings projects directory is chosen,
-     * keeping the scan and the Watched Projects UI update owned here.
-     *
-     * Pass [clearFirst] = true when the scan follows a configuration change (a chosen projects directory), so the
-     * watched map is emptied before discovery and rediscovered repositories come in unwatched. The Sync button leaves
-     * it false, which carries over the user's existing watched choices for repositories that are found again.
+     * Public so the tool window can trigger the scan after the Settings projects directory is chosen, keeping the scan
+     * and the Watched Projects UI update owned by this tab. See [WatchedProjectsViewModel.rescanWatchedProjects].
      */
     fun rescanWatchedProjects(clearFirst: Boolean = false) {
-        val organizationUrl = configurationService.organizationUrlOrNull()
-        if (organizationUrl == null || configurationService.projectsDirectoryOrNull() == null) {
-            bindWatchedProjects()
-            return
-        }
-
-        watchedProjectsViewModel.setSyncEnabled(false)
-        watchedProjectsViewModel.showLoading()
-        coroutineScope.launch {
-            val result = configurationService.rescanWatchedProjects(clearFirst = clearFirst)
-            ApplicationManager.getApplication().invokeLater {
-                showRescanResult(result = result, organizationUrl = organizationUrl)
-            }
-        }
-    }
-
-    private fun showRescanResult(result: WatchedProjectsDiscoveryResult, organizationUrl: String) {
-        when (result) {
-            is WatchedProjectsDiscoveryResult.Success -> {
-                val mappings = configurationService.watchedProjectsForCurrentWorkspaceWithLocalPaths()
-                LOG.info("Watched projects rescan succeeded: ${mappings.size} projects")
-                // The persisted avatar-URL map was already updated by rescanWatchedProjects before this UI read.
-                watchedProjectsViewModel.showResult(
-                    mappings = mappings,
-                    organizationUrl = organizationUrl,
-                    avatarUrlBySlug = configurationService.repoAvatarUrlsForCurrentWorkspace(),
-                    coroutineScope = coroutineScope,
-                    workTreeDirectory = watchedWorkTreeDirectoryOrNull()
-                )
-            }
-            is WatchedProjectsDiscoveryResult.VerifyFailed -> {
-                LOG.info("Watched projects rescan could not be verified; previous projects kept")
-                watchedProjectsViewModel.showResult(
-                    mappings = configurationService.watchedProjectsForCurrentWorkspaceWithLocalPaths(),
-                    organizationUrl = organizationUrl,
-                    rescanFailed = true,
-                    avatarUrlBySlug = configurationService.repoAvatarUrlsForCurrentWorkspace(),
-                    coroutineScope = coroutineScope,
-                    workTreeDirectory = watchedWorkTreeDirectoryOrNull()
-                )
-            }
-            is WatchedProjectsDiscoveryResult.ProjectsDirectoryUnreadable -> {
-                LOG.warn("Projects directory is not readable; watched projects cleared")
-                Messages.showWarningDialog(
-                    watchedProjectsTabComponent,
-                    BbCloudBundle.message("workspace.watchedProjects.sync.unreadable.message"),
-                    BbCloudBundle.message("workspace.watchedProjects.sync.unreadable.title")
-                )
-                watchedProjectsViewModel.showResult(
-                    mappings = configurationService.watchedProjectsForCurrentWorkspaceWithLocalPaths(),
-                    organizationUrl = organizationUrl,
-                    avatarUrlBySlug = configurationService.repoAvatarUrlsForCurrentWorkspace(),
-                    coroutineScope = coroutineScope,
-                    workTreeDirectory = watchedWorkTreeDirectoryOrNull()
-                )
-            }
-            is WatchedProjectsDiscoveryResult.NotConfigured -> {
-                LOG.info("Cannot rescan watched projects: not configured")
-                watchedProjectsViewModel.showEmpty()
-            }
-        }
-        watchedProjectsViewModel.setSyncEnabled(true)
+        watchedProjectsViewModel.rescanWatchedProjects(clearFirst = clearFirst)
     }
 
     fun showWatchedProjectsNotConfigured() {
@@ -317,170 +225,16 @@ class BbCloudOtherProjectsPanel(
     }
 
     fun showNotConfigured() {
-        workspaceHeaderViewModel.setRefreshVisible(false)
-        workspaceHeaderViewModel.setRefreshEnabled(false)
-        workspacePullRequestsViewModel.showHidden()
-        workspacePrsCard.value = ViewCard.NotConfigured
+        workspacePullRequestsLoader.showNotConfigured()
     }
 
-    /**
-     * Updates the Workspace - PRs header open-count pill from the view model's counts callback. [openCount] is the
-     * number of visible open rows after the Exclude filters, so toggling an Exclude checkbox that hides open rows
-     * updates the pill. The pill is hidden on the Hidden, Loading, and Error cards, matching the Current Project - PRs
-     * header's visibility rule.
-     */
-    private fun updateWorkspaceOpenCount(openCount: Int, card: PullRequestsCard) {
-        workspaceHeaderViewModel.setOpenCount(
-            text = openCount.toString(),
-            visible = card != PullRequestsCard.Hidden &&
-                card != PullRequestsCard.Loading &&
-                card != PullRequestsCard.Error
-        )
-    }
-
-    /**
-     * Loads both Workspace - PRs sources under one refresh generation, so a single Refresh starts one generation and a
-     * slow response of one source cannot overwrite a newer load of the other.
-     */
+    /** See [WorkspacePullRequestsLoader.loadWorkspacePullRequests]. */
     fun loadWorkspacePullRequests(excludedRepoSlug: String?, coroutineScope: CoroutineScope) {
-        val generation = workspacePullRequestsViewModel.beginRefresh()
-        loadAuthored(excludedRepoSlug = excludedRepoSlug, generation = generation, coroutineScope = coroutineScope)
-        loadReviewing(excludedRepoSlug = excludedRepoSlug, generation = generation, coroutineScope = coroutineScope)
+        workspacePullRequestsLoader.loadWorkspacePullRequests(excludedRepoSlug = excludedRepoSlug, coroutineScope = coroutineScope)
     }
 
-    private fun loadAuthored(excludedRepoSlug: String?, generation: Long, coroutineScope: CoroutineScope) {
-        val organizationUrl = configurationService.organizationUrlOrNull()
-        if (organizationUrl == null) {
-            LOG.info("Cannot load authored PRs: no organization URL")
-            workspacePullRequestsViewModel.failSource(generation = generation, source = PullRequestListingSource.WorkspaceAuthored)
-            return
-        }
-        val workspaceOverviewUrl = BitbucketRepositoryUrls.workspaceOverviewUrl(organizationUrl)
-        val workspaceName = BitbucketRepositoryUrls.workspaceFromOrganizationUrl(organizationUrl)
-        workspaceHeaderViewModel.setWorkspaceUrl(url = workspaceOverviewUrl, name = workspaceName)
-        workspaceHeaderViewModel.setRefreshVisible(true)
-        workspacePrsCard.value = ViewCard.Content
-        beginLoad()
-        coroutineScope.launch {
-            val result = authoredPullRequestService.listAuthoredPullRequests(
-                organizationUrl = organizationUrl,
-                excludedRepoSlug = excludedRepoSlug
-            )
-            ApplicationManager.getApplication().invokeLater {
-                showAuthoredResult(result = result, generation = generation, coroutineScope = coroutineScope)
-                endLoad()
-            }
-        }
-    }
-
-    private fun loadReviewing(excludedRepoSlug: String?, generation: Long, coroutineScope: CoroutineScope) {
-        val organizationUrl = configurationService.organizationUrlOrNull()
-        val projectsDirectory = configurationService.projectsDirectoryOrNull()
-        val workspaceOverviewUrl = organizationUrl?.let { BitbucketRepositoryUrls.workspaceOverviewUrl(it) }
-        val workspaceName = organizationUrl?.let { BitbucketRepositoryUrls.workspaceFromOrganizationUrl(it) }
-        workspaceHeaderViewModel.setWorkspaceUrl(url = workspaceOverviewUrl, name = workspaceName)
-        workspaceHeaderViewModel.setRefreshVisible(workspaceOverviewUrl != null)
-        if (organizationUrl == null) {
-            LOG.info("Cannot load reviewing PRs: no organization URL")
-            workspacePullRequestsViewModel.failSource(generation = generation, source = PullRequestListingSource.WorkspaceAssigned)
-            return
-        }
-        if (projectsDirectory == null) {
-            LOG.info("Assigned PRs: projects directory not set; prompting for Settings")
-            // Route to the generic centered not-configured card (R2) rather than showing partial content with the
-            // header still visible. showNotConfigured switches the single Workspace - PRs root and hides its refresh
-            // button.
-            showNotConfigured()
-            return
-        }
-        val repoSlugs = configurationService.watchedRepoSlugsForCurrentWorkspace()
-        if (repoSlugs.isEmpty()) {
-            LOG.info("No watched projects are enabled for the current workspace, so no pull requests to review are listed")
-        }
-        workspaceHeaderViewModel.setRefreshVisible(true)
-        workspacePrsCard.value = ViewCard.Content
-        beginLoad()
-        coroutineScope.launch {
-            val result = reviewQueueService.listReviewingPullRequests(
-                organizationUrl = organizationUrl,
-                excludedRepoSlug = excludedRepoSlug,
-                repoSlugs = repoSlugs
-            )
-            ApplicationManager.getApplication().invokeLater {
-                showReviewingResult(result = result, generation = generation, coroutineScope = coroutineScope)
-                endLoad()
-            }
-        }
-    }
-
-    private fun showAuthoredResult(result: AuthoredPullRequestListResult, generation: Long, coroutineScope: CoroutineScope) {
-        when (result) {
-            is AuthoredPullRequestListResult.Success -> {
-                // The repository avatar lookup is copied verbatim from WorkspaceMyPullRequestsViewModel.showResult: the
-                // persisted URL map is keyed by the raw repoSlug, with no lowercasing.
-                val avatarUrlBySlug = configurationService.repoAvatarUrlsForCurrentWorkspace()
-                val entries = result.pullRequests.map { pullRequest ->
-                    PullRequestListEntry(
-                        pullRequest = pullRequest,
-                        source = PullRequestListingSource.WorkspaceAuthored,
-                        repoAvatarUrl = avatarUrlBySlug[pullRequest.repoSlug]
-                    )
-                }
-                workspacePullRequestsViewModel.applySource(
-                    generation = generation,
-                    source = PullRequestListingSource.WorkspaceAuthored,
-                    entries = entries,
-                    isTruncated = result.isTruncated,
-                    currentUserUuid = result.currentUserUuid,
-                    coroutineScope = coroutineScope
-                )
-            }
-            is AuthoredPullRequestListResult.Failed -> {
-                if (result.cause != null) {
-                    LOG.warn("Could not load the pull requests you opened", result.cause)
-                } else {
-                    LOG.warn("Could not load the pull requests you opened")
-                }
-                workspacePullRequestsViewModel.failSource(generation = generation, source = PullRequestListingSource.WorkspaceAuthored)
-            }
-        }
-    }
-
-    private fun showReviewingResult(result: ReviewingPullRequestListResult, generation: Long, coroutineScope: CoroutineScope) {
-        when (result) {
-            is ReviewingPullRequestListResult.Success -> {
-                // The repository avatar lookup is copied verbatim from WorkspaceAssignedPullRequestsViewModel.showResult:
-                // the persisted URL map is keyed by the raw repoSlug, with no lowercasing.
-                val avatarUrlBySlug = configurationService.repoAvatarUrlsForCurrentWorkspace()
-                val entries = result.pullRequests.map { pullRequest ->
-                    PullRequestListEntry(
-                        pullRequest = pullRequest,
-                        source = PullRequestListingSource.WorkspaceAssigned,
-                        repoAvatarUrl = avatarUrlBySlug[pullRequest.repoSlug]
-                    )
-                }
-                workspacePullRequestsViewModel.applySource(
-                    generation = generation,
-                    source = PullRequestListingSource.WorkspaceAssigned,
-                    entries = entries,
-                    isTruncated = result.isTruncated,
-                    currentUserUuid = result.currentUserUuid,
-                    coroutineScope = coroutineScope
-                )
-            }
-            is ReviewingPullRequestListResult.Failed -> {
-                if (result.cause != null) {
-                    LOG.warn("Could not load the pull requests to review", result.cause)
-                } else {
-                    LOG.warn("Could not load the pull requests to review")
-                }
-                workspacePullRequestsViewModel.failSource(generation = generation, source = PullRequestListingSource.WorkspaceAssigned)
-            }
-        }
-    }
-
-    /** Guards against duplicate open coroutines for the same worktree path. Mutated on the EDT only. */
-    private val worktreesInProgress = mutableSetOf<Path>()
+    /** The shared open flow. It also guards against duplicate opens of the same worktree path. */
+    private val worktreeOpener = PullRequestWorktreeOpener.getInstance()
 
     private fun openPrOnWebForPullRequest(pullRequest: ReviewingPullRequest) {
         val url = pullRequest.summary.webUrl
@@ -537,10 +291,7 @@ class BbCloudOtherProjectsPanel(
         val summary = pullRequest.summary
         LOG.info("User requested to open pull request #${summary.id} of ${pullRequest.repoSlug} in its own work tree")
 
-        val resolution = PullRequestWorktreeResolver.resolve(
-            mappings = configurationService.watchedProjectsForCurrentWorkspaceWithLocalPaths(),
-            workTreeDirectory = configurationService.workTreeDirectoryOrNull(),
-            projectsDirectory = configurationService.projectsDirectoryOrNull(),
+        val resolution = worktreeOpener.resolve(
             workspace = pullRequest.workspace,
             repoSlug = pullRequest.repoSlug,
             prNumber = summary.id
@@ -570,37 +321,25 @@ class BbCloudOtherProjectsPanel(
         }
 
         val worktreePath = resolved.worktreePath
-        if (!worktreesInProgress.add(worktreePath)) {
+        if (!worktreeOpener.tryBeginOpen(worktreePath = worktreePath)) {
             LOG.info("Opening pull request #${summary.id} is already in progress for $worktreePath")
             return
         }
 
         coroutineScope.launch {
             try {
-                val preparation = runWorktreeModal(pullRequest = pullRequest, resolution = resolved)
-                when (preparation) {
-                    is WorktreePreparation.Prepared -> {
-                        openWorktreeProjectAndEditor(pullRequest = pullRequest, worktreePath = preparation.worktreePath)
+                // Attempt 1. On a branch collision, try one automatic switch to the main branch and retry (decision
+                // 8a). This tab can open PRs of the current repository too, so the auto-switch applies when the clone
+                // on the PR branch is this window's checkout; otherwise the resolver falls back to the modal.
+                val firstAttempt = runWorktreeModal(pullRequest = pullRequest, resolution = resolved)
+                if (firstAttempt is WorktreeOpenOutcome.BranchCollision) {
+                    val switched = resolveBranchCollision(pullRequest = pullRequest, preparation = firstAttempt)
+                    if (switched) {
+                        val secondAttempt = runWorktreeModal(pullRequest = pullRequest, resolution = resolved)
+                        handleWorktreePreparation(pullRequest = pullRequest, preparation = secondAttempt)
                     }
-                    is WorktreePreparation.Failed -> {
-                        // D-2: every failure stops here and shows an error popup with a clickable Bitbucket link; it
-                        // never redirects automatically.
-                        showWorktreeErrorNotification(pullRequest = pullRequest, content = preparation.content)
-                    }
-                    is WorktreePreparation.BranchCheckedOutInSource -> {
-                        // The source clone is on the PR branch; show the explanatory modal rather than the raw git
-                        // balloon. The modal marshals to and blocks on the EDT itself, so call it directly here.
-                        val choice = WorktreeBranchCollisionDialog.show(
-                            project = project,
-                            prNumber = summary.id,
-                            branchName = preparation.branchName,
-                            sourceCheckoutPath = preparation.sourceCheckoutPath
-                        )
-                        if (choice == WorktreeBranchCollisionDialog.Choice.OPEN_IN_BITBUCKET) {
-                            LOG.info("User opened Bitbucket PR #${summary.id} from the branch-collision modal")
-                            BrowserUtil.browse(summary.webUrl)
-                        }
-                    }
+                } else {
+                    handleWorktreePreparation(pullRequest = pullRequest, preparation = firstAttempt)
                 }
             } catch (exception: CancellationException) {
                 // D-2: the user cancelled the modal mid-preparation; cleanup already ran in the worktree service, and
@@ -609,130 +348,112 @@ class BbCloudOtherProjectsPanel(
                 throw exception
             } finally {
                 ApplicationManager.getApplication().invokeLater {
-                    worktreesInProgress.remove(worktreePath)
+                    worktreeOpener.endOpen(worktreePath = worktreePath)
                 }
             }
         }
     }
 
-    private sealed interface WorktreePreparation {
-        data class Prepared(val worktreePath: Path) : WorktreePreparation
+    /**
+     * Handles a [runWorktreeModal] result, shared by the first and the retried attempt: opens the work tree project,
+     * shows the failure balloon, or shows the fallback collision modal. A [WorktreeOpenOutcome.BranchCollision]
+     * here is a collision that could not be (or was already) auto-resolved, so it always shows the explanatory modal.
+     */
+    private suspend fun handleWorktreePreparation(pullRequest: ReviewingPullRequest, preparation: WorktreeOpenOutcome) {
+        val summary = pullRequest.summary
+        when (preparation) {
+            is WorktreeOpenOutcome.Prepared -> {
+                openWorktreeProjectAndEditor(pullRequest = pullRequest, prepared = preparation)
+            }
+            is WorktreeOpenOutcome.Failed -> {
+                // D-2: every failure stops here and shows an error popup with a clickable Bitbucket link; it
+                // never redirects automatically.
+                showWorktreeErrorNotification(pullRequest = pullRequest, content = preparation.content)
+            }
+            is WorktreeOpenOutcome.BranchCollision -> {
+                // The source clone is on the PR branch; show the explanatory modal rather than the raw git
+                // balloon. The modal marshals to and blocks on the EDT itself, so call it directly here.
+                val choice = WorktreeBranchCollisionDialog.show(
+                    project = project,
+                    prNumber = summary.id,
+                    branchName = preparation.branchName,
+                    sourceCheckoutPath = preparation.sourceCheckoutPath
+                )
+                if (choice == WorktreeBranchCollisionDialog.Choice.OPEN_IN_BITBUCKET) {
+                    LOG.info("User opened Bitbucket PR #${summary.id} from the branch-collision modal")
+                    BrowserUtil.browse(summary.webUrl)
+                }
+            }
+        }
+    }
 
-        /**
-         * Worktree preparation failed (decision D-2). [content] is the already-localized popup body for the failure:
-         * the real git output for a worktree-git failure, or a bundle message for a precondition failure (no
-         * organization URL, pull request no longer open, not a git repository). The caller shows an error balloon with
-         * [content] and a clickable link to the pull request on Bitbucket, and does NOT redirect automatically.
-         */
-        data class Failed(val content: String) : WorktreePreparation
-
-        /**
-         * The source clone is currently on the pull request branch, so the work tree could not be created. The caller
-         * shows the explanatory [WorktreeBranchCollisionDialog] modal instead of the error balloon.
-         */
-        data class BranchCheckedOutInSource(val branchName: String, val sourceCheckoutPath: Path) : WorktreePreparation
+    /**
+     * Tries to free the pull request branch by switching the current checkout to the main branch via the shared
+     * [WorktreeBranchCollisionResolver]. Returns true when the switch succeeded (the caller retries the work tree),
+     * false when the resolver already handled the collision or when the collision must fall back to the explanatory
+     * modal, which this method shows itself.
+     */
+    private suspend fun resolveBranchCollision(pullRequest: ReviewingPullRequest, preparation: WorktreeOpenOutcome.BranchCollision): Boolean {
+        val summary = pullRequest.summary
+        val resolution = collisionResolver.resolve(
+            project = project,
+            workspace = pullRequest.workspace,
+            repoSlug = pullRequest.repoSlug,
+            summary = summary,
+            branchName = preparation.branchName,
+            sourceCheckoutPath = preparation.sourceCheckoutPath
+        )
+        return when (resolution) {
+            WorktreeBranchCollisionResolver.CollisionResolution.Switched -> {
+                ApplicationManager.getApplication().invokeLater {
+                    onRefreshRequested()
+                }
+                true
+            }
+            WorktreeBranchCollisionResolver.CollisionResolution.Handled -> {
+                false
+            }
+            WorktreeBranchCollisionResolver.CollisionResolution.ShowDialog -> {
+                val choice = WorktreeBranchCollisionDialog.show(
+                    project = project,
+                    prNumber = summary.id,
+                    branchName = preparation.branchName,
+                    sourceCheckoutPath = preparation.sourceCheckoutPath
+                )
+                if (choice == WorktreeBranchCollisionDialog.Choice.OPEN_IN_BITBUCKET) {
+                    LOG.info("User opened Bitbucket PR #${summary.id} from the branch-collision modal")
+                    BrowserUtil.browse(summary.webUrl)
+                }
+                false
+            }
+        }
     }
 
     /**
      * Runs the "Loading PR in its own git work tree" modal, which re-checks the pull request state and prepares the
-     * worktree. The modal uses an application-level owner because the worktree project does not exist yet and the
-     * current project must not be blocked. The project window is opened AFTER this returns, so the modal has already
-     * closed when the new frame appears (requirement #6).
+     * worktree through [PullRequestWorktreeOpener]. The modal uses an application-level owner because the worktree
+     * project does not exist yet and the current project must not be blocked. The project window is opened AFTER this
+     * returns, so the modal has already closed when the new frame appears (requirement #6).
      */
-    private suspend fun runWorktreeModal(pullRequest: ReviewingPullRequest, resolution: PullRequestWorktreeResolution.Resolved): WorktreePreparation {
+    private suspend fun runWorktreeModal(pullRequest: ReviewingPullRequest, resolution: PullRequestWorktreeResolution.Resolved): WorktreeOpenOutcome {
         val summary = pullRequest.summary
         val organizationUrl = configurationService.organizationUrlOrNull()
         if (organizationUrl == null) {
             LOG.info("Cannot open pull request #${summary.id}: no organization URL configured")
-            return WorktreePreparation.Failed(content = BbCloudBundle.message("otherProjects.worktree.failed.noOrgUrl"))
+            return WorktreeOpenOutcome.Failed(content = BbCloudBundle.message("otherProjects.worktree.failed.noOrgUrl"))
         }
         return withModalProgress(
             owner = ModalTaskOwner.guess(),
             title = BbCloudBundle.message("otherProjects.worktree.modalTitle"),
             cancellation = TaskCancellation.cancellable()
         ) {
-            // Requirement #1: verify the pull request is still open before touching the disk.
-            val checkResult = checkStillOpen(
-                pullRequest = pullRequest,
-                organizationUrl = organizationUrl
-            )
-            if (checkResult != null) {
-                return@withModalProgress checkResult
-            }
-
-            // Requirements #2-#4: create the folder, add the worktree, and set it to the pull request branch.
-            val remoteUrl = withContext(Dispatchers.IO) {
-                BitbucketGitRemoteReader.readRemoteUrl(checkoutRoot = resolution.sourceCheckoutPath)
-            }
-            if (remoteUrl == null) {
-                LOG.info("Cannot open pull request #${summary.id}: source checkout is not a git repository or has no origin remote")
-                return@withModalProgress WorktreePreparation.Failed(
-                    content = BbCloudBundle.message("otherProjects.worktree.failed.notAGitRepo")
-                )
-            }
-            val setupResult = worktreeService.ensureWorktree(
-                sourceCheckoutRoot = resolution.sourceCheckoutPath,
-                worktreePath = resolution.worktreePath,
-                remoteUrl = remoteUrl,
-                prNumber = summary.id,
-                sourceBranch = summary.sourceBranch
-            )
-            when (setupResult) {
-                is WorktreeSetupResult.Success -> {
-                    WorktreePreparation.Prepared(worktreePath = setupResult.worktreePath)
-                }
-                is WorktreeSetupResult.Failed -> {
-                    LOG.warn("Could not prepare the work tree for pull request #${summary.id}: ${setupResult.output}", setupResult.cause)
-                    // D-2: the worktree could not be created on the source branch; carry the real git output so the
-                    // caller can show it in the error popup. There is no automatic Bitbucket redirect.
-                    WorktreePreparation.Failed(content = setupResult.output)
-                }
-                is WorktreeSetupResult.BranchCheckedOutInSource -> {
-                    LOG.info(
-                        "Cannot open pull request #${summary.id} in its own work tree: " +
-                            "the current checkout is on the PR branch '${setupResult.branchName}'"
-                    )
-                    WorktreePreparation.BranchCheckedOutInSource(
-                        branchName = setupResult.branchName,
-                        sourceCheckoutPath = setupResult.sourceCheckoutPath
-                    )
-                }
-            }
-        }
-    }
-
-    /** Returns a failed preparation when the pull request is no longer open or its state cannot be verified, or null when it is still open. */
-    private suspend fun checkStillOpen(pullRequest: ReviewingPullRequest, organizationUrl: String): WorktreePreparation.Failed? {
-        val summary = pullRequest.summary
-        val details = try {
-            openPullRequestService.pullRequestDetailsFor(
+            worktreeOpener.prepareWorktree(
                 workspace = pullRequest.workspace,
                 repoSlug = pullRequest.repoSlug,
+                prNumber = summary.id,
                 organizationUrl = organizationUrl,
-                pullRequestId = summary.id
+                resolved = resolution
             )
-        } catch (exception: CancellationException) {
-            throw exception
-        } catch (exception: Exception) {
-            LOG.warn("PR state check failed for pull request #${summary.id}", exception)
-            return WorktreePreparation.Failed(content = BbCloudBundle.message("otherProjects.worktree.failed.prStateCheckFailed", summary.id))
-        }
-        return when (val checkResult = PullRequestOpenCheck.evaluate(details = details)) {
-            is PullRequestOpenCheckResult.StillOpen -> {
-                null
-            }
-            is PullRequestOpenCheckResult.NotOpen -> {
-                LOG.info("Cannot open pull request #${summary.id}: it is ${checkResult.state} (no longer open)")
-                WorktreePreparation.Failed(content = BbCloudBundle.message("otherProjects.worktree.failed.prNotOpen", summary.id, checkResult.state))
-            }
-            is PullRequestOpenCheckResult.NotFound -> {
-                LOG.info("Cannot open pull request #${summary.id}: not found on Bitbucket")
-                WorktreePreparation.Failed(content = BbCloudBundle.message("otherProjects.worktree.failed.prNotFound", summary.id))
-            }
-            is PullRequestOpenCheckResult.Failed -> {
-                LOG.warn("PR state check failed for pull request #${summary.id}", checkResult.cause)
-                WorktreePreparation.Failed(content = BbCloudBundle.message("otherProjects.worktree.failed.prStateCheckFailed", summary.id))
-            }
         }
     }
 
@@ -741,53 +462,31 @@ class BbCloudOtherProjectsPanel(
      * window. The returned project result identifies the target window; the tab is opened against it so it never lands in
      * the current window (the hard constraint, requirement #7).
      */
-    private suspend fun openWorktreeProjectAndEditor(pullRequest: ReviewingPullRequest, worktreePath: Path) {
-        val openedProject = LocalRepositoryProjectOpener.openOrFocus(
+    private suspend fun openWorktreeProjectAndEditor(pullRequest: ReviewingPullRequest, prepared: WorktreeOpenOutcome.Prepared) {
+        val openedProject = worktreeOpener.openProjectAndEditor(
+            summary = prepared.summary,
+            workspace = pullRequest.workspace,
             repoSlug = pullRequest.repoSlug,
-            checkoutPath = worktreePath
+            organizationUrl = configurationService.organizationUrlOrNull(),
+            worktreePath = prepared.worktreePath
         )
         if (openedProject == null) {
-            LOG.info("Cannot open pull request #${pullRequest.summary.id}: the IDE could not open the work tree project")
             showWorktreeErrorNotification(
                 pullRequest = pullRequest,
                 content = BbCloudBundle.message("otherProjects.worktree.failed.openProjectFailed")
             )
-            return
         }
-        openPullRequestEditor(openedProject = openedProject, pullRequest = pullRequest)
     }
 
-    /**
-     * Opens the pull request editor in the target project window using the Bitbucket repository slug of the watched
-     * entry. Failures are logged but never shown as balloons, so the user keeps working in the checkout.
-     */
+    /** Queues the pull request editor in the window [openedProject]; the editor logic lives in [PullRequestWorktreeOpener]. */
     private fun openPullRequestEditor(openedProject: LocalRepositoryProjectOpener.OpenedProject, pullRequest: ReviewingPullRequest) {
-        val project = openedProject.project
-        if (project.isDisposed) {
-            LOG.info("The project was disposed before the pull request editor could be opened")
-            return
-        }
-        val organizationUrl = configurationService.organizationUrlOrNull()
-        val repositoryWebUrl = organizationUrl?.let { url ->
-            BitbucketRepositoryUrls.repositoryWebUrl(organizationUrl = url, repoSlug = pullRequest.repoSlug)
-        }
-        if (repositoryWebUrl == null) {
-            LOG.info("Cannot open pull request #${pullRequest.summary.id}: no repository web URL")
-            return
-        }
-        // D6: queue the open so the tab lands in the NEW window after services and indexing have initialized.
-        val queue = project.service<BbCloudPullRequestEditorOpenQueue>()
-        queue.enqueue(
-            BbCloudPendingEditorOpen(
-                summary = pullRequest.summary,
-                branchName = pullRequest.summary.sourceBranch,
-                repositoryWebUrl = repositoryWebUrl,
-                repositorySlug = pullRequest.repoSlug
-            )
+        worktreeOpener.queuePullRequestEditor(
+            opened = openedProject,
+            summary = pullRequest.summary,
+            workspace = pullRequest.workspace,
+            repoSlug = pullRequest.repoSlug,
+            organizationUrl = configurationService.organizationUrlOrNull()
         )
-        if (openedProject.wasAlreadyOpen) {
-            queue.drainAndOpen(project)
-        }
     }
 
     /**
@@ -1067,6 +766,11 @@ class BbCloudOtherProjectsPanel(
         notification.notify(project)
     }
 
+    /** Opens the "What are Work Trees?" help page as a tab, or focuses the tab when it is already open. */
+    private fun openWorktreesHelp() {
+        project.service<BbCloudWorktreesHelpEditorOpener>().open()
+    }
+
     /**
      * Removes stale PR worktree folders of every watched project on the page, one project at a time, then notifies the
      * user once with the aggregated outcome and refreshes the Watched Projects table.
@@ -1181,8 +885,10 @@ class BbCloudOtherProjectsPanel(
                     }.awaitAll()
                 }
             }
-            val worktreesToRemove = checkedWorktrees.filter { (_, result) ->
-                WorktreePruneDecision.actionFor(result) == WorktreePruneAction.Remove
+            // A work tree that is being opened right now is never pruned, even when its pull request is closed.
+            val openingNow = worktreeOpener.worktreesBeingOpened()
+            val worktreesToRemove = checkedWorktrees.filter { (worktree, result) ->
+                WorktreePruneDecision.actionFor(result) == WorktreePruneAction.Remove && worktree.worktreePath !in openingNow
             }
             val skippedCount = checkedWorktrees.count { (_, result) ->
                 WorktreePruneDecision.actionFor(result) == WorktreePruneAction.Skip
@@ -1301,19 +1007,6 @@ class BbCloudOtherProjectsPanel(
         }
     }
 
-    private fun beginLoad() {
-        activeLoadCount++
-        workspaceHeaderViewModel.setRefreshEnabled(false)
-    }
-
-    @Synchronized
-    private fun endLoad() {
-        if (--activeLoadCount <= 0) {
-            activeLoadCount = 0
-            workspaceHeaderViewModel.setRefreshEnabled(true)
-        }
-    }
-
     companion object {
         private val LOG = logger<BbCloudOtherProjectsPanel>()
 
@@ -1322,6 +1015,76 @@ class BbCloudOtherProjectsPanel(
 
         /** Upper bound on the git error text shown in the worktree failure balloon so it stays readable. */
         private const val MAX_WORKTREE_FAILURE_POPUP_LENGTH = 600
+    }
+}
+
+/** Reads the Watched Projects data from [configurationService]. */
+private class ConfigurationWatchedProjectsDataSource(private val configurationService: BbCloudConfigurationService) : WatchedProjectsDataSource {
+    override fun organizationUrlOrNull(): String? {
+        return configurationService.organizationUrlOrNull()
+    }
+
+    override fun isProjectsDirectorySet(): Boolean {
+        return configurationService.projectsDirectoryOrNull() != null
+    }
+
+    override fun watchedProjectsWithLocalPaths(): List<WatchedProjectMapping> {
+        return configurationService.watchedProjectsForCurrentWorkspaceWithLocalPaths()
+    }
+
+    override fun repoAvatarUrls(): Map<String, String> {
+        return configurationService.repoAvatarUrlsForCurrentWorkspace()
+    }
+
+    override fun workTreeDirectoryOrNull(): Path? {
+        return configurationService.workTreeDirectoryOrNull()?.let { directory -> Path.of(directory) }
+    }
+
+    override fun setWatched(mapping: WatchedProjectMapping, watched: Boolean) {
+        configurationService.setWatched(mapping = mapping, watched = watched)
+    }
+
+    override fun setAllWatched(watched: Boolean) {
+        configurationService.setAllWatched(watched = watched)
+    }
+
+    override suspend fun rescan(clearFirst: Boolean): WatchedProjectsDiscoveryResult {
+        return configurationService.rescanWatchedProjects(clearFirst = clearFirst)
+    }
+}
+
+/** Reads the Workspace configuration and listings from the configuration, authored-PR, and review-queue services. */
+private class ServiceWorkspacePullRequestsDataSource(
+    private val configurationService: BbCloudConfigurationService,
+    private val authoredPullRequestService: BbCloudAuthoredPullRequestService,
+    private val reviewQueueService: BbCloudReviewQueueService
+) : WorkspacePullRequestsDataSource {
+    override fun organizationUrlOrNull(): String? {
+        return configurationService.organizationUrlOrNull()
+    }
+
+    override fun projectsDirectoryOrNull(): String? {
+        return configurationService.projectsDirectoryOrNull()
+    }
+
+    override fun watchedRepoSlugs(): List<String> {
+        return configurationService.watchedRepoSlugsForCurrentWorkspace()
+    }
+
+    override fun repoAvatarUrls(): Map<String, String> {
+        return configurationService.repoAvatarUrlsForCurrentWorkspace()
+    }
+
+    override suspend fun listAuthored(organizationUrl: String, excludedRepoSlug: String?): AuthoredPullRequestListResult {
+        return authoredPullRequestService.listAuthoredPullRequests(organizationUrl = organizationUrl, excludedRepoSlug = excludedRepoSlug)
+    }
+
+    override suspend fun listReviewing(organizationUrl: String, excludedRepoSlug: String?, repoSlugs: List<String>): ReviewingPullRequestListResult {
+        return reviewQueueService.listReviewingPullRequests(
+            organizationUrl = organizationUrl,
+            excludedRepoSlug = excludedRepoSlug,
+            repoSlugs = repoSlugs
+        )
     }
 }
 
@@ -1335,7 +1098,7 @@ private enum class ViewCard {
  * The Compose body of one Workspace tab root.
  *
  * It switches between the not-configured card and the content card, which carries the [WorkspaceHeader] of the merged
- * Workspace - PRs root, driven by Compose state instead of the Swing CardLayout the panel used before. The optional
+ * Workspace root, driven by Compose state instead of the Swing CardLayout the panel used before. The optional
  * [excludeContent] slot carries the Exclude: checkboxes inline into the header row; the Watched Projects tab passes
  * nothing, so it shows no header and no checkboxes.
  */

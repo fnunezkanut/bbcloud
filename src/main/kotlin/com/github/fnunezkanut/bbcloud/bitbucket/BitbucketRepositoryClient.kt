@@ -1,5 +1,6 @@
 package com.github.fnunezkanut.bbcloud.bitbucket
 
+import com.github.fnunezkanut.bbcloud.auth.BbCloudBearerRetryAuthenticator
 import com.intellij.openapi.diagnostic.logger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -34,6 +35,10 @@ class OkHttpBitbucketRepositoryClient(private val httpClient: OkHttpClient = sha
             // Request only the avatar href via Bitbucket's partial-response `fields` parameter so the 200 payload stays
             // tiny; the status code still decides existence and the href is a bonus read when present.
             val apiUrl = "$BITBUCKET_API_BASE/repositories/$workspace/$repoSlug?fields=links.avatar.href"
+            if (!BitbucketApiUrlPolicy.isTrustedApiUrl(apiUrl)) {
+                LOG.warn("Refusing to send the API token to an untrusted URL (${BitbucketApiUrlPolicy.describeRejected(apiUrl)})")
+                return@withContext RepositoryCheckResult.Failed()
+            }
             val request = Request.Builder()
                 .url(apiUrl)
                 .header("Authorization", "Bearer $apiToken")
@@ -102,6 +107,7 @@ class OkHttpBitbucketRepositoryClient(private val httpClient: OkHttpClient = sha
         private val sharedHttpClient: OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
+            .authenticator(BbCloudBearerRetryAuthenticator())
             .build()
 
         private fun elapsedMillis(startNanos: Long): Long {

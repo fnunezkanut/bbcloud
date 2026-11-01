@@ -1,9 +1,10 @@
 package com.github.fnunezkanut.bbcloud.bitbucket
 
 import com.github.fnunezkanut.bbcloud.BbCloudBundle
-import com.github.fnunezkanut.bbcloud.credentials.BbCloudCredentialStore
+import com.github.fnunezkanut.bbcloud.auth.BbCloudAccessTokenProvider
 import com.github.fnunezkanut.bbcloud.review.BbCloudUserDisplayNameCache
 import io.kotest.assertions.assertSoftly
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
@@ -12,6 +13,7 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.coVerifyOrder
 import io.mockk.mockk
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Tag
@@ -35,10 +37,10 @@ class BbCloudOpenPullRequestServiceTest {
                     apiToken = "token"
                 )
             } returns expected
-            val store = mockk<BbCloudCredentialStore>()
-            coEvery { store.getToken() } returns "token"
+            val store = mockk<BbCloudAccessTokenProvider>()
+            coEvery { store.bearerTokenOrNull() } returns "token"
             val service = BbCloudOpenPullRequestService(
-                credentialStore = store,
+                accessTokenProvider = store,
                 pullRequestClient = client,
                 readRemoteUrl = { null }
             )
@@ -64,7 +66,7 @@ class BbCloudOpenPullRequestServiceTest {
     fun `listRecentPullRequests - should return Failed when base path missing`(): Unit =
         runBlocking {
             val client = mockk<BitbucketPullRequestClient>()
-            val store = mockk<BbCloudCredentialStore>()
+            val store = mockk<BbCloudAccessTokenProvider>()
             val service = BbCloudOpenPullRequestService(store, client)
 
             val result = service.listRecentPullRequests(
@@ -79,8 +81,8 @@ class BbCloudOpenPullRequestServiceTest {
     fun `listRecentPullRequests - should return Failed when token missing`(): Unit =
         runBlocking {
             val client = mockk<BitbucketPullRequestClient>()
-            val store = mockk<BbCloudCredentialStore>()
-            coEvery { store.getToken() } returns null
+            val store = mockk<BbCloudAccessTokenProvider>()
+            coEvery { store.bearerTokenOrNull() } returns null
             val service = BbCloudOpenPullRequestService(store, client)
 
             val result = service.listRecentPullRequests(
@@ -103,11 +105,11 @@ class BbCloudOpenPullRequestServiceTest {
                     apiToken = "token"
                 )
             } returns expected
-            val store = mockk<BbCloudCredentialStore>()
-            coEvery { store.getToken() } returns "token"
+            val store = mockk<BbCloudAccessTokenProvider>()
+            coEvery { store.bearerTokenOrNull() } returns "token"
             // No readable remote, so the slug falls back to the checkout folder name (the historical behavior).
             val service = BbCloudOpenPullRequestService(
-                credentialStore = store,
+                accessTokenProvider = store,
                 pullRequestClient = client,
                 readRemoteUrl = { null }
             )
@@ -140,11 +142,11 @@ class BbCloudOpenPullRequestServiceTest {
                     apiToken = "token"
                 )
             } returns expected
-            val store = mockk<BbCloudCredentialStore>()
-            coEvery { store.getToken() } returns "token"
+            val store = mockk<BbCloudAccessTokenProvider>()
+            coEvery { store.bearerTokenOrNull() } returns "token"
             val worktreeRemote: (java.nio.file.Path) -> String? = { "https://bitbucket.org/my-workspace/examplerepo.git" }
             val service = BbCloudOpenPullRequestService(
-                credentialStore = store,
+                accessTokenProvider = store,
                 pullRequestClient = client,
                 readRemoteUrl = worktreeRemote
             )
@@ -181,8 +183,8 @@ class BbCloudOpenPullRequestServiceTest {
                     apiToken = "token"
                 )
             } returns PullRequestListResult.Success(listOf(merged, open, declined))
-            val store = mockk<BbCloudCredentialStore>()
-            coEvery { store.getToken() } returns "token"
+            val store = mockk<BbCloudAccessTokenProvider>()
+            coEvery { store.bearerTokenOrNull() } returns "token"
             val service = BbCloudOpenPullRequestService(store, client)
 
             // WHEN
@@ -292,9 +294,9 @@ class BbCloudOpenPullRequestServiceTest {
                 counts shouldBe PullRequestCounts(filesChanged = null, commits = null)
             }
 
-        private fun storeWithToken(token: String?): BbCloudCredentialStore {
-            val store = mockk<BbCloudCredentialStore>()
-            coEvery { store.getToken() } returns token
+        private fun storeWithToken(token: String?): BbCloudAccessTokenProvider {
+            val store = mockk<BbCloudAccessTokenProvider>()
+            coEvery { store.bearerTokenOrNull() } returns token
             return store
         }
     }
@@ -743,7 +745,7 @@ class BbCloudOpenPullRequestServiceTest {
                 coEvery { client.getUser(uuid = benUuid, apiToken = "token") } returns ActivityUser(uuid = benUuid, displayName = "Ben", avatarUrl = null)
                 val comments = listOf(mentioningComment(id = 1, raw = "Hi @{$benKey}", author = anna))
                 val service = BbCloudOpenPullRequestService(
-                    credentialStore = storeWithToken("token"),
+                    accessTokenProvider = storeWithToken("token"),
                     pullRequestClient = client,
                     readRemoteUrl = { "https://bitbucket.org/sample-workspace/sample-repo.git" },
                     userNameCache = { BbCloudUserDisplayNameCache() }
@@ -779,7 +781,7 @@ class BbCloudOpenPullRequestServiceTest {
 
         private fun mentionService(client: BitbucketPullRequestClient, cache: BbCloudUserDisplayNameCache): BbCloudOpenPullRequestService {
             return BbCloudOpenPullRequestService(
-                credentialStore = storeWithToken("token"),
+                accessTokenProvider = storeWithToken("token"),
                 pullRequestClient = client,
                 readRemoteUrl = { "https://bitbucket.org/sample-workspace/sample-repo.git" },
                 userNameCache = { cache }
@@ -823,9 +825,9 @@ class BbCloudOpenPullRequestServiceTest {
             coEvery { client.getCurrentUser(any()) } returns CurrentUser(uuid = "{me}", avatarUrl = null)
         }
 
-        private fun storeWithToken(token: String?): BbCloudCredentialStore {
-            val store = mockk<BbCloudCredentialStore>()
-            coEvery { store.getToken() } returns token
+        private fun storeWithToken(token: String?): BbCloudAccessTokenProvider {
+            val store = mockk<BbCloudAccessTokenProvider>()
+            coEvery { store.bearerTokenOrNull() } returns token
             return store
         }
     }
@@ -1056,9 +1058,9 @@ class BbCloudOpenPullRequestServiceTest {
                 coVerify(exactly = 0) { client.getCurrentUser(any()) }
             }
 
-        private fun storeWithToken(token: String?): BbCloudCredentialStore {
-            val store = mockk<BbCloudCredentialStore>()
-            coEvery { store.getToken() } returns token
+        private fun storeWithToken(token: String?): BbCloudAccessTokenProvider {
+            val store = mockk<BbCloudAccessTokenProvider>()
+            coEvery { store.bearerTokenOrNull() } returns token
             return store
         }
     }
@@ -1128,9 +1130,9 @@ class BbCloudOpenPullRequestServiceTest {
                 coVerify(exactly = 0) { client.updatePullRequestDescription(any(), any(), any(), any(), any(), any()) }
             }
 
-        private fun storeWithToken(token: String?): BbCloudCredentialStore {
-            val store = mockk<BbCloudCredentialStore>()
-            coEvery { store.getToken() } returns token
+        private fun storeWithToken(token: String?): BbCloudAccessTokenProvider {
+            val store = mockk<BbCloudAccessTokenProvider>()
+            coEvery { store.bearerTokenOrNull() } returns token
             return store
         }
     }
@@ -1315,9 +1317,9 @@ class BbCloudOpenPullRequestServiceTest {
             return client
         }
 
-        private fun storeWithToken(token: String?): BbCloudCredentialStore {
-            val store = mockk<BbCloudCredentialStore>()
-            coEvery { store.getToken() } returns token
+        private fun storeWithToken(token: String?): BbCloudAccessTokenProvider {
+            val store = mockk<BbCloudAccessTokenProvider>()
+            coEvery { store.bearerTokenOrNull() } returns token
             return store
         }
     }
@@ -1458,9 +1460,9 @@ class BbCloudOpenPullRequestServiceTest {
                 coVerify(exactly = 0) { client.createTask(any(), any(), any(), any(), any()) }
             }
 
-        private fun storeWithToken(token: String?): BbCloudCredentialStore {
-            val store = mockk<BbCloudCredentialStore>()
-            coEvery { store.getToken() } returns token
+        private fun storeWithToken(token: String?): BbCloudAccessTokenProvider {
+            val store = mockk<BbCloudAccessTokenProvider>()
+            coEvery { store.bearerTokenOrNull() } returns token
             return store
         }
     }
@@ -1913,9 +1915,9 @@ class BbCloudOpenPullRequestServiceTest {
                 coVerify(exactly = 0) { client.deleteComment(any(), any(), any(), any(), any()) }
             }
 
-        private fun storeWithToken(token: String?): BbCloudCredentialStore {
-            val store = mockk<BbCloudCredentialStore>()
-            coEvery { store.getToken() } returns token
+        private fun storeWithToken(token: String?): BbCloudAccessTokenProvider {
+            val store = mockk<BbCloudAccessTokenProvider>()
+            coEvery { store.bearerTokenOrNull() } returns token
             return store
         }
     }
@@ -1985,9 +1987,9 @@ class BbCloudOpenPullRequestServiceTest {
                 coVerify(exactly = 0) { client.listPullRequestCommits(any(), any(), any(), any()) }
             }
 
-        private fun storeWithToken(token: String?): BbCloudCredentialStore {
-            val store = mockk<BbCloudCredentialStore>()
-            coEvery { store.getToken() } returns token
+        private fun storeWithToken(token: String?): BbCloudAccessTokenProvider {
+            val store = mockk<BbCloudAccessTokenProvider>()
+            coEvery { store.bearerTokenOrNull() } returns token
             return store
         }
     }
@@ -2028,6 +2030,65 @@ class BbCloudOpenPullRequestServiceTest {
                 assertSoftly {
                     result?.branches?.names shouldBe listOf("main", "feature/x")
                     result?.mainBranchName shouldBe "main"
+                }
+            }
+
+        @Test
+        fun `mainBranchNameFor - should return null without calling client when token missing`(): Unit =
+            runBlocking {
+                // GIVEN
+                val client = mockk<BitbucketPullRequestClient>()
+                val service = BbCloudOpenPullRequestService(storeWithToken(null), client)
+
+                // WHEN
+                val result = service.mainBranchNameFor(workspace = "my-workspace", repoSlug = "examplerepo")
+
+                // THEN
+                result.shouldBeNull()
+                coVerify(exactly = 0) { client.getMainBranchName(any(), any(), any()) }
+            }
+
+        @Test
+        fun `mainBranchNameFor - should return the name the client reports`(): Unit =
+            runBlocking {
+                // GIVEN
+                val client = mockk<BitbucketPullRequestClient>()
+                coEvery { client.getMainBranchName("my-workspace", "examplerepo", "token") } returns "trunk"
+                val service = BbCloudOpenPullRequestService(storeWithToken("token"), client)
+
+                // WHEN
+                val result = service.mainBranchNameFor(workspace = "my-workspace", repoSlug = "examplerepo")
+
+                // THEN
+                result shouldBe "trunk"
+            }
+
+        @Test
+        fun `mainBranchNameFor - should return null when the client throws`(): Unit =
+            runBlocking {
+                // GIVEN
+                val client = mockk<BitbucketPullRequestClient>()
+                coEvery { client.getMainBranchName("my-workspace", "examplerepo", "token") } throws RuntimeException("boom")
+                val service = BbCloudOpenPullRequestService(storeWithToken("token"), client)
+
+                // WHEN
+                val result = service.mainBranchNameFor(workspace = "my-workspace", repoSlug = "examplerepo")
+
+                // THEN
+                result.shouldBeNull()
+            }
+
+        @Test
+        fun `mainBranchNameFor - should rethrow a CancellationException`(): Unit =
+            runBlocking {
+                // GIVEN
+                val client = mockk<BitbucketPullRequestClient>()
+                coEvery { client.getMainBranchName("my-workspace", "examplerepo", "token") } throws CancellationException("cancelled")
+                val service = BbCloudOpenPullRequestService(storeWithToken("token"), client)
+
+                // WHEN / THEN
+                shouldThrow<CancellationException> {
+                    service.mainBranchNameFor(workspace = "my-workspace", repoSlug = "examplerepo")
                 }
             }
 
@@ -2125,9 +2186,9 @@ class BbCloudOpenPullRequestServiceTest {
             )
         }
 
-        private fun storeWithToken(token: String?): BbCloudCredentialStore {
-            val store = mockk<BbCloudCredentialStore>()
-            coEvery { store.getToken() } returns token
+        private fun storeWithToken(token: String?): BbCloudAccessTokenProvider {
+            val store = mockk<BbCloudAccessTokenProvider>()
+            coEvery { store.bearerTokenOrNull() } returns token
             return store
         }
     }

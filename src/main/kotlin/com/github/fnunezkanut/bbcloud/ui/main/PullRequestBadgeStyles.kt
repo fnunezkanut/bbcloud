@@ -1,7 +1,10 @@
 package com.github.fnunezkanut.bbcloud.ui.main
 
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.TileMode
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestState
 import org.jetbrains.jewel.foundation.theme.JewelTheme
 import org.jetbrains.jewel.ui.component.styling.BadgeColors
@@ -17,6 +20,34 @@ object PullRequestBadgeStyles {
     @Composable
     fun merged(): BadgeStyle {
         return JewelTheme.badgeStyle.greenSecondary
+    }
+
+    /**
+     * The "Approved" badge for pull requests the current user approved. Jewel has no built-in gradient badge, so the
+     * pink-to-purple gradient and white text follow the "Gradient Background" badge of the Jewel components showcase.
+     * The same colors serve light and dark themes, as they do in the showcase.
+     */
+    @Composable
+    fun approved(): BadgeStyle {
+        val background = Brush.horizontalGradient(
+            tileMode = TileMode.Repeated,
+            colors = listOf(Color(0xFFE063CC), Color(0xFF8D7BFD), Color(0xFF8F74F9))
+        )
+        return BadgeStyle(
+            colors = BadgeColors(
+                background = background,
+                backgroundDisabled = SolidColor(Color.Gray),
+                backgroundFocused = background,
+                backgroundPressed = background,
+                backgroundHovered = background,
+                content = Color.White,
+                contentDisabled = Color.Gray,
+                contentFocused = Color.White,
+                contentPressed = Color.White,
+                contentHovered = Color.White
+            ),
+            metrics = JewelTheme.badgeStyle.blueSecondary.metrics
+        )
     }
 
     @Composable

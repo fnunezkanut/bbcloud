@@ -20,10 +20,11 @@ import com.intellij.openapi.vcs.changes.ChangesUtil
  */
 internal object ReviewBarFileActions {
     /**
-     * Opens the diff of the file against the branch the pull request is merged into.
+     * Opens the diff of the pull request as a chain of every changed file, positioned at [relativePath].
      *
-     * The lookup of the change is a blocking Git call, so it runs on a pooled thread; the diff itself is opened by
-     * [PullRequestChangeDiffOpener], which marshals to the EDT.
+     * The chain is in the same order as the PR Changes tool window, so the previous and next buttons of the diff move
+     * through the whole pull request. The lookup of the change is a blocking Git call, so it runs on a pooled thread;
+     * the diff itself is opened by [PullRequestChangeDiffOpener], which marshals to the EDT.
      */
     fun showDiff(project: Project, relativePath: String) {
         LOG.info("User clicked 'Show Diff' for '$relativePath'")
@@ -43,19 +44,20 @@ internal object ReviewBarFileActions {
                     LOG.info("Cannot show the diff of '$relativePath': the changes of the pull request could not be loaded")
                     return@executeOnPooledThread
                 }
-                val change = result.changes.firstOrNull { candidate ->
+                val changes = result.changes.toList()
+                val index = changes.indexOfFirst { candidate ->
                     val candidatePath = PullRequestPathMatcher.relativeProjectPath(
                         projectBasePath = project.basePath,
                         absoluteOrRelativePath = ChangesUtil.getFilePath(candidate).path
                     )
                     candidatePath == relativePath
                 }
-                if (change == null) {
+                if (index < 0) {
                     LOG.info("Cannot show the diff of '$relativePath': the file is not part of the changes of the pull request")
                     return@executeOnPooledThread
                 }
-                LOG.debug("Found the change of '$relativePath' among ${result.changes.size} change(s) of the pull request")
-                PullRequestChangeDiffOpener.open(project = project, change = change)
+                LOG.debug("Found the change of '$relativePath' at index $index among ${changes.size} change(s) of the pull request")
+                PullRequestChangeDiffOpener.openInChain(project = project, changes = changes, index = index)
             } catch (exception: ProcessCanceledException) {
                 throw exception
             } catch (exception: Exception) {

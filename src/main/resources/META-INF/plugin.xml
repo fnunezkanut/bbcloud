@@ -3,7 +3,22 @@
     <name>Bitbucket Cloud PR Review</name>
     <vendor>fnunezkanut</vendor>
     <description><![CDATA[
-        Atlassian Bitbucket Cloud integration for IntelliJ IDEA. Create and review pull requests in their own git work tree. Leave comments (including inline in editor), approve, deny, draft and merge pull requests. View own pull requests and pull requests you are involved in watched projects from your bitbucket workspace.
+        <p>Review Bitbucket Cloud pull requests inside IntelliJ IDEA with git
+        <a href="https://github.com/fnunezkanut/bbcloud/blob/main/docs/worktrees.md">work trees</a>,
+        inline comments, and workspace-wide triage.</p>
+        <ul>
+            <li>🔐 <b>Secure authentication</b> signs you in to Bitbucket Cloud with OAuth so tokens are obtained and stored safely through the IDE.</li>
+            <li>🪟 A <b>Bitbucket Cloud PR Review</b> tool window on the bottom strip keeps pull request triage inside IntelliJ instead of the browser.</li>
+            <li>🌳 Opening a PR spins up a separate <b>PR Work Tree</b> project window with its own git work tree so reviews never clash with your main branch or other PRs.</li>
+            <li>📂 The <b>Current Project</b> tab shows open and completed PRs for the repo in your IDE, with repo links, open-PR counts, reviewer avatars, refresh, and persistent <b>Exclude</b> filters.</li>
+            <li>🧭 The <b>Workspace</b> tab merges PRs you opened and review assignments from watched projects into one newest-first list across your Bitbucket workspace.</li>
+            <li>👀 <b>Watched Projects</b> controls which repositories contribute to the workspace queue, with search by slug, folder, PR number, or branch and a master checkbox for matching rows.</li>
+            <li>📋 Each PR gets a dedicated <code>&lt;prNum&gt;.pr</code> tab plus a blue header stripe with line-change stats, refresh, file changes, and merge, approve, draft, or decline actions.</li>
+            <li>🕐 The PR <b>Activity</b> timeline mixes commits, approvals, tasks, builds, and file or inline comment threads in time order, with a box to add PR-scoped comments and reply in threads.</li>
+            <li>📁 The <b>PR Changes</b> tool window lists every file in the diff; picking a file opens it in the editor or diff view driven from the stripe's <b>Show pull request file changes</b> button.</li>
+            <li>✏️ <b>Modified File View</b> and <b>Diff View</b> surface existing comments and let you add line-level feedback from the gutter or context menu, view add/remove counts, and mark files reviewed.</li>
+            <li>🚀 <b>Create Pull Request</b> walks you through title, description, source and destination branches, reviewers (including defaults), remote cleanup after merge, then opens the new PR in a work tree window.</li>
+        </ul>
     ]]></description>
 
     <depends>com.intellij.modules.platform</depends>
@@ -26,6 +41,11 @@
         <applicationService
                 serviceInterface="com.github.fnunezkanut.bbcloud.credentials.BbCloudCredentialStore"
                 serviceImplementation="com.github.fnunezkanut.bbcloud.credentials.PasswordSafeBbCloudCredentialStore"/>
+        <applicationService
+                serviceInterface="com.github.fnunezkanut.bbcloud.auth.BbCloudAccessTokenProvider"
+                serviceImplementation="com.github.fnunezkanut.bbcloud.auth.BbCloudAuthService"/>
+        <applicationService
+                serviceImplementation="com.github.fnunezkanut.bbcloud.auth.BbCloudOAuthLoginService"/>
         <notificationGroup id="BbCloud"
                            displayType="BALLOON"
                            key="notification.group.bbcloud"/>
@@ -35,6 +55,11 @@
                     icon="/icons/prToolWindow.svg"
                     anchor="bottom"
                     factoryClass="com.github.fnunezkanut.bbcloud.toolwindow.BbCloudToolWindowFactory"/>
+        <toolWindow id="Bitbucket Cloud PR Changes"
+                    anchor="left"
+                    doNotActivateOnStart="true"
+                    icon="/icons/prChangesToolWindow.svg"
+                    factoryClass="com.github.fnunezkanut.bbcloud.ui.pullrequest.changes.WorktreePullRequestChangesToolWindowFactory"/>
         <projectService serviceImplementation="com.github.fnunezkanut.bbcloud.review.BbCloudPullRequestReviewState"/>
         <projectService serviceImplementation="com.github.fnunezkanut.bbcloud.review.BbCloudPullRequestViewedFiles"/>
         <projectService serviceImplementation="com.github.fnunezkanut.bbcloud.review.BbCloudWorktreePullRequestContext"/>
@@ -45,6 +70,7 @@
         <projectService serviceImplementation="com.github.fnunezkanut.bbcloud.ui.diff.BbCloudPullRequestDiffCommentService"/>
         <projectService serviceImplementation="com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.BbCloudPullRequestEditorOpener"/>
         <projectService serviceImplementation="com.github.fnunezkanut.bbcloud.ui.pullrequest.create.BbCloudNewPullRequestEditorOpener"/>
+        <projectService serviceImplementation="com.github.fnunezkanut.bbcloud.ui.pullrequest.help.BbCloudWorktreesHelpEditorOpener"/>
         <projectService serviceImplementation="com.github.fnunezkanut.bbcloud.ui.BbCloudToolWindowPanel"/>
         <projectConfigurable
                 parentId="tools"
@@ -59,6 +85,8 @@
                 implementationClass="com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.BbCloudPullRequestFileEditorProvider"/>
         <fileEditorProvider
                 implementationClass="com.github.fnunezkanut.bbcloud.ui.pullrequest.create.BbCloudNewPullRequestFileEditorProvider"/>
+        <fileEditorProvider
+                implementationClass="com.github.fnunezkanut.bbcloud.ui.pullrequest.help.BbCloudWorktreesHelpFileEditorProvider"/>
         <editorTabTitleProvider
                 implementationClass="com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.BbCloudPullRequestEditorTabTitleProvider"/>
         <fileType name="Bitbucket Cloud PR Review Overview"
@@ -66,6 +94,9 @@
                   fieldName="INSTANCE"/>
         <fileType name="Bitbucket Cloud New PR"
                   implementationClass="com.github.fnunezkanut.bbcloud.ui.pullrequest.create.BbCloudNewPullRequestFileType"
+                  fieldName="INSTANCE"/>
+        <fileType name="Bitbucket Cloud Work Trees Help"
+                  implementationClass="com.github.fnunezkanut.bbcloud.ui.pullrequest.help.BbCloudWorktreesHelpFileType"
                   fieldName="INSTANCE"/>
         <diff.DiffExtension
                 implementation="com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.PullRequestDiffBarsDiffExtension"/>
@@ -77,6 +108,8 @@
                 implementation="com.github.fnunezkanut.bbcloud.ui.pullrequest.projectView.BbCloudPullRequestTreeStructureProvider"/>
         <postStartupActivity
                 implementation="com.github.fnunezkanut.bbcloud.ui.pullrequest.projectView.BbCloudPullRequestProjectViewRefreshStartupActivity"/>
+        <httpRequestHandler
+                implementation="com.github.fnunezkanut.bbcloud.external.BbCloudOpenPullRequestRestService"/>
     </extensions>
 
     <actions>

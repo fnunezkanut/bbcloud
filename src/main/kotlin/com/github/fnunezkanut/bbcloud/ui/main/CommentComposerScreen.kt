@@ -24,8 +24,11 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -46,6 +49,7 @@ import com.github.fnunezkanut.bbcloud.ui.components.commentThreadContentBackgrou
 import com.github.fnunezkanut.bbcloud.ui.components.dottedBorder
 import com.github.fnunezkanut.bbcloud.ui.components.reviewBarPurple
 import com.github.fnunezkanut.bbcloud.ui.otherprojects.toComposeImageBitmap
+import com.intellij.openapi.diagnostic.logger
 import kotlinx.coroutines.launch
 import org.jetbrains.jewel.foundation.theme.JewelTheme
 import org.jetbrains.jewel.ui.Orientation
@@ -61,6 +65,11 @@ import org.jetbrains.jewel.ui.component.Tooltip
 import org.jetbrains.jewel.ui.icon.IconKey
 import org.jetbrains.jewel.ui.icons.AllIconsKeys
 import javax.swing.Icon
+
+/** Log category for the top-level composables of this file; `thisLogger()` would bind to the wrong Compose receiver. */
+private object CommentComposerScreenLogCategory
+
+private val LOG = logger<CommentComposerScreenLogCategory>()
 
 private val COMPOSER_AVATAR_SIZE = 24.dp
 private val COMPOSER_EDITOR_MIN_HEIGHT = 80.dp
@@ -105,7 +114,7 @@ private val COMPOSER_TOOLBAR_DIVIDER_HEIGHT = 16.dp
 private val composerActionButtonModifier = Modifier.pointerHoverIcon(PointerIcon.Hand)
 
 /**
- * The comment composer of the Conversation tab. It is a native Jewel editor: a collapsed placeholder that expands into
+ * The comment composer of the Activity timeline. It is a native Jewel editor: a collapsed placeholder that expands into
  * a Markdown text area with a styling toolbar, a write and preview mode, and the submit and cancel actions.
  *
  * The same composer serves the top level comment of the conversation and, with [showsCollapsedField] turned off, the
@@ -123,6 +132,9 @@ internal fun CommentComposerScreen(
     showsDottedBorder: Boolean = false,
     avatarSize: Dp = COMPOSER_AVATAR_SIZE,
     editorMaxHeight: Dp = COMPOSER_EDITOR_MAX_HEIGHT,
+    requestEditorFocus: Boolean = false,
+    focusRequestKey: Any? = null,
+    onEditorFocusRequested: () -> Unit = {},
     onCollapsed: () -> Unit = {},
     onSubmitted: () -> Unit = {}
 ) {
@@ -165,7 +177,10 @@ internal fun CommentComposerScreen(
                     viewModel = viewModel,
                     onCollapsed = onCollapsed,
                     onSubmitted = onSubmitted,
-                    editorMaxHeight = editorMaxHeight
+                    editorMaxHeight = editorMaxHeight,
+                    requestEditorFocus = requestEditorFocus,
+                    focusRequestKey = focusRequestKey,
+                    onEditorFocusRequested = onEditorFocusRequested
                 )
             }
         }
@@ -197,7 +212,15 @@ private fun CollapsedCommentField(placeholder: String, onClick: () -> Unit) {
 
 /** The expanded composer: the styling toolbar, the editor or its preview, and the submit and cancel actions. */
 @Composable
-private fun ExpandedCommentEditor(viewModel: CommentComposerViewModel, onCollapsed: () -> Unit, onSubmitted: () -> Unit, editorMaxHeight: Dp) {
+private fun ExpandedCommentEditor(
+    viewModel: CommentComposerViewModel,
+    onCollapsed: () -> Unit,
+    onSubmitted: () -> Unit,
+    editorMaxHeight: Dp,
+    requestEditorFocus: Boolean = false,
+    focusRequestKey: Any? = null,
+    onEditorFocusRequested: () -> Unit = {}
+) {
     val state by viewModel.state
     val coroutineScope = rememberCoroutineScope()
     val submit: () -> Unit = {
@@ -210,9 +233,17 @@ private fun ExpandedCommentEditor(viewModel: CommentComposerViewModel, onCollaps
     Column(modifier = Modifier.fillMaxWidth()) {
         CommentMarkdownToolbar(viewModel = viewModel)
         if (state.isPreview) {
+            // In preview mode CommentEditorArea is not composed, so its focus LaunchedEffect never runs; nothing to do.
             CommentPreview(draft = viewModel.currentDraft())
         } else {
-            CommentEditorArea(viewModel = viewModel, onSubmit = submit, editorMaxHeight = editorMaxHeight)
+            CommentEditorArea(
+                viewModel = viewModel,
+                onSubmit = submit,
+                editorMaxHeight = editorMaxHeight,
+                requestEditorFocus = requestEditorFocus,
+                focusRequestKey = focusRequestKey,
+                onEditorFocusRequested = onEditorFocusRequested
+            )
         }
         state.failureMessage?.let { message ->
             Text(
@@ -330,15 +361,36 @@ private fun CommentMarkdownStyle.toolbarIconKey(): IconKey {
  * honoured here as well, so the hint of the submit button stays accurate.
  */
 @Composable
-private fun CommentEditorArea(viewModel: CommentComposerViewModel, onSubmit: () -> Unit, editorMaxHeight: Dp = COMPOSER_EDITOR_MAX_HEIGHT) {
+private fun CommentEditorArea(
+    viewModel: CommentComposerViewModel,
+    onSubmit: () -> Unit,
+    editorMaxHeight: Dp = COMPOSER_EDITOR_MAX_HEIGHT,
+    requestEditorFocus: Boolean = false,
+    focusRequestKey: Any? = null,
+    onEditorFocusRequested: () -> Unit = {}
+) {
     // The editor is driven by the view model's TextFieldState: it owns the text and the selection, and keeps the
     // selection across focus loss, so the styling toolbar wraps the text the user selected even after a button takes
     // the focus.
+    val focusRequester = remember { FocusRequester() }
+    if (requestEditorFocus) {
+        // One frame is awaited so the FocusRequester is attached before requestFocus is called. The caller moves AWT
+        // focus to the host surface in onEditorFocusRequested first, so the Compose request can take effect. The draft
+        // keeps its caret at the end of the text (see CommentComposerViewModel.editorState), so no selection is reset.
+        LaunchedEffect(focusRequestKey) {
+            withFrameNanos { }
+            onEditorFocusRequested()
+            runCatching { focusRequester.requestFocus() }.onFailure { failure ->
+                LOG.debug("Could not focus the comment editor: ${failure.message}")
+            }
+        }
+    }
     TextArea(
         state = viewModel.editorState,
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = COMPOSER_EDITOR_MIN_HEIGHT, max = composerEditorMaxHeight(requested = editorMaxHeight))
+            .focusRequester(focusRequester)
             .onPreviewKeyEvent { keyEvent ->
                 if (keyEvent.type == KeyEventType.KeyDown &&
                     keyEvent.key == Key.Enter &&

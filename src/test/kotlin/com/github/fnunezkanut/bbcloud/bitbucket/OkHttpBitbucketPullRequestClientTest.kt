@@ -520,6 +520,45 @@ class OkHttpBitbucketPullRequestClientTest {
         }
 
     @Test
+    fun `listAllOpenPullRequests - does not send the token to an untrusted next URL`(): Unit =
+        runBlocking {
+            // GIVEN page 1 points its next link at another host
+            val requests = mutableListOf<Request>()
+            val client = OkHttpBitbucketPullRequestClient(
+                respondingClient(requests) { 200 to pageJson(id = 1, next = "https://evil.example/2.0/page?page=2") }
+            )
+
+            // WHEN
+            val result = client.listAllOpenPullRequests(workspace = "workspace", repoSlug = "repo", apiToken = "secret")
+
+            // THEN only the trusted first page was requested and the listing failed
+            assertSoftly {
+                requests.size shouldBe 1
+                requests.single().url.host shouldBe "api.bitbucket.org"
+                (result is PullRequestListResult.Failed) shouldBe true
+            }
+        }
+
+    @Test
+    fun `listBranches - does not follow an http next URL on the API host`(): Unit =
+        runBlocking {
+            // GIVEN page 1 downgrades its next link to plain HTTP
+            val requests = mutableListOf<Request>()
+            val client = OkHttpBitbucketPullRequestClient(
+                respondingClient(requests) { 200 to """{"values":[{"name":"main"}],"next":"http://api.bitbucket.org/2.0/b?page=2"}""" }
+            )
+
+            // WHEN
+            val result = client.listBranches(workspace = "workspace", repoSlug = "repo", apiToken = "secret")
+
+            // THEN
+            assertSoftly {
+                requests.size shouldBe 1
+                result shouldBe null
+            }
+        }
+
+    @Test
     fun `getMainBranchName - reads the mainbranch name`(): Unit =
         runBlocking {
             // GIVEN

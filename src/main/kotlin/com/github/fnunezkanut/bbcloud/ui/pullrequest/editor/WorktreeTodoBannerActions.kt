@@ -71,8 +71,8 @@ internal object WorktreeTodoBannerActions {
     }
 
     /**
-     * Opens IntelliJ's left-docked Version Control changes browser with the pull request's branch diff, matching the
-     * plugin's own Changes tab file set. No-op on non-worktrees, and returns early (logging at `info`) when the branch
+     * Shows and activates the plugin's PR Changes tool window with the pull request's branch diff, matching the
+     * plugin's review bar file set. No-op on non-worktrees, and returns early (logging at `info`) when the branch
      * names have not resolved yet, so the button's disabled state and this guard agree.
      */
     fun openChangedFiles(project: Project, state: WorktreeTodoBannerUiState) {
@@ -94,6 +94,7 @@ internal object WorktreeTodoBannerActions {
         )
         WorktreePullRequestChangedFilesToolWindowOpener.open(
             project = project,
+            pullRequestId = state.pullRequestId,
             destinationBranch = destinationBranch,
             sourceBranch = sourceBranch
         )

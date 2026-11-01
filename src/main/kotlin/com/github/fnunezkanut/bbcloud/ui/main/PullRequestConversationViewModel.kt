@@ -21,13 +21,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.datetime.TimeZone
 import javax.swing.Icon
-import kotlin.time.Clock
 
 /**
- * Drives the Jewel Conversation tab. The editor session pushes the conversation through [showConversation]; the composable
- * reads [state] and renders the threads.
+ * Drives the comment threads and the top-level composer of the Activity card of the pull-request page. The editor session
+ * pushes the conversation through [showConversation]; the Activity timeline reads the threads from [state] and interleaves
+ * them with the activity entries that [PullRequestHistoryViewModel] owns.
  *
  * The avatars come from the shared [AuthorAvatarCache]; the cache is prefetched when the conversation arrives and the
  * [PullRequestConversationUiState.avatarRevision] is bumped once the images are ready, so the composable redraws them.
@@ -58,6 +57,19 @@ class PullRequestConversationViewModel(
         get() = state.value.mentions
 
     private val viewedThreads by lazy { BbCloudPullRequestViewedThreads.getInstance() }
+
+    /**
+     * Keeps the composer drafts of the Activity card alive across recompositions when the card list is re-created. The
+     * PR page shows each card once, so the scope is a constant; access is on the EDT.
+     */
+    private val draftCache = ComposerDraftCache { target, comment ->
+        val input = when (target.kind) {
+            ConversationComposerKind.Reply -> replyInput(commentId = target.commentId)
+            ConversationComposerKind.Edit -> editInput(comment = comment)
+        }
+        CommentComposerViewModel(input = input, startsExpanded = true)
+    }
+
     private var coroutineScope: CoroutineScope? = null
     private var displayedPullRequestId: Long? = null
     private var scrollRequestId = 0
@@ -66,7 +78,12 @@ class PullRequestConversationViewModel(
         this.coroutineScope = coroutineScope
     }
 
-    fun showConversation(conversation: PullRequestConversation?, coroutineScope: CoroutineScope, inPlaceRefresh: Boolean = false) {
+    fun showConversation(
+        conversation: PullRequestConversation?,
+        coroutineScope: CoroutineScope,
+        inPlaceRefresh: Boolean = false,
+        forceScrollToTop: Boolean = false
+    ) {
         bind(coroutineScope = coroutineScope)
         val currentPullRequestId = pullRequestId()
         val isSamePullRequest = displayedPullRequestId != null && displayedPullRequestId == currentPullRequestId
@@ -76,23 +93,18 @@ class PullRequestConversationViewModel(
             state.value = state.value.copy(
                 loadState = PullRequestConversationLoadState.Error,
                 isTruncated = false,
-                groups = emptyList()
+                threads = emptyList()
             )
             return
         }
-        val groups = groupConversationThreads(
-            threads = conversation.threads,
-            now = Clock.System.now(),
-            timeZone = TimeZone.currentSystemDefault()
-        )
         state.value = state.value.copy(
             loadState = PullRequestConversationLoadState.Loaded,
             isTruncated = conversation.isTruncated,
-            groups = groups,
+            threads = conversation.threads,
             currentUserUuid = conversation.currentUserUuid,
             currentUserAvatarUrl = conversation.currentUserAvatarUrl,
             mentions = conversation.mentions,
-            scrollRequest = newScrollRequest(force = !inPlaceRefresh && !isSamePullRequest)
+            scrollRequest = newScrollRequest(force = forceScrollToTop || (!inPlaceRefresh && !isSamePullRequest))
         )
         LOG.debug("Rendered ${conversation.threads.size} conversation threads for pull request #$currentPullRequestId")
         avatarCache.prefetch(
@@ -133,12 +145,6 @@ class PullRequestConversationViewModel(
                 fileExistence.putAll(existence)
             }
         }
-    }
-
-    /** Shows the newest entry again when the Conversation tab is re-selected. */
-    fun onConversationTabShown() {
-        LOG.debug("Conversation tab shown for pull request #${pullRequestId()}; scrolling to the newest entry")
-        state.value = state.value.copy(scrollRequest = newScrollRequest(force = true))
     }
 
     fun reset() {
@@ -218,18 +224,32 @@ class PullRequestConversationViewModel(
     /** Opens the reply editor of a comment. */
     override fun openReply(commentId: Long) {
         LOG.info("User opened the reply editor on comment $commentId in the conversation of pull request #${pullRequestId()}")
-        state.value = state.value.copy(openComposer = ConversationComposerTarget(commentId = commentId, kind = ConversationComposerKind.Reply))
+        switchComposerTarget(target = ConversationComposerTarget(commentId = commentId, kind = ConversationComposerKind.Reply))
     }
 
     /** Opens the edit editor of a comment. */
     override fun openEdit(commentId: Long) {
         LOG.info("User opened the edit editor on comment $commentId in the conversation of pull request #${pullRequestId()}")
-        state.value = state.value.copy(openComposer = ConversationComposerTarget(commentId = commentId, kind = ConversationComposerKind.Edit))
+        switchComposerTarget(target = ConversationComposerTarget(commentId = commentId, kind = ConversationComposerKind.Edit))
+    }
+
+    /** Only one composer is open at a time, so moving to another target drops the drafts of the previous one. */
+    private fun switchComposerTarget(target: ConversationComposerTarget) {
+        if (state.value.openComposer != target) {
+            draftCache.clear()
+        }
+        state.value = state.value.copy(openComposer = target)
     }
 
     /** Closes the open reply or edit editor and hands the row back. */
     override fun closeComposer() {
         state.value = state.value.copy(openComposer = null)
+        draftCache.clear()
+        draftCache.clearFocusRestore()
+    }
+
+    override fun composerViewModel(target: ConversationComposerTarget, comment: PullRequestComment, scope: Any): CommentComposerViewModel {
+        return draftCache.composerViewModel(target = target, comment = comment, scope = scope)
     }
 
     /** True while a change of that comment is still in flight, so its actions stay disabled. */
@@ -262,7 +282,7 @@ class PullRequestConversationViewModel(
 
     /** Returns a root or reply from the currently rendered conversation. */
     fun commentById(commentId: Long): PullRequestComment? {
-        return state.value.threads().asSequence()
+        return state.value.threads.asSequence()
             .flatMap { thread -> sequenceOf(thread.root) + thread.replies.asSequence() }
             .firstOrNull { comment -> comment.id == commentId }
     }
@@ -272,7 +292,7 @@ class PullRequestConversationViewModel(
         applyCommentChange(change = CommentChange.Delete(commentId = commentId))
     }
 
-    /** The input of the comment composer at the top of the conversation. */
+    /** The input of the comment composer at the top of the Activity card. */
     fun topLevelCommentInput(): CommentInput {
         return CommentInput(
             label = "comment",
@@ -349,8 +369,8 @@ class PullRequestConversationViewModel(
         private val LOG = logger<PullRequestConversationViewModel>()
 
         // The avatar pixel size the cache fetches for conversation thread comments, replies, and the in-thread reply/edit
-        // composer. It must stay equal to the CONVERSATION_AVATAR_SIZE display size in PullRequestConversationScreen.kt,
-        // so AuthorAvatarCache scales the fetched image to the size the Image actually draws.
+        // composer. It must stay equal to the CARD_AVATAR_SIZE display size in PullRequestCommentThreadCard.kt, so
+        // AuthorAvatarCache scales the fetched image to the size the Image actually draws.
         private const val CONVERSATION_AVATAR_SIZE = 16
 
         /**

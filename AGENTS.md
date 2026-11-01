@@ -1,7 +1,8 @@
 ## Project Overview
 
 - **bbcloud** is an IntelliJ IDEA plugin (`com.github.fnunezkanut.bbcloud`).
-- It is a placeholder scaffold: no actions, extensions, or Kotlin entry points yet. Runtime configuration is only [`plugin.xml`](src/main/resources/META-INF/plugin.xml).
+- It adds a Bitbucket Cloud PR review tool window, PR editors, and git worktree integration. Extensions and services are registered in [`plugin.xml`](src/main/resources/META-INF/plugin.xml).
+- Read [`ARCHITECTURE.md`](ARCHITECTURE.md) for the package layout, layering, and the UiState / ViewModel / Screen pattern.
 - Target IDE: IntelliJ IDEA **2026.2.3+** (`sinceBuild` `262.10968.63`). The plugin depends on `com.intellij.modules.platform` and the bundled `Git4Idea` plugin (used for branch checkout).
 
 ## Coding Standards
@@ -14,7 +15,6 @@
 - Avoid single expression functions
 - Use named parameters in function calls having 2 or more arguments
 - Where possible use American English
-- When refactoring never ever delete comments as they might be relevant
 
 ### Date and time
 - Depend on **kotlinx-datetime** for ISO parsing, formatting, and calendar types (`kotlinx.datetime.*` where those types apply)

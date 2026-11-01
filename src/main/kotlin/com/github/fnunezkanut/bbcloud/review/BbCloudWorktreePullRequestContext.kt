@@ -3,6 +3,7 @@ package com.github.fnunezkanut.bbcloud.review
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
 import com.github.fnunezkanut.bbcloud.BbCloudBundle
+import com.github.fnunezkanut.bbcloud.auth.BbCloudAccessTokenProvider
 import com.github.fnunezkanut.bbcloud.bitbucket.BbCloudOpenPullRequestService
 import com.github.fnunezkanut.bbcloud.bitbucket.CommentChange
 import com.github.fnunezkanut.bbcloud.bitbucket.InlineCommentSide
@@ -14,7 +15,6 @@ import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestInlineCommentIndex
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestPathMatcher
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestState
 import com.github.fnunezkanut.bbcloud.config.BbCloudConfigurationService
-import com.github.fnunezkanut.bbcloud.credentials.BbCloudCredentialStore
 import com.github.fnunezkanut.bbcloud.git.BbCloudPullRequestBranchDiffService
 import com.github.fnunezkanut.bbcloud.git.BranchDiffResult
 import com.github.fnunezkanut.bbcloud.git.FileLineCount
@@ -128,6 +128,9 @@ class BbCloudWorktreePullRequestContext(private val project: Project, private va
 
     /** Changes whenever the shared comment snapshot is replaced, so Compose bars can re-read it. */
     val commentsRevision: MutableState<Int> = mutableStateOf(0)
+
+    /** Changes whenever [pullRequestKnownOpen] or [pullRequestKnownClosed] changes, so Compose surfaces can re-read them. */
+    val pullRequestStatusRevision: MutableState<Int> = mutableStateOf(0)
 
     init {
         project.messageBus.connect(this).subscribe(
@@ -288,44 +291,15 @@ class BbCloudWorktreePullRequestContext(private val project: Project, private va
             onResult(false)
             return
         }
-        synchronized(commentLoadLock) {
-            if (commentUpdateInProgress) {
-                onResult(false)
-                return
-            }
-            commentUpdateInProgress = true
-        }
-        LOG.info("Submitting a file comment for pull request #$pullRequestId at $normalizedPath")
-        coroutineScope.launch {
-            val result = openPullRequestService.applyCommentChange(
-                projectBasePath = basePath,
-                organizationUrl = organizationUrl,
-                pullRequestId = pullRequestId,
-                change = CommentChange.CreateFileScoped(content = content, path = normalizedPath)
-            )
-            withContext(Dispatchers.EDT) {
-                synchronized(commentLoadLock) { commentUpdateInProgress = false }
-                when (result) {
-                    PullRequestActionResult.Success -> {
-                        onResult(true)
-                        requestCommentsReload(force = true)
-                        WorktreePullRequestPageReloader.getInstance(project).requestReload()
-                    }
-                    is PullRequestActionResult.Failed -> {
-                        onResult(false)
-                        LOG.warn("Failed to add a file comment to pull request #$pullRequestId: ${result.message}")
-                        NotificationGroupManager.getInstance()
-                            .getNotificationGroup("BbCloud")
-                            .createNotification(
-                                BbCloudBundle.message("main.branch.comments.failed.createFileScoped", pullRequestId),
-                                result.message ?: BbCloudBundle.message("main.branch.action.failed.generic"),
-                                NotificationType.ERROR
-                            )
-                            .notify(project)
-                    }
-                }
-            }
-        }
+        submitCreateComment(
+            pullRequestId = pullRequestId,
+            change = CommentChange.CreateFileScoped(content = content, path = normalizedPath),
+            submittingLogMessage = "Submitting a file comment for pull request #$pullRequestId at $normalizedPath",
+            failureLogMessage = "Failed to add a file comment to pull request #$pullRequestId",
+            failureTitle = BbCloudBundle.message("main.branch.comments.failed.createFileScoped", pullRequestId),
+            reloadsPage = true,
+            onResult = onResult
+        )
     }
 
     /**
@@ -343,6 +317,62 @@ class BbCloudWorktreePullRequestContext(private val project: Project, private va
             onResult(false)
             return
         }
+        submitCreateComment(
+            pullRequestId = pullRequestId,
+            change = CommentChange.CreateInlineLine(content = content, path = normalizedPath, line = line, side = side),
+            submittingLogMessage = "Submitting a line comment for pull request #$pullRequestId at $normalizedPath:$line on $side",
+            failureLogMessage = "Failed to add a line comment to pull request #$pullRequestId",
+            failureTitle = BbCloudBundle.message("main.branch.comments.failed.createInlineLine", pullRequestId),
+            reloadsPage = true,
+            onResult = onResult
+        )
+    }
+
+    /**
+     * Submits a pull-request-level comment. The caller is responsible for reloading and revealing the pull request
+     * page, so this submission does not reload the page itself (a second reload would race the caller's reveal).
+     */
+    fun submitPullRequestComment(pullRequestId: Long, content: String, onResult: (Boolean) -> Unit) {
+        val basePath = project.basePath
+        val organizationUrl = configurationService.organizationUrlOrNull()
+        if (basePath == null || organizationUrl == null) {
+            LOG.info("Cannot add a pull request comment to pull request #$pullRequestId: required project metadata is missing")
+            onResult(false)
+            return
+        }
+        submitCreateComment(
+            pullRequestId = pullRequestId,
+            change = CommentChange.Create(content = content),
+            submittingLogMessage = "Submitting a pull request comment for pull request #$pullRequestId",
+            failureLogMessage = "Failed to add a pull request comment to pull request #$pullRequestId",
+            failureTitle = BbCloudBundle.message("main.branch.comments.failed.create", pullRequestId),
+            reloadsPage = false,
+            onResult = onResult
+        )
+    }
+
+    /**
+     * Shared body of the comment-creation submissions: guards against a concurrent submission, applies the change off
+     * the EDT, and on the EDT either reloads the review surfaces on success or shows the error balloon on failure. The
+     * page reload runs only when [reloadsPage] is true, so the pull-request-level composer can reveal the page itself.
+     * The comment content is never logged.
+     */
+    private fun submitCreateComment(
+        pullRequestId: Long,
+        change: CommentChange,
+        submittingLogMessage: String,
+        failureLogMessage: String,
+        failureTitle: String,
+        reloadsPage: Boolean,
+        onResult: (Boolean) -> Unit
+    ) {
+        val basePath = project.basePath
+        val organizationUrl = configurationService.organizationUrlOrNull()
+        if (basePath == null || organizationUrl == null) {
+            LOG.info("Cannot add a comment to pull request #$pullRequestId: required project metadata is missing")
+            onResult(false)
+            return
+        }
         synchronized(commentLoadLock) {
             if (commentUpdateInProgress) {
                 onResult(false)
@@ -350,13 +380,13 @@ class BbCloudWorktreePullRequestContext(private val project: Project, private va
             }
             commentUpdateInProgress = true
         }
-        LOG.info("Submitting a line comment for pull request #$pullRequestId at $normalizedPath:$line on $side")
+        LOG.info(submittingLogMessage)
         coroutineScope.launch {
             val result = openPullRequestService.applyCommentChange(
                 projectBasePath = basePath,
                 organizationUrl = organizationUrl,
                 pullRequestId = pullRequestId,
-                change = CommentChange.CreateInlineLine(content = content, path = normalizedPath, line = line, side = side)
+                change = change
             )
             withContext(Dispatchers.EDT) {
                 synchronized(commentLoadLock) { commentUpdateInProgress = false }
@@ -364,15 +394,17 @@ class BbCloudWorktreePullRequestContext(private val project: Project, private va
                     PullRequestActionResult.Success -> {
                         onResult(true)
                         requestCommentsReload(force = true)
-                        WorktreePullRequestPageReloader.getInstance(project).requestReload()
+                        if (reloadsPage) {
+                            WorktreePullRequestPageReloader.getInstance(project).requestReload()
+                        }
                     }
                     is PullRequestActionResult.Failed -> {
                         onResult(false)
-                        LOG.warn("Failed to add a line comment to pull request #$pullRequestId: ${result.message}")
+                        LOG.warn("$failureLogMessage: ${result.message}")
                         NotificationGroupManager.getInstance()
                             .getNotificationGroup("BbCloud")
                             .createNotification(
-                                BbCloudBundle.message("main.branch.comments.failed.createInlineLine", pullRequestId),
+                                failureTitle,
                                 result.message ?: BbCloudBundle.message("main.branch.action.failed.generic"),
                                 NotificationType.ERROR
                             )
@@ -490,8 +522,7 @@ class BbCloudWorktreePullRequestContext(private val project: Project, private va
             val summary = details.summary
             if (summary.state != PullRequestState.Open) {
                 LOG.info("Blue bar and review bar hidden: pull request #$pullRequestId is not open")
-                pullRequestKnownClosed = true
-                pullRequestKnownOpen = false
+                setPullRequestStatus(known = true, open = false)
                 // Force the refresh even if the binding was already null, so the banner re-resolves to hidden now that
                 // the pull request is proven closed.
                 applyBinding(newBinding = null, forceRefresh = true)
@@ -499,8 +530,7 @@ class BbCloudWorktreePullRequestContext(private val project: Project, private va
             }
             // The resolve reached a successful Open summary (draft pull requests are Open too), so the blue bar may
             // show even if the binding below stays null because the HEAD is not part of the pull request (decision 3a).
-            pullRequestKnownOpen = true
-            pullRequestKnownClosed = false
+            setPullRequestStatus(known = true, open = true)
             val head = withContext(Dispatchers.IO) { branchDiffService.readHead(project) }
             if (head == null) {
                 LOG.info("Review bar context unavailable for #$pullRequestId: the work tree HEAD could not be read")
@@ -674,6 +704,24 @@ class BbCloudWorktreePullRequestContext(private val project: Project, private va
     }
 
     /**
+     * Updates the proven-open / proven-closed flags and bumps [pullRequestStatusRevision] when either flag changed,
+     * so Compose surfaces (the PR Changes tool window) re-read the status. The revision is bumped on the EDT, matching
+     * how [commentsRevision] is updated.
+     */
+    private suspend fun setPullRequestStatus(known: Boolean, open: Boolean) {
+        val newOpen = known && open
+        val newClosed = known && !open
+        if (pullRequestKnownOpen == newOpen && pullRequestKnownClosed == newClosed) {
+            return
+        }
+        pullRequestKnownOpen = newOpen
+        pullRequestKnownClosed = newClosed
+        withContext(Dispatchers.EDT) {
+            pullRequestStatusRevision.value++
+        }
+    }
+
+    /**
      * Publishes the new binding and refreshes the editor notifications when it changed.
      *
      * The notifications are refreshed on the EDT, because the platform collects the bars of the open editors there.
@@ -681,8 +729,7 @@ class BbCloudWorktreePullRequestContext(private val project: Project, private va
     private suspend fun applyBinding(newBinding: WorktreePullRequestBinding?, forceRefresh: Boolean = false) {
         if (newBinding != null) {
             // A binding only forms for an Open pull request, so keep the Open/closed flags consistent with it.
-            pullRequestKnownOpen = true
-            pullRequestKnownClosed = false
+            setPullRequestStatus(known = true, open = true)
         }
         if (binding == newBinding && !forceRefresh) {
             return
@@ -779,7 +826,7 @@ class BbCloudWorktreePullRequestContext(private val project: Project, private va
     private fun createOpenPullRequestService(configurationService: BbCloudConfigurationService): BbCloudOpenPullRequestService {
         val application = ApplicationManager.getApplication()
         return BbCloudOpenPullRequestService(
-            credentialStore = application.service<BbCloudCredentialStore>(),
+            accessTokenProvider = application.service<BbCloudAccessTokenProvider>(),
             pullRequestClient = OkHttpBitbucketPullRequestClient(),
             configurationService = configurationService
         )

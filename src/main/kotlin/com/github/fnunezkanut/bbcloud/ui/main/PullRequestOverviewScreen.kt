@@ -1,20 +1,22 @@
 @file:Suppress("ktlint:standard:function-naming")
 @file:OptIn(
     org.jetbrains.jewel.foundation.ExperimentalJewelApi::class,
-    androidx.compose.foundation.ExperimentalFoundationApi::class
+    androidx.compose.foundation.ExperimentalFoundationApi::class,
+    kotlinx.coroutines.FlowPreview::class
 )
 
 package com.github.fnunezkanut.bbcloud.ui.main
 
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -22,6 +24,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.PointerIcon
@@ -35,92 +38,162 @@ import com.github.fnunezkanut.bbcloud.bitbucket.CommentEmojiResolver
 import com.github.fnunezkanut.bbcloud.bitbucket.MergeCheckStatus
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestReviewer
 import com.github.fnunezkanut.bbcloud.bitbucket.ReviewerStatus
+import com.github.fnunezkanut.bbcloud.settings.BbCloudSettings
 import com.github.fnunezkanut.bbcloud.ui.components.BbCloudOutlinedActionButton
 import com.github.fnunezkanut.bbcloud.ui.otherprojects.toComposeImageBitmap
 import com.intellij.ide.BrowserUtil
+import com.intellij.openapi.diagnostic.logger
+import kotlinx.coroutines.flow.debounce
 import org.jetbrains.jewel.foundation.theme.JewelTheme
 import org.jetbrains.jewel.ui.component.Checkbox
+import org.jetbrains.jewel.ui.component.HorizontalSplitLayout
 import org.jetbrains.jewel.ui.component.Icon
 import org.jetbrains.jewel.ui.component.Link
+import org.jetbrains.jewel.ui.component.SplitLayoutState
 import org.jetbrains.jewel.ui.component.Text
 import org.jetbrains.jewel.ui.component.TextArea
 import org.jetbrains.jewel.ui.component.TextField
 import org.jetbrains.jewel.ui.component.Tooltip
 import org.jetbrains.jewel.ui.component.VerticallyScrollableContainer
+import org.jetbrains.jewel.ui.component.rememberSplitLayoutState
 import org.jetbrains.jewel.ui.icon.IconKey
 import org.jetbrains.jewel.ui.icons.AllIconsKeys
+import kotlin.math.abs
+
+private val LOG = logger<PullRequestOverviewViewModel>()
 
 private val CARD_GAP = 8.dp
+private val LEFT_PANE_MIN_WIDTH = 320.dp
+private val RIGHT_PANE_MIN_WIDTH = 240.dp
+private const val SPLIT_PERSIST_DEBOUNCE_MILLIS = 400L
+
+/** Divider changes smaller than this (about one pixel on a 1000 px page) are not written back to the settings. */
+private const val SPLIT_PERSIST_TOLERANCE = 0.001f
 
 /**
- * The Jewel Overview tab: the description with the history feed beneath it on the left, and four existing cards on the
- * right, in a golden-ratio split. The left column scrolls as one, so a long description and a long history do not
- * fight over the height.
+ * The pull-request page content: the description with the Activity timeline beneath it on the left, and four existing
+ * cards on the right, in a draggable Jewel horizontal split whose position is persisted and defaults to 75/25. The
+ * left column scrolls as one, so a long description and a long timeline do not fight over the height. The comment
+ * composer sits at the top of the Activity card, under the description.
  */
 @Composable
-fun PullRequestOverviewScreen(viewModel: PullRequestOverviewViewModel, historyViewModel: PullRequestHistoryViewModel) {
+fun PullRequestOverviewScreen(
+    viewModel: PullRequestOverviewViewModel,
+    historyViewModel: PullRequestHistoryViewModel,
+    conversationViewModel: PullRequestConversationViewModel
+) {
     val state by viewModel.state
-    Row(
+    val leftScrollState = rememberScrollState()
+    val settings = remember { BbCloudSettings.getInstance() }
+    val splitState = rememberSplitLayoutState(initialSplitFraction = settings.prPageSplitFraction)
+    PersistSplitFraction(splitState = splitState, settings = settings)
+    HorizontalSplitLayout(
         modifier = Modifier.fillMaxSize(),
-        horizontalArrangement = Arrangement.spacedBy(CARD_GAP)
-    ) {
-        VerticallyScrollableContainer(
-            modifier = Modifier
-                .weight(GOLDEN_RATIO_LEFT)
-                .fillMaxHeight()
-        ) {
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(CARD_GAP)
+        state = splitState,
+        firstPaneMinWidth = LEFT_PANE_MIN_WIDTH,
+        secondPaneMinWidth = RIGHT_PANE_MIN_WIDTH,
+        first = {
+            VerticallyScrollableContainer(
+                modifier = Modifier.fillMaxSize(),
+                scrollState = leftScrollState
             ) {
-                TitledCardBox(title = null) {
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(bottom = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = state.description.title,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.weight(1f)
-                            )
-                            if (state.description.isEditable && !state.description.isEditing) {
-                                EditDescriptionButton(onClick = viewModel::onEditDescription)
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(end = CARD_GAP / 2),
+                    verticalArrangement = Arrangement.spacedBy(CARD_GAP)
+                ) {
+                    TitledCardBox(title = null) {
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = state.description.title,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                if (state.description.isEditable && !state.description.isEditing) {
+                                    EditDescriptionButton(onClick = viewModel::onEditDescription)
+                                }
                             }
+                            DescriptionBody(viewModel = viewModel)
                         }
-                        DescriptionBody(viewModel = viewModel)
+                    }
+                    // The timeline renders its own bold "Activity" title, so the card carries no title of its own.
+                    TitledCardBox {
+                        PullRequestActivityFeedScreen(
+                            historyViewModel = historyViewModel,
+                            conversationViewModel = conversationViewModel
+                        )
                     }
                 }
-                // The feed renders its own bold "History" title, so the card carries no title of its own.
-                TitledCardBox {
-                    PullRequestHistoryFeedScreen(viewModel = historyViewModel)
+            }
+        },
+        second = {
+            VerticallyScrollableContainer(
+                modifier = Modifier.fillMaxSize()
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = CARD_GAP / 2),
+                    verticalArrangement = Arrangement.spacedBy(CARD_GAP)
+                ) {
+                    TitledCardBox {
+                        BuildsCard(viewModel = viewModel)
+                    }
+                    TitledCardBox {
+                        ChecksCard(viewModel = viewModel)
+                    }
+                    TitledCardBox {
+                        ReviewersCard(viewModel = viewModel)
+                    }
+                    TitledCardBox {
+                        TasksCard(viewModel = viewModel)
+                    }
                 }
             }
         }
-        VerticallyScrollableContainer(
-            modifier = Modifier
-                .weight(GOLDEN_RATIO_RIGHT)
-                .fillMaxHeight()
-        ) {
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(CARD_GAP)
-            ) {
-                TitledCardBox {
-                    BuildsCard(viewModel = viewModel)
+    )
+    ActivityScrollEffect(conversationViewModel = conversationViewModel, scrollState = leftScrollState)
+}
+
+/**
+ * Writes the divider position back to [BbCloudSettings] once the user stops dragging. The position is observed through
+ * a debounce so the settings are not written on every drag frame. Changes within [SPLIT_PERSIST_TOLERANCE] of the
+ * stored value are skipped, because the layout rounds the divider to whole pixels and the first layout pass after
+ * opening the tab would otherwise write a value that differs only by rounding.
+ */
+@Composable
+private fun PersistSplitFraction(splitState: SplitLayoutState, settings: BbCloudSettings) {
+    LaunchedEffect(splitState) {
+        snapshotFlow { splitState.dividerPosition }
+            .debounce(SPLIT_PERSIST_DEBOUNCE_MILLIS)
+            .collect { fraction ->
+                if (abs(fraction - settings.prPageSplitFraction) < SPLIT_PERSIST_TOLERANCE) {
+                    return@collect
                 }
-                TitledCardBox {
-                    ChecksCard(viewModel = viewModel)
-                }
-                TitledCardBox {
-                    ReviewersCard(viewModel = viewModel)
-                }
-                TitledCardBox {
-                    TasksCard(viewModel = viewModel)
-                }
+                settings.prPageSplitFraction = fraction
+                LOG.debug("Persisted pull request page split fraction: $fraction")
             }
+    }
+}
+
+/**
+ * Brings the top of the page (description, composer and newest activity) back into view when the view model asks for
+ * it. A forced request always scrolls; otherwise the page only scrolls when the reader is still near the top.
+ */
+@Composable
+internal fun ActivityScrollEffect(conversationViewModel: PullRequestConversationViewModel, scrollState: ScrollState) {
+    val state by conversationViewModel.state
+    val scrollRequest = state.scrollRequest ?: return
+    LaunchedEffect(scrollRequest.id) {
+        if (scrollRequest.force || ConversationThreadRules.shouldSnapToTop(offsetPx = scrollState.value)) {
+            scrollState.scrollTo(0)
         }
     }
 }
@@ -147,7 +220,7 @@ private fun DescriptionBody(viewModel: PullRequestOverviewViewModel) {
         if (markdown.isNullOrBlank()) {
             state.description.emptyMessage?.let { message -> MessageText(text = message) }
         } else {
-            // The left column of the Overview tab scrolls, so the description sizes to its content here.
+            // The left column of the pull-request page scrolls, so the description sizes to its content here.
             MarkdownDescription(markdown = markdown)
         }
         return
@@ -376,7 +449,7 @@ private fun ReviewerRow(reviewer: PullRequestReviewer, isEditable: Boolean, isUp
     val bitmap = remember(reviewer.avatarUrl, avatarRevision) {
         viewModel.avatarIconFor(reviewer.avatarUrl).toComposeImageBitmap()
     }
-    // Reuses the shared reviewer row so the Overview output stays pixel-identical to the new pull request form: the
+    // Reuses the shared reviewer row so the page output stays pixel-identical to the new pull request form: the
     // status tooltip and icon slot, then the 20dp avatar, the name, and the remove affordance.
     ReviewerIdentityRow(
         displayName = reviewer.displayName,
@@ -400,7 +473,7 @@ private fun reviewerStatusIconKey(status: ReviewerStatus): IconKey {
     }
 }
 
-private fun reviewerStatusTooltip(status: ReviewerStatus): String {
+internal fun reviewerStatusTooltip(status: ReviewerStatus): String {
     return when (status) {
         ReviewerStatus.Approved -> BbCloudBundle.message("main.branch.reviewers.status.approved")
         ReviewerStatus.ChangesRequested -> BbCloudBundle.message("main.branch.reviewers.status.changesRequested")

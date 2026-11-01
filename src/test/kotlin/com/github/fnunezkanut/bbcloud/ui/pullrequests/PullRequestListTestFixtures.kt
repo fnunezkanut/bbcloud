@@ -1,5 +1,6 @@
 package com.github.fnunezkanut.bbcloud.ui.pullrequests
 
+import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestReviewer
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestState
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestSummary
 import com.github.fnunezkanut.bbcloud.bitbucket.ReviewingPullRequest
@@ -22,6 +23,7 @@ internal fun listEntry(
     isDraft: Boolean = false,
     authorUuid: String? = null,
     approverUuids: Set<String> = emptySet(),
+    reviewers: List<PullRequestReviewer> = emptyList(),
     updatedOn: String? = null
 ): PullRequestListEntry {
     val updatedInstant = updatedOn?.let { Instant.parse(it) } ?: Clock.System.now()
@@ -39,7 +41,8 @@ internal fun listEntry(
         state = state,
         isDraft = isDraft,
         authorUuid = authorUuid,
-        approverUuids = approverUuids
+        approverUuids = approverUuids,
+        reviewers = reviewers
     )
     return PullRequestListEntry(
         pullRequest = ReviewingPullRequest(summary = summary, workspace = workspace, repoSlug = repoSlug),

@@ -1,8 +1,8 @@
 package com.github.fnunezkanut.bbcloud.bitbucket
 
 import com.github.fnunezkanut.bbcloud.BbCloudBundle
+import com.github.fnunezkanut.bbcloud.auth.BbCloudAccessTokenProvider
 import com.github.fnunezkanut.bbcloud.config.BbCloudConfigurationService
-import com.github.fnunezkanut.bbcloud.credentials.BbCloudCredentialStore
 import com.github.fnunezkanut.bbcloud.git.BitbucketGitRemoteReader
 import com.github.fnunezkanut.bbcloud.project.ProjectRepositoryResolver
 import com.github.fnunezkanut.bbcloud.review.BbCloudUserDisplayNameCache
@@ -18,7 +18,7 @@ import kotlinx.coroutines.withContext
 import java.nio.file.Path
 
 class BbCloudOpenPullRequestService(
-    private val credentialStore: BbCloudCredentialStore,
+    private val accessTokenProvider: BbCloudAccessTokenProvider,
     private val pullRequestClient: BitbucketPullRequestClient,
     private val readRemoteUrl: (Path) -> String? = BitbucketGitRemoteReader::readRemoteUrl,
     private val configurationService: BbCloudConfigurationService? = null,
@@ -671,9 +671,9 @@ class BbCloudOpenPullRequestService(
      * Returns null when the API token is unavailable or when Bitbucket returns no details.
      */
     suspend fun pullRequestDetailsFor(workspace: String, repoSlug: String, organizationUrl: String, pullRequestId: Long): PullRequestDetails? {
-        val apiToken = credentialStore.getToken()
+        val apiToken = accessTokenProvider.bearerTokenOrNull()
         if (apiToken == null) {
-            LOG.info("Cannot load pull request details for $workspace/$repoSlug #$pullRequestId: no stored API token")
+            LOG.info("Cannot load pull request details for $workspace/$repoSlug #$pullRequestId: no Bitbucket credentials")
             return null
         }
 
@@ -689,6 +689,29 @@ class BbCloudOpenPullRequestService(
             currentUserUuid = currentUserUuid,
             apiToken = apiToken
         )
+    }
+
+    /**
+     * Reads the repository's Bitbucket `mainbranch` name directly from the workspace and slug, without a project base
+     * path. Mirrors [pullRequestDetailsFor]: it works from the row's known workspace and slug so it does not depend on
+     * an open project, which the work-tree branch-collision flow needs because the colliding clone is not necessarily
+     * the current project. Returns null when the API token is unavailable, the lookup fails, or Bitbucket has no name.
+     */
+    suspend fun mainBranchNameFor(workspace: String, repoSlug: String): String? {
+        val apiToken = accessTokenProvider.bearerTokenOrNull()
+        if (apiToken == null) {
+            LOG.info("Cannot load the main branch for $workspace/$repoSlug: no Bitbucket credentials")
+            return null
+        }
+        LOG.debug("Loading the main branch for $workspace/$repoSlug (direct lookup, token present=${apiToken.isNotEmpty()})")
+        return try {
+            pullRequestClient.getMainBranchName(workspace = workspace, repoSlug = repoSlug, apiToken = apiToken)
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            LOG.debug("Loading the main branch for $workspace/$repoSlug failed", exception)
+            null
+        }
     }
 
     suspend fun performAction(
@@ -967,9 +990,9 @@ class BbCloudOpenPullRequestService(
             return null
         }
 
-        val apiToken = credentialStore.getToken()
+        val apiToken = accessTokenProvider.bearerTokenOrNull()
         if (apiToken == null) {
-            LOG.info("Cannot $operation: no stored API token")
+            LOG.info("Cannot $operation: no Bitbucket credentials")
             return null
         }
 

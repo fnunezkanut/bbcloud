@@ -35,6 +35,8 @@ class BbCloudPluginDescriptorTest {
                 "com.github.fnunezkanut.bbcloud.git.BbCloudWorktreeService",
                 "com.github.fnunezkanut.bbcloud.ui.pullrequest.decline.BbCloudPullRequestDeclineCoordinator",
                 "com.github.fnunezkanut.bbcloud.credentials.PasswordSafeBbCloudCredentialStore",
+                "com.github.fnunezkanut.bbcloud.auth.BbCloudAuthService",
+                "com.github.fnunezkanut.bbcloud.auth.BbCloudOAuthLoginService",
                 "com.github.fnunezkanut.bbcloud.review.BbCloudPullRequestReviewState",
                 "com.github.fnunezkanut.bbcloud.review.BbCloudPullRequestViewedFiles",
                 "com.github.fnunezkanut.bbcloud.review.BbCloudPullRequestViewedThreads",
@@ -44,6 +46,7 @@ class BbCloudPluginDescriptorTest {
                 "com.github.fnunezkanut.bbcloud.ui.diff.BbCloudPullRequestDiffCommentService",
                 "com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.BbCloudPullRequestEditorOpener",
                 "com.github.fnunezkanut.bbcloud.ui.pullrequest.create.BbCloudNewPullRequestEditorOpener",
+                "com.github.fnunezkanut.bbcloud.ui.pullrequest.help.BbCloudWorktreesHelpEditorOpener",
                 "com.github.fnunezkanut.bbcloud.ui.BbCloudToolWindowPanel"
             )
         }
@@ -61,13 +64,15 @@ class BbCloudPluginDescriptorTest {
         assertSoftly {
             val interfaces = registrations.mapNotNull { it.serviceInterface }
             interfaces shouldContainExactlyInAnyOrder listOf(
-                "com.github.fnunezkanut.bbcloud.credentials.BbCloudCredentialStore"
+                "com.github.fnunezkanut.bbcloud.credentials.BbCloudCredentialStore",
+                "com.github.fnunezkanut.bbcloud.auth.BbCloudAccessTokenProvider"
             )
             registrations.filter { it.serviceInterface == null }.map { it.implementation } shouldContainExactly listOf(
                 "com.github.fnunezkanut.bbcloud.review.BbCloudPullRequestViewedThreads",
                 "com.github.fnunezkanut.bbcloud.git.BbCloudWorktreeService",
                 "com.github.fnunezkanut.bbcloud.ui.pullrequest.decline.BbCloudPullRequestDeclineCoordinator",
                 "com.github.fnunezkanut.bbcloud.settings.BbCloudSettings",
+                "com.github.fnunezkanut.bbcloud.auth.BbCloudOAuthLoginService",
                 "com.github.fnunezkanut.bbcloud.review.BbCloudPullRequestReviewState",
                 "com.github.fnunezkanut.bbcloud.review.BbCloudPullRequestViewedFiles",
                 "com.github.fnunezkanut.bbcloud.review.BbCloudWorktreePullRequestContext",
@@ -76,6 +81,7 @@ class BbCloudPluginDescriptorTest {
                 "com.github.fnunezkanut.bbcloud.ui.diff.BbCloudPullRequestDiffCommentService",
                 "com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.BbCloudPullRequestEditorOpener",
                 "com.github.fnunezkanut.bbcloud.ui.pullrequest.create.BbCloudNewPullRequestEditorOpener",
+                "com.github.fnunezkanut.bbcloud.ui.pullrequest.help.BbCloudWorktreesHelpEditorOpener",
                 "com.github.fnunezkanut.bbcloud.ui.BbCloudToolWindowPanel"
             )
         }
@@ -122,7 +128,8 @@ class BbCloudPluginDescriptorTest {
             )
             fileEditorProviders.map { it.getAttribute("implementationClass") } shouldContainExactly listOf(
                 "com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.BbCloudPullRequestFileEditorProvider",
-                "com.github.fnunezkanut.bbcloud.ui.pullrequest.create.BbCloudNewPullRequestFileEditorProvider"
+                "com.github.fnunezkanut.bbcloud.ui.pullrequest.create.BbCloudNewPullRequestFileEditorProvider",
+                "com.github.fnunezkanut.bbcloud.ui.pullrequest.help.BbCloudWorktreesHelpFileEditorProvider"
             )
             titleProviders.map { it.getAttribute("implementationClass") } shouldContainExactly listOf(
                 "com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.BbCloudPullRequestEditorTabTitleProvider"
@@ -147,6 +154,21 @@ class BbCloudPluginDescriptorTest {
                 "com.github.fnunezkanut.bbcloud.ui.pullrequest.projectView.BbCloudPullRequestProjectViewRefreshStartupActivity"
             )
         }
+    }
+
+    @Test
+    fun `plugin xml - should register the REST open endpoint as an http request handler`() {
+        // GIVEN
+        val descriptor = pluginDescriptor()
+
+        // WHEN
+        val extensions = descriptor.getElementsByTagName("extensions").item(0) as Element
+        val handlers = elements(extensions, "httpRequestHandler")
+
+        // THEN
+        handlers.map { it.getAttribute("implementation") } shouldContainExactly listOf(
+            "com.github.fnunezkanut.bbcloud.external.BbCloudOpenPullRequestRestService"
+        )
     }
 
     private fun elements(parent: Element, tagName: String): List<Element> {

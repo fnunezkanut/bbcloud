@@ -20,7 +20,13 @@ import com.github.fnunezkanut.bbcloud.ui.main.PullRequestCommentThreadCard
 
 /** Inline diff thread card with Conversation spacing; reports its natural height so the inlay can grow and shrink. */
 @Composable
-internal fun DiffInlineCommentThreadCard(thread: TimelineEntry.CommentThread, host: DiffCommentThreadHost, controller: EditorCommentThreadController) {
+internal fun DiffInlineCommentThreadCard(
+    thread: TimelineEntry.CommentThread,
+    host: DiffCommentThreadHost,
+    controller: EditorCommentThreadController,
+    composerScope: Any,
+    requestComposerFocus: Boolean = false
+) {
     val density = LocalDensity.current.density
     PullRequestCommentThreadCard(
         thread = thread,
@@ -32,6 +38,9 @@ internal fun DiffInlineCommentThreadCard(thread: TimelineEntry.CommentThread, ho
             .onSizeChanged { size ->
                 host.syncComposeContentHeight(contentHeightPx = size.height, density = density)
             }
-            .padding(bottom = ConversationThreadLayout.verticalGapBetweenCards)
+            .padding(bottom = ConversationThreadLayout.verticalGapBetweenCards),
+        requestComposerFocus = requestComposerFocus,
+        composerScope = composerScope,
+        onComposerFocusRequested = { host.requestComposeFocus() }
     )
 }
