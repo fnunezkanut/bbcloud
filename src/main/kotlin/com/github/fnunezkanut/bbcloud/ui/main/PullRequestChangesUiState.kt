@@ -3,15 +3,18 @@ package com.github.fnunezkanut.bbcloud.ui.main
 import com.github.fnunezkanut.bbcloud.git.FileLineCount
 
 /**
- * The state of the file-changes card of the Changes tab. It mirrors the old Swing `ViewCard` of
+ * The state of the file-changes card of the PR Changes tool window. It mirrors the old Swing `ViewCard` of
  * [PullRequestFilesChangedPanel], so the same five states are rendered in the same order.
+ *
+ * `Resolved` is used only by the work-tree PR Changes tool window when the pull request is no longer open.
  */
 enum class PullRequestFileChangesCard {
     Idle,
     Loading,
     Error,
     Empty,
-    Listing
+    Listing,
+    Resolved
 }
 
 /**
@@ -27,6 +30,8 @@ enum class PullRequestFileChangesCard {
  * @param statusColorArgb The ARGB color of the file status, or null to use the default text color.
  * @param lineCount The added and removed line counts of the file, or null when they are unknown or not loaded. A
  * binary file may be non-null with [FileLineCount.isBinary] set to true.
+ * @param revision The source-branch blob id of the file, used to decide whether a stored Viewed mark is still current;
+ * null when the revision is unknown or the file was deleted.
  */
 data class PullRequestFileChangeRow(
     val changeId: Int,
@@ -34,12 +39,15 @@ data class PullRequestFileChangeRow(
     val fileName: String,
     val commentCount: Int,
     val statusColorArgb: Int?,
-    val lineCount: FileLineCount? = null
+    val lineCount: FileLineCount? = null,
+    val revision: String? = null
 )
 
-/** The Compose state of the Changes tab: the file-changes card plus the rows the file tree is built from. */
+/** The Compose state of the PR Changes tool window: the file-changes card plus the rows the file tree is built from. */
 data class PullRequestChangesUiState(
     val card: PullRequestFileChangesCard = PullRequestFileChangesCard.Idle,
     val rows: List<PullRequestFileChangeRow> = emptyList(),
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    /** The pull request number shown by the `Resolved` card, or null when it is unknown. */
+    val resolvedPullRequestId: Long? = null
 )

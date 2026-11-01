@@ -22,8 +22,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -31,6 +34,8 @@ import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.github.fnunezkanut.bbcloud.BbCloudBundle
@@ -47,6 +52,7 @@ import org.jetbrains.jewel.ui.component.Icon
 import org.jetbrains.jewel.ui.component.Link
 import org.jetbrains.jewel.ui.component.OutlinedButton
 import org.jetbrains.jewel.ui.component.Text
+import org.jetbrains.jewel.ui.component.TextField
 import org.jetbrains.jewel.ui.component.Tooltip
 import org.jetbrains.jewel.ui.component.TriStateCheckbox
 import org.jetbrains.jewel.ui.component.VerticallyScrollableContainer
@@ -75,6 +81,13 @@ fun WatchedProjectsScreen(viewModel: WatchedProjectsViewModel) {
                 )
             }
         }
+        if (state.card == WatchedProjectsCard.Listing) {
+            WatchedProjectsSearchField(
+                query = state.searchQuery,
+                onQueryChange = viewModel::onSearchQueryChanged,
+                onClear = viewModel::onSearchCleared
+            )
+        }
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             when (state.card) {
                 WatchedProjectsCard.Loading -> Box(
@@ -85,13 +98,18 @@ fun WatchedProjectsScreen(viewModel: WatchedProjectsViewModel) {
                 }
 
                 WatchedProjectsCard.Empty -> Unit
-                WatchedProjectsCard.Listing -> WatchedProjectsTable(viewModel = viewModel)
+                WatchedProjectsCard.Listing -> if (state.visibleRows.isEmpty()) {
+                    WatchedProjectsNoMatches(query = state.searchQuery)
+                } else {
+                    WatchedProjectsTable(viewModel = viewModel)
+                }
             }
         }
         WatchedProjectsFooter(
             state = state,
             onSync = viewModel::onSyncClicked,
-            onPrune = viewModel::onPruneWorktreesClicked
+            onPrune = viewModel::onPruneWorktreesClicked,
+            onWorktreesHelp = viewModel::onWorktreesHelpClicked
         )
     }
 }
@@ -131,9 +149,73 @@ private data class FlexibleColumnWidths(
     val worktrees: androidx.compose.ui.unit.Dp
 )
 
+/** The filter field above the table. Its text is the session-only [WatchedProjectsUiState.searchQuery]. */
+@Composable
+private fun WatchedProjectsSearchField(query: String, onQueryChange: (String) -> Unit, onClear: () -> Unit) {
+    // Hold the TextFieldValue locally so the caret advances with typing; resync from the incoming query only when the
+    // backing text differs (for example after the clear button), so an external update never snaps the caret.
+    var fieldValue by remember { mutableStateOf(TextFieldValue(text = query)) }
+    LaunchedEffect(query) {
+        if (fieldValue.text != query) {
+            fieldValue = TextFieldValue(text = query)
+        }
+    }
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        TextField(
+            value = fieldValue,
+            onValueChange = { updated ->
+                fieldValue = updated
+                onQueryChange(updated.text)
+            },
+            modifier = Modifier.weight(1f),
+            placeholder = { Text(text = BbCloudBundle.message("workspace.watchedProjects.search.placeholder")) },
+            leadingIcon = {
+                Icon(
+                    key = AllIconsKeys.Actions.Search,
+                    contentDescription = BbCloudBundle.message("workspace.watchedProjects.search.icon.description")
+                )
+            }
+        )
+        if (query.isNotEmpty()) {
+            Tooltip(
+                tooltip = {
+                    Text(text = BbCloudBundle.message("workspace.watchedProjects.search.clear.tooltip"))
+                }
+            ) {
+                Icon(
+                    key = AllIconsKeys.Actions.Close,
+                    contentDescription = BbCloudBundle.message("workspace.watchedProjects.search.clear.tooltip"),
+                    modifier = Modifier.clickable(onClick = onClear).pointerHoverIcon(PointerIcon.Hand)
+                )
+            }
+        }
+    }
+}
+
+/** The message shown in place of the table when the search query matches no project. */
+@Composable
+private fun WatchedProjectsNoMatches(query: String) {
+    Box(
+        modifier = Modifier.fillMaxSize().padding(8.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = BbCloudBundle.message("workspace.watchedProjects.search.noResults", query),
+            textAlign = TextAlign.Center,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
 @Composable
 private fun WatchedProjectsTable(viewModel: WatchedProjectsViewModel) {
     val state by viewModel.state
+    val visibleRows = state.visibleRows
     Column(modifier = Modifier.fillMaxSize()) {
         VerticallyScrollableContainer(modifier = Modifier.fillMaxSize()) {
             // BoxWithConstraints exposes the available width so the flexible columns can be sized to consume the whole
@@ -147,7 +229,7 @@ private fun WatchedProjectsTable(viewModel: WatchedProjectsViewModel) {
                         flexibleWidths = flexibleWidths,
                         onMasterToggle = viewModel::onMasterToggleClicked
                     )
-                ) + state.rows.mapIndexed { index, row ->
+                ) + visibleRows.mapIndexed { index, row ->
                     watchedProjectRowCells(
                         row = row,
                         rowIndex = index,
@@ -157,7 +239,7 @@ private fun WatchedProjectsTable(viewModel: WatchedProjectsViewModel) {
                 }
 
                 BasicTableLayout(
-                    rowCount = state.rows.size + 1,
+                    rowCount = visibleRows.size + 1,
                     columnCount = COLUMN_COUNT,
                     cellBorderColor = Color.Unspecified,
                     cellBorderWidth = CELL_BORDER_WIDTH,
@@ -456,7 +538,7 @@ private fun WorktreeEntry(mapping: WatchedProjectMapping, worktree: WatchedProje
 }
 
 @Composable
-private fun WatchedProjectsFooter(state: WatchedProjectsUiState, onSync: () -> Unit, onPrune: () -> Unit) {
+private fun WatchedProjectsFooter(state: WatchedProjectsUiState, onSync: () -> Unit, onPrune: () -> Unit, onWorktreesHelp: () -> Unit) {
     Divider(
         orientation = Orientation.Horizontal,
         modifier = Modifier.fillMaxWidth()
@@ -472,7 +554,12 @@ private fun WatchedProjectsFooter(state: WatchedProjectsUiState, onSync: () -> U
             overflow = TextOverflow.Ellipsis
         )
         Spacer(modifier = Modifier.weight(1f))
+        Link(
+            text = BbCloudBundle.message("workspace.watchedProjects.worktreesHelp.link"),
+            onClick = onWorktreesHelp
+        )
         if (state.syncVisible) {
+            Spacer(modifier = Modifier.width(12.dp))
             Tooltip(
                 tooltip = {
                     Text(text = BbCloudBundle.message("workspace.watchedProjects.prune.tooltip"))

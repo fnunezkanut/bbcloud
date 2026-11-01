@@ -4,6 +4,7 @@ import com.github.fnunezkanut.bbcloud.config.BbCloudConfigurationService
 import com.github.fnunezkanut.bbcloud.project.PullRequestWorktreeProject
 import com.github.fnunezkanut.bbcloud.review.WorktreeTodoBannerViewModel
 import com.github.fnunezkanut.bbcloud.ui.pullrequest.create.BbCloudNewPullRequestVirtualFile
+import com.github.fnunezkanut.bbcloud.ui.pullrequest.help.BbCloudWorktreesHelpVirtualFile
 import com.intellij.diff.editor.DiffViewerVirtualFile
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.fileEditor.FileEditor
@@ -30,6 +31,11 @@ class BbCloudWorktreePrViewBlueBarEditorNotificationProvider :
         // above it even when the project itself is a plugin-managed worktree.
         if (file is BbCloudNewPullRequestVirtualFile) {
             LOG.debug("Blue bar skipped: the file is the new pull request form")
+            return null
+        }
+        // The Work Trees help page is documentation, not a pull request, so it never gets the worktree blue bar.
+        if (file is BbCloudWorktreesHelpVirtualFile) {
+            LOG.debug("Blue bar skipped: the file is the work trees help page")
             return null
         }
         // The diff views get the blue bar inside the diff through PullRequestDiffBarsDiffExtension, so an editor

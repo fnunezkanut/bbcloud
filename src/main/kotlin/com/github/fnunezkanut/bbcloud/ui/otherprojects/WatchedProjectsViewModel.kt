@@ -7,6 +7,7 @@ import com.github.fnunezkanut.bbcloud.git.WorktreeCurrentBranchReader
 import com.github.fnunezkanut.bbcloud.project.PullRequestWorktreeListing
 import com.github.fnunezkanut.bbcloud.project.WatchedProjectMapping
 import com.github.fnunezkanut.bbcloud.project.WatchedProjectWorktreeRow
+import com.github.fnunezkanut.bbcloud.project.WatchedProjectsDiscoveryResult
 import com.github.fnunezkanut.bbcloud.ui.main.AuthorAvatarCache
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.logger
@@ -21,19 +22,47 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.coroutineScope as coroutineScopeBlock
 
 /**
+ * The stored data and the rescan operation the Watched Projects tab reads, backed by
+ * [com.github.fnunezkanut.bbcloud.config.BbCloudConfigurationService] in production and by a fake in tests.
+ */
+interface WatchedProjectsDataSource {
+    fun organizationUrlOrNull(): String?
+
+    fun isProjectsDirectorySet(): Boolean
+
+    fun watchedProjectsWithLocalPaths(): List<WatchedProjectMapping>
+
+    fun repoAvatarUrls(): Map<String, String>
+
+    fun workTreeDirectoryOrNull(): Path?
+
+    fun setWatched(mapping: WatchedProjectMapping, watched: Boolean)
+
+    fun setAllWatched(watched: Boolean)
+
+    suspend fun rescan(clearFirst: Boolean): WatchedProjectsDiscoveryResult
+}
+
+/**
  * Holds the Watched Projects state and coordinates row discovery without depending on Swing UI components.
  *
  * The screen callbacks are supplied by the hosting coordinator so user actions remain separate from presentation
- * state. Worktree discovery stays here because it is presentation data needed to render each row.
+ * state. Worktree discovery stays here because it is presentation data needed to render each row. Binding the stored
+ * mappings, toggling watched flags, and rescanning the projects directory are orchestrated here against
+ * [dataSource]; the host only switches its card ([onShowContentCallback], [onShowNotConfiguredCallback]) and shows the
+ * unreadable-directory dialog ([onProjectsDirectoryUnreadableCallback]), which needs a Swing parent.
  */
 class WatchedProjectsViewModel(
     private val coroutineScope: CoroutineScope,
-    private val onWatchedChangedCallback: (WatchedProjectMapping, Boolean) -> Unit,
-    private val onAllWatchedChangedCallback: (Boolean) -> Unit,
-    private val onSyncRequestedCallback: () -> Unit,
+    private val dataSource: WatchedProjectsDataSource,
+    private val onShowContentCallback: () -> Unit,
+    private val onShowNotConfiguredCallback: () -> Unit,
+    private val onProjectsDirectoryUnreadableCallback: () -> Unit,
     private val onOpenLocalProjectCallback: (WatchedProjectMapping) -> Unit,
     private val onOpenWorktreeCallback: (WatchedProjectMapping, WatchedProjectWorktreeRow) -> Unit,
-    private val onPruneWorktreesCallback: () -> Unit
+    private val onPruneWorktreesCallback: () -> Unit,
+    private val onOpenWorktreesHelpCallback: () -> Unit,
+    private val runOnEdt: (() -> Unit) -> Unit = { block -> ApplicationManager.getApplication().invokeLater(block) }
 ) {
     val state: MutableState<WatchedProjectsUiState> = mutableStateOf(WatchedProjectsUiState())
 
@@ -47,6 +76,104 @@ class WatchedProjectsViewModel(
     private var worktreeLoadGeneration = 0L
 
     private var organizationUrl: String? = null
+
+    /**
+     * Shows the persisted mappings of the current workspace on the Watched Projects tab, or routes to the generic
+     * not-configured card when no projects directory is set. Does not rescan: a rescan runs only after a directory is
+     * chosen, or a workspace slug change is saved in Settings (see [rescanWatchedProjects] and
+     * [com.github.fnunezkanut.bbcloud.config.BbCloudConfigurationService.saveSetup]).
+     */
+    fun bindWatchedProjects() {
+        LOG.debug("Binding the Workspace - Watched Projects tab")
+        if (!dataSource.isProjectsDirectorySet()) {
+            LOG.info("Watched Projects: projects directory not set; prompting for Settings")
+            // Route to the generic centered not-configured card (R2) rather than the directory-specific prompt with
+            // the status row still visible. Hide the Sync button as well, since the content card is not shown.
+            setSyncVisible(false)
+            onShowNotConfiguredCallback()
+            return
+        }
+        setSyncVisible(true)
+        setSyncEnabled(true)
+        // Avatar URLs come from plugin storage (written on Sync), so this bind makes no Bitbucket API call. The only
+        // network is the unauthenticated public-CDN image prefetch kicked off inside showResult.
+        showStoredResult(organizationUrl = dataSource.organizationUrlOrNull())
+        onShowContentCallback()
+    }
+
+    /**
+     * Scans and verifies the projects directory, then shows the outcome of the rescan on the Workspace - Watched
+     * Projects tab.
+     *
+     * Pass [clearFirst] = true when the scan follows a configuration change (a chosen projects directory), so the
+     * watched map is emptied before discovery and rediscovered repositories come in unwatched. The Sync button leaves
+     * it false, which carries over the user's existing watched choices for repositories that are found again.
+     */
+    fun rescanWatchedProjects(clearFirst: Boolean = false) {
+        val organizationUrl = dataSource.organizationUrlOrNull()
+        if (organizationUrl == null || !dataSource.isProjectsDirectorySet()) {
+            bindWatchedProjects()
+            return
+        }
+
+        setSyncEnabled(false)
+        showLoading()
+        coroutineScope.launch {
+            val result = dataSource.rescan(clearFirst = clearFirst)
+            runOnEdt {
+                showRescanResult(result = result, organizationUrl = organizationUrl)
+            }
+        }
+    }
+
+    private fun showRescanResult(result: WatchedProjectsDiscoveryResult, organizationUrl: String) {
+        when (result) {
+            is WatchedProjectsDiscoveryResult.Success -> {
+                LOG.info("Watched projects rescan succeeded: ${dataSource.watchedProjectsWithLocalPaths().size} projects")
+                // The persisted avatar-URL map was already updated by rescanWatchedProjects before this UI read.
+                showStoredResult(organizationUrl = organizationUrl)
+            }
+            is WatchedProjectsDiscoveryResult.VerifyFailed -> {
+                LOG.info("Watched projects rescan could not be verified; previous projects kept")
+                showStoredResult(organizationUrl = organizationUrl, rescanFailed = true)
+            }
+            is WatchedProjectsDiscoveryResult.ProjectsDirectoryUnreadable -> {
+                LOG.warn("Projects directory is not readable; watched projects cleared")
+                onProjectsDirectoryUnreadableCallback()
+                showStoredResult(organizationUrl = organizationUrl)
+            }
+            is WatchedProjectsDiscoveryResult.NotConfigured -> {
+                LOG.info("Cannot rescan watched projects: not configured")
+                showEmpty()
+            }
+        }
+        setSyncEnabled(true)
+    }
+
+    private fun showStoredResult(organizationUrl: String?, rescanFailed: Boolean = false) {
+        showResult(
+            mappings = dataSource.watchedProjectsWithLocalPaths(),
+            organizationUrl = organizationUrl,
+            rescanFailed = rescanFailed,
+            avatarUrlBySlug = dataSource.repoAvatarUrls(),
+            coroutineScope = coroutineScope,
+            workTreeDirectory = dataSource.workTreeDirectoryOrNull()
+        )
+    }
+
+    /**
+     * Reloads the rows of the Watched Projects table from the stored list after a watched flag changed. No rescan runs:
+     * the flag is a local choice and the list itself does not change.
+     */
+    private fun refreshWatchedRows() {
+        // A watched-flag toggle does not change the avatar-URL set, so no avatar rebind is needed here; the ViewModel
+        // keeps resolving icons from the already-bound slug-to-URL map.
+        refreshRows(
+            mappings = dataSource.watchedProjectsWithLocalPaths(),
+            workTreeDirectory = dataSource.workTreeDirectoryOrNull(),
+            coroutineScope = coroutineScope
+        )
+    }
 
     fun showLoading() {
         worktreeLoadGeneration++
@@ -82,7 +209,7 @@ class WatchedProjectsViewModel(
             card = if (sortedMappings.isEmpty()) WatchedProjectsCard.Empty else WatchedProjectsCard.Listing,
             rows = rows,
             rescanFailed = rescanFailed,
-            masterToggle = deriveMasterToggle(rows)
+            masterToggle = masterToggleFor(rows = rows, query = state.value.searchQuery)
         )
         refreshWorktreeRows(
             mappings = sortedMappings,
@@ -107,7 +234,7 @@ class WatchedProjectsViewModel(
         val rows = buildRows(sortedMappings)
         state.value = state.value.copy(
             rows = rows,
-            masterToggle = deriveMasterToggle(rows)
+            masterToggle = masterToggleFor(rows = rows, query = state.value.searchQuery)
         )
         refreshWorktreeRows(
             mappings = sortedMappings,
@@ -161,18 +288,58 @@ class WatchedProjectsViewModel(
 
     fun onWatchedChanged(mapping: WatchedProjectMapping, watched: Boolean) {
         LOG.info("User toggled the watched checkbox of ${mapping.remoteRepoSlug} to watched=$watched")
-        onWatchedChangedCallback(mapping, watched)
+        dataSource.setWatched(mapping = mapping, watched = watched)
+        refreshWatchedRows()
     }
 
+    /**
+     * Watches or unwatches the projects the master checkbox covers. Without a search query that is every project. With
+     * an active query it is only the visible rows, so hidden projects keep their watched flag.
+     */
     fun onMasterToggleClicked() {
+        val query = state.value.searchQuery
         val watched = state.value.masterToggle != ToggleableState.On
-        LOG.info("User toggled the master watched checkbox to watched=$watched")
-        onAllWatchedChangedCallback(watched)
+        if (query.isBlank()) {
+            LOG.info("User toggled the master watched checkbox to watched=$watched")
+            dataSource.setAllWatched(watched = watched)
+            refreshWatchedRows()
+            return
+        }
+        val targets = state.value.visibleRows
+        if (targets.isEmpty()) {
+            LOG.info("Master toggle ignored: no rows match the search filter")
+            return
+        }
+        LOG.info("User toggled the master watched checkbox of ${targets.size} filtered projects to watched=$watched")
+        targets.forEach { row ->
+            dataSource.setWatched(mapping = row.mapping, watched = watched)
+        }
+        refreshWatchedRows()
+    }
+
+    /**
+     * Stores the filter text typed in the Watched Projects search field. The query is session-only and is not persisted.
+     * The log records only its length, because the text is user-authored.
+     */
+    fun onSearchQueryChanged(query: String) {
+        if (query == state.value.searchQuery) {
+            return
+        }
+        LOG.debug("Watched Projects search filter changed (length=${query.length})")
+        state.value = state.value.copy(
+            searchQuery = query,
+            masterToggle = masterToggleFor(rows = state.value.rows, query = query)
+        )
+    }
+
+    fun onSearchCleared() {
+        LOG.info("User cleared the Watched Projects search filter")
+        onSearchQueryChanged(query = "")
     }
 
     fun onSyncClicked() {
         LOG.info("User requested Sync with Projects Directory")
-        onSyncRequestedCallback()
+        rescanWatchedProjects()
     }
 
     fun onOpenLocalProject(mapping: WatchedProjectMapping) {
@@ -188,6 +355,11 @@ class WatchedProjectsViewModel(
     fun onPruneWorktreesClicked() {
         LOG.info("User requested PR worktree pruning for all watched projects")
         onPruneWorktreesCallback()
+    }
+
+    fun onWorktreesHelpClicked() {
+        LOG.info("User clicked the What are Work Trees? link")
+        onOpenWorktreesHelpCallback()
     }
 
     fun avatarIconFor(url: String?): javax.swing.Icon {
@@ -229,7 +401,7 @@ class WatchedProjectsViewModel(
         val rowsWithDiscoveredWorktrees = state.value.rows.map { row ->
             row.copy(worktrees = discoveredRows[row.mapping.remoteRepoSlug].orEmpty())
         }
-        state.value = state.value.copy(rows = rowsWithDiscoveredWorktrees)
+        updateRows(rows = rowsWithDiscoveredWorktrees)
         if (coroutineScope == null || discoveredRows.isEmpty()) {
             return
         }
@@ -249,12 +421,12 @@ class WatchedProjectsViewModel(
                         }.awaitAll()
                     }
                 }
-                ApplicationManager.getApplication().invokeLater {
+                runOnEdt {
                     if (generation != worktreeLoadGeneration) {
-                        return@invokeLater
+                        return@runOnEdt
                     }
                     val resolvedBySlug = resolvedRows.toMap()
-                    state.value = state.value.copy(
+                    updateRows(
                         rows = state.value.rows.map { row ->
                             row.copy(worktrees = resolvedBySlug[row.mapping.remoteRepoSlug] ?: row.worktrees)
                         }
@@ -268,6 +440,22 @@ class WatchedProjectsViewModel(
 
     private fun sortedForTable(mappings: List<WatchedProjectMapping>): List<WatchedProjectMapping> {
         return mappings.sortedBy { mapping -> mapping.remoteRepoSlug.lowercase() }
+    }
+
+    /**
+     * Replaces [WatchedProjectsUiState.rows] and recomputes the master toggle for the current query. Worktree and branch
+     * names are searchable, so a worktree update can change which rows match.
+     */
+    private fun updateRows(rows: List<WatchedProjectRow>) {
+        state.value = state.value.copy(
+            rows = rows,
+            masterToggle = masterToggleFor(rows = rows, query = state.value.searchQuery)
+        )
+    }
+
+    /** The master checkbox state for [rows] narrowed to the rows that match [query]. */
+    private fun masterToggleFor(rows: List<WatchedProjectRow>, query: String): ToggleableState {
+        return deriveMasterToggle(filterWatchedProjectRows(rows = rows, query = query))
     }
 
     companion object {

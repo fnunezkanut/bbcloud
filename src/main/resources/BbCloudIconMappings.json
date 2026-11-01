@@ -2,7 +2,8 @@
   "icons": {
     "expui": {
       "toolwindow": {
-        "prToolWindow.svg": "icons/prToolWindow.svg"
+        "prToolWindow.svg": "icons/prToolWindow.svg",
+        "prChangesToolWindow.svg": "icons/prChangesToolWindow.svg"
       }
     }
   }

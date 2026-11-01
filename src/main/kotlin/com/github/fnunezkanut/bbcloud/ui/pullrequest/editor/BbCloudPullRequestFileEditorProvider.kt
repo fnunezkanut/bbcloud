@@ -1,8 +1,8 @@
 package com.github.fnunezkanut.bbcloud.ui.pullrequest.editor
 
+import com.github.fnunezkanut.bbcloud.auth.BbCloudAccessTokenProvider
 import com.github.fnunezkanut.bbcloud.bitbucket.BbCloudOpenPullRequestService
 import com.github.fnunezkanut.bbcloud.config.BbCloudConfigurationService
-import com.github.fnunezkanut.bbcloud.credentials.BbCloudCredentialStore
 import com.github.fnunezkanut.bbcloud.git.BbCloudBranchCheckoutService
 import com.github.fnunezkanut.bbcloud.git.BbCloudPullRequestBranchDiffService
 import com.intellij.openapi.application.ApplicationManager
@@ -45,7 +45,7 @@ class BbCloudPullRequestFileEditorProvider :
     private fun createOpenPullRequestService(configurationService: BbCloudConfigurationService): BbCloudOpenPullRequestService {
         val application = ApplicationManager.getApplication()
         return BbCloudOpenPullRequestService(
-            credentialStore = application.service<BbCloudCredentialStore>(),
+            accessTokenProvider = application.service<BbCloudAccessTokenProvider>(),
             pullRequestClient = com.github.fnunezkanut.bbcloud.bitbucket.OkHttpBitbucketPullRequestClient(),
             configurationService = configurationService
         )

@@ -50,8 +50,8 @@ class BbCloudSettings : SimplePersistentStateComponent<BbCloudSettings.State>(St
         var repoAvatarUrls by map<String, String>()
 
         /**
-         * The Exclude: checkbox states of the Current Project - PRs tab. Each is a view preference, persisted across
-         * restarts and independent of the Workspace - PRs tab's states (see [workspaceExcludeMinePullRequests] etc.).
+         * The Exclude: checkbox states of the Current Project tab. Each is a view preference, persisted across
+         * restarts and independent of the Workspace tab's states (see [workspaceExcludeMinePullRequests] etc.).
          * The option names are part of the persisted XML; do not rename them without a migration (see [watchedRepos]
          * for the earlier corruption incident). `BaseState` omits values equal to the default, so existing installs
          * get these defaults automatically with no migration.
@@ -70,9 +70,9 @@ class BbCloudSettings : SimplePersistentStateComponent<BbCloudSettings.State>(St
         var projectExcludeDraftPullRequests by property(true)
 
         /**
-         * The Exclude: checkbox states of the Workspace - PRs tab. There is no workspace Resolved property: the two
+         * The Exclude: checkbox states of the Workspace tab. There is no workspace Resolved property: the two
          * workspace sources request open pull requests only, so that option is neither shown nor persisted. Each is a
-         * view preference, persisted across restarts and independent of the Current Project - PRs states. The option
+         * view preference, persisted across restarts and independent of the Current Project states. The option
          * names are part of the persisted XML; do not rename them without a migration.
          *
          * Default false: when true, hide the PRs the current user authored.
@@ -84,6 +84,17 @@ class BbCloudSettings : SimplePersistentStateComponent<BbCloudSettings.State>(St
 
         /** Default true: hide draft pull requests. */
         var workspaceExcludeDraftPullRequests by property(true)
+
+        /**
+         * The divider position of the pull-request page split layout, as the fraction of the width given to the left
+         * pane. It is a view preference shared by all pull-request tabs and survives IDE restarts. The option name is
+         * part of the persisted XML; do not rename it without a migration. The value is clamped to
+         * [MIN_PR_PAGE_SPLIT_FRACTION]..[MAX_PR_PAGE_SPLIT_FRACTION] on read and write, so a hand-edited value cannot
+         * push the divider to an edge.
+         *
+         * Default [DEFAULT_PR_PAGE_SPLIT_FRACTION]: the left pane takes three quarters of the width.
+         */
+        var prPageSplitFraction by property(DEFAULT_PR_PAGE_SPLIT_FRACTION)
     }
 
     /** Legacy value kept only so existing installs can migrate the URL to a slug; see [organizationUrl]. */
@@ -97,6 +108,16 @@ class BbCloudSettings : SimplePersistentStateComponent<BbCloudSettings.State>(St
         get() = state.workspaceSlug.orEmpty()
         set(value) {
             state.workspaceSlug = value
+        }
+
+    /**
+     * The pull-request page divider position as the left pane fraction, clamped to
+     * [MIN_PR_PAGE_SPLIT_FRACTION]..[MAX_PR_PAGE_SPLIT_FRACTION]. See [State.prPageSplitFraction].
+     */
+    var prPageSplitFraction: Float
+        get() = state.prPageSplitFraction.coerceIn(MIN_PR_PAGE_SPLIT_FRACTION, MAX_PR_PAGE_SPLIT_FRACTION)
+        set(value) {
+            state.prPageSplitFraction = value.coerceIn(MIN_PR_PAGE_SPLIT_FRACTION, MAX_PR_PAGE_SPLIT_FRACTION)
         }
 
     /** Normalized absolute path of the folder repositories are checked out into; empty when unset. */
@@ -222,6 +243,10 @@ class BbCloudSettings : SimplePersistentStateComponent<BbCloudSettings.State>(St
     }
 
     companion object {
+        const val DEFAULT_PR_PAGE_SPLIT_FRACTION = 0.75f
+        const val MIN_PR_PAGE_SPLIT_FRACTION = 0.2f
+        const val MAX_PR_PAGE_SPLIT_FRACTION = 0.8f
+
         fun getInstance(): BbCloudSettings {
             return ApplicationManager.getApplication().service()
         }

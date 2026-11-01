@@ -1,5 +1,6 @@
 package com.github.fnunezkanut.bbcloud.bitbucket
 
+import com.github.fnunezkanut.bbcloud.auth.BbCloudBearerRetryAuthenticator
 import com.intellij.openapi.diagnostic.logger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -25,6 +26,10 @@ class OkHttpBitbucketWorkspaceClient(private val httpClient: OkHttpClient = shar
     override suspend fun listWorkspaces(apiToken: String): WorkspaceListResult {
         return withContext(Dispatchers.IO) {
             val apiUrl = BitbucketWorkspaceResponseParser.buildListWorkspacesUrl()
+            if (!BitbucketApiUrlPolicy.isTrustedApiUrl(apiUrl)) {
+                LOG.warn("Refusing to send the API token to an untrusted URL (${BitbucketApiUrlPolicy.describeRejected(apiUrl)})")
+                return@withContext WorkspaceListResult.Failed()
+            }
             val request = Request.Builder()
                 .url(apiUrl)
                 .header("Authorization", "Bearer $apiToken")
@@ -62,6 +67,7 @@ class OkHttpBitbucketWorkspaceClient(private val httpClient: OkHttpClient = shar
         private val sharedHttpClient: OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
+            .authenticator(BbCloudBearerRetryAuthenticator())
             .build()
 
         private fun elapsedMillis(startNanos: Long): Long {

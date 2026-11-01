@@ -20,13 +20,13 @@ import org.jetbrains.jewel.ui.component.Text
 
 /**
  * The "Exclude:" label and its checkboxes, emitted inline into the header row of a merged tab (not a row of its own).
- * The Resolved checkbox is rendered only when the tab's scope offers it, so Workspace - PRs shows Mine, Approved by me,
- * Drafts; Current Project - PRs shows Resolved as well.
+ * The Resolved checkbox is rendered only when the tab's scope offers it, so Workspace shows Mine, Approved by me,
+ * Drafts; Current Project shows Resolved as well.
  */
 @Composable
 internal fun RowScope.PullRequestExcludeCheckboxes(filter: com.github.fnunezkanut.bbcloud.settings.PullRequestListFilter, viewModel: PullRequestsViewModel) {
     // A 10px gap separates the Exclude: label from the preceding left-hand header section (the workspace/repo link and
-    // the open-count pill), on both the Workspace - PRs and Current Project - PRs headers.
+    // the open-count pill), on both the Workspace and Current Project headers.
     Text(text = BbCloudBundle.message("pullRequests.exclude.label"), modifier = Modifier.padding(start = 10.dp))
     // A nested Row keeps the group directly after the left-hand header section (no weighted spacer here).
     Row(

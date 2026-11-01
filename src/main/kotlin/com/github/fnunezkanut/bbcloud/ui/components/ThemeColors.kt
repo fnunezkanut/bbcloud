@@ -23,15 +23,7 @@ internal fun labelForeground(): Color {
     return retrieveColor(key = "Label.foreground", default = Color(0xFF000000))
 }
 
-/** The platform `Link.activeForeground` colour, used by the selected tab of the pull-request tab strip. */
-internal fun linkForeground(): Color {
-    return retrieveColor(
-        key = "Link.activeForeground",
-        default = retrieveColor(key = "link.foreground", default = Color(0xFF589DF6))
-    )
-}
-
-/** The platform `ActionButton.hoverBackground` colour, used to fill the counters of the pull-request tab strip. */
+/** The platform `ActionButton.hoverBackground` colour, used to fill the count badges of the list headers. */
 internal fun actionButtonHoverBackground(): Color {
     return retrieveColor(key = "ActionButton.hoverBackground", default = Color(0xFFDFDFDF))
 }
@@ -97,6 +89,16 @@ internal fun labelDisabledForeground(): Color {
  */
 internal fun reviewBarPurple(): Color {
     return JBColor(0xFFE3D6F5.toInt(), 0xFF6B4E9E.toInt()).toComposeColor()
+}
+
+/**
+ * The purple of the tick that marks a Viewed file in the PR Changes tree.
+ *
+ * Unlike [reviewBarPurple], which is a pale fill for text pills, this is a saturated mid-tone so the glyph stays visible
+ * on both the tree background and a selected row. The light theme uses a deep purple and the dark theme a lighter one.
+ */
+internal fun viewedTickPurple(): Color {
+    return JBColor(0xFF8250DF.toInt(), 0xFFA371F7.toInt()).toComposeColor()
 }
 
 /**

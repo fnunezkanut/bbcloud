@@ -18,8 +18,12 @@ sealed class WorktreeSetupResult {
     /**
      * The work tree could not be created because the source clone (the main checkout) is currently on the pull
      * request's source branch, so git refuses to check that branch out in a second worktree. This is a user-resolvable
-     * precondition (stash or commit in-progress work, switch the current checkout to another branch, then retry), not a
-     * generic git error, so the UI shows an explanatory modal rather than the raw git-output balloon.
+     * precondition, not a generic git error.
+     *
+     * The UI first tries to resolve it automatically: when the colliding clone is this window's own checkout and the
+     * working tree is clean, it switches the checkout to the repository main branch and retries once; when the working
+     * tree is dirty it warns the user instead. The explanatory modal is only the fallback for collisions that cannot be
+     * resolved automatically (another window's clone, no usable main branch, or an unreadable status).
      */
     data class BranchCheckedOutInSource(val branchName: String, val sourceCheckoutPath: Path) : WorktreeSetupResult()
 }

@@ -16,7 +16,7 @@ import com.github.fnunezkanut.bbcloud.ui.pullrequests.PullRequestsUiState
 import org.jetbrains.jewel.ui.component.Text
 
 /**
- * The footer notes of the merged Workspace - PRs tab, in the warning color: a "still loading more" note while one
+ * The footer notes of the merged Workspace tab, in the warning color: a "still loading more" note while one
  * source is still in flight, a per-source failure note for the authored and assigned sources, the per-source truncated
  * notes carried over from the former My PRs and Assigned PRs tabs, and the review-queue scope note once the assigned
  * source has loaded. The whole footer is skipped when there is nothing to say.

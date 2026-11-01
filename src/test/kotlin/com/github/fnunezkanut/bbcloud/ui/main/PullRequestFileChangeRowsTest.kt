@@ -128,6 +128,39 @@ class PullRequestFileChangeRowsTest {
     }
 
     /** A [Change] whose file path (via the mocked [ChangesUtil]) is [absolutePath], the path the row mapping reads. */
+    @Test
+    fun `toFileChangeRows - should resolve the revision by normalized relative path`() {
+        // GIVEN
+        val basePath = "/home/dev/project"
+        val change = changeForPath("$basePath/src/main/App.kt")
+        val fileRevisions = mapOf("src/main/App.kt" to "abc123")
+        // WHEN
+        val rows = toFileChangeRows(
+            changes = listOf(change),
+            commentCounts = null,
+            projectBasePath = basePath,
+            fileRevisions = fileRevisions
+        )
+        // THEN
+        rows.single().revision shouldBe "abc123"
+    }
+
+    @Test
+    fun `toFileChangeRows - should leave the revision null when no revisions are supplied`() {
+        // GIVEN
+        val basePath = "/home/dev/project"
+        val change = changeForPath("$basePath/src/main/App.kt")
+        // WHEN
+        val rows = toFileChangeRows(
+            changes = listOf(change),
+            commentCounts = null,
+            projectBasePath = basePath,
+            fileRevisions = null
+        )
+        // THEN
+        rows.single().revision.shouldBeNull()
+    }
+
     private fun changeForPath(absolutePath: String): Change {
         val filePath = mockk<FilePath> {
             every { path } returns absolutePath

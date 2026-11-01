@@ -81,7 +81,45 @@ private fun TreeGeneratorScope<PullRequestChangesTreeNode>.addDirectory(director
     }
 }
 
-/** Directories and files live in different id spaces, so a directory and a file can never collide. */
-private fun directoryId(path: String): String = "dir:$path"
+/**
+ * Groups every file row under each directory above it, keyed by the directory path [buildChangesTree] uses. A file in
+ * `src/main/App.kt` is listed under `src` and under `src/main`. Build this once per row list and reuse it per folder,
+ * so a folder does not rescan all rows during composition.
+ */
+internal fun fileRowsByDirectory(rows: List<PullRequestFileChangeRow>): Map<String, List<PullRequestFileChangeRow>> {
+    val rowsByDirectory = mutableMapOf<String, MutableList<PullRequestFileChangeRow>>()
+    rows.forEach { row ->
+        val segments = row.relativePath.split('/').filter { segment -> segment.isNotEmpty() }
+        segments.dropLast(1).indices.forEach { index ->
+            val directoryPath = segments.subList(0, index + 1).joinToString(separator = "/")
+            rowsByDirectory.getOrPut(directoryPath) { mutableListOf() } += row
+        }
+    }
+    return rowsByDirectory
+}
 
-private fun fileId(path: String): String = "file:$path"
+/**
+ * Tells whether a folder shows the Viewed tick: it has at least one file below it and every one of those files is
+ * viewed according to [isViewed]. A folder with no file below it is never ticked.
+ */
+internal fun directoryFullyViewed(descendantRows: List<PullRequestFileChangeRow>, isViewed: (PullRequestFileChangeRow) -> Boolean): Boolean {
+    if (descendantRows.isEmpty()) {
+        return false
+    }
+    return descendantRows.all { row -> isViewed(row) }
+}
+
+/** Directories and files live in different id spaces, so a directory and a file can never collide. */
+internal fun directoryId(path: String): String = "dir:$path"
+
+internal fun fileId(path: String): String = "file:$path"
+
+/**
+ * Resolves the file row the Enter key should open: the single selected tree key, when it is a file id present in
+ * [rowsById]. Returns null for a directory id, for zero keys, or for several selected keys, so the caller leaves the
+ * default tree key actions untouched.
+ */
+internal fun selectedFileRow(selectedKeys: Set<Any>, rowsById: Map<String, PullRequestFileChangeRow>): PullRequestFileChangeRow? {
+    val key = selectedKeys.singleOrNull() ?: return null
+    return rowsById[key]
+}

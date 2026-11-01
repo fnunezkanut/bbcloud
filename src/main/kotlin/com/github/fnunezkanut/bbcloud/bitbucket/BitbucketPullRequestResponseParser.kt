@@ -583,6 +583,18 @@ object BitbucketPullRequestResponseParser {
         return value?.let { runCatching { Instant.parse(it) }.getOrNull() }
     }
 
+    /**
+     * Maps a participant's `approved` flag and `state` to a [ReviewerStatus]. `changes_requested` wins over
+     * `approved`, matching the pull request details parser. A null participant means the reviewer has not acted.
+     */
+    private fun reviewerStatusOf(participant: ParticipantEntry?): ReviewerStatus {
+        return when {
+            participant?.state == CHANGES_REQUESTED_STATE -> ReviewerStatus.ChangesRequested
+            participant?.approved == true || participant?.state == APPROVED_STATE -> ReviewerStatus.Approved
+            else -> ReviewerStatus.None
+        }
+    }
+
     private fun firstIntValue(element: JsonElement?): Int? {
         val values = (element as? JsonObject)?.values ?: return null
         return values.firstNotNullOfOrNull { value -> (value as? JsonPrimitive)?.takeIf { !it.isString }?.intOrNull }
@@ -606,6 +618,7 @@ object BitbucketPullRequestResponseParser {
     private const val CUSTOM_ON_MERGE_CHECK_TYPE = "custom_on_merge_check"
     private const val CHANGES_REQUESTED_STATE = "changes_requested"
     private const val APPROVED_STATE = "approved"
+    private const val REVIEWER_ROLE = "REVIEWER"
     private const val RESOLVED_TASK_STATE = "RESOLVED"
     private const val UNRESOLVED_TASK_STATE = "UNRESOLVED"
 
@@ -917,7 +930,11 @@ object BitbucketPullRequestResponseParser {
                 approverUuids = participants
                     .filter { participant -> participant.approved == true }
                     .mapNotNull { participant -> participant.user?.uuid?.takeIf { it.isNotBlank() } }
-                    .toSet()
+                    .toSet(),
+                reviewers = participants
+                    .mapNotNull { participant -> participant.toListingReviewer() }
+                    .filterNot { reviewer -> reviewer.uuid == author?.uuid }
+                    .distinctBy { reviewer -> reviewer.uuid }
             )
         }
     }
@@ -949,16 +966,11 @@ object BitbucketPullRequestResponseParser {
         fun toReviewer(participants: List<ParticipantEntry>): PullRequestReviewer? {
             val reviewerUuid = uuid?.takeIf { it.isNotBlank() } ?: return null
             val participant = participants.firstOrNull { entry -> entry.user?.uuid == reviewerUuid }
-            val status = when {
-                participant?.state == CHANGES_REQUESTED_STATE -> ReviewerStatus.ChangesRequested
-                participant?.approved == true || participant?.state == APPROVED_STATE -> ReviewerStatus.Approved
-                else -> ReviewerStatus.None
-            }
             return PullRequestReviewer(
                 uuid = reviewerUuid,
                 displayName = displayName?.takeIf { it.isNotBlank() } ?: nickname?.takeIf { it.isNotBlank() } ?: "Unknown",
                 avatarUrl = links?.avatar?.href?.takeIf { it.isNotBlank() },
-                status = status
+                status = reviewerStatusOf(participant = participant)
             )
         }
 
@@ -984,10 +996,39 @@ object BitbucketPullRequestResponseParser {
     }
 
     @Serializable
-    private data class ParticipantEntry(val user: ParticipantUser? = null, val approved: Boolean? = null, val state: String? = null)
+    private data class ParticipantEntry(
+        val user: ParticipantUser? = null,
+        val approved: Boolean? = null,
+        val state: String? = null,
+        val role: String? = null,
+        @SerialName("participated_on")
+        val participatedOn: String? = null
+    ) {
+        fun toListingReviewer(): PullRequestReviewer? {
+            if (!role.equals(REVIEWER_ROLE, ignoreCase = true)) {
+                return null
+            }
+            val reviewerUuid = user?.uuid?.takeIf { it.isNotBlank() } ?: return null
+            return PullRequestReviewer(
+                uuid = reviewerUuid,
+                displayName = user.displayName?.takeIf { it.isNotBlank() }
+                    ?: user.nickname?.takeIf { it.isNotBlank() }
+                    ?: "Unknown",
+                avatarUrl = AvatarUrlUpgrader.upgrade(url = user.links?.avatar?.href?.takeIf { it.isNotBlank() }),
+                status = reviewerStatusOf(participant = this),
+                participatedOn = parseInstant(participatedOn)
+            )
+        }
+    }
 
     @Serializable
-    private data class ParticipantUser(val uuid: String? = null)
+    private data class ParticipantUser(
+        val uuid: String? = null,
+        @SerialName("display_name")
+        val displayName: String? = null,
+        val nickname: String? = null,
+        val links: AvatarLinks? = null
+    )
 
     @Serializable
     private data class CurrentUserEntry(val uuid: String? = null, val links: AvatarLinks? = null)

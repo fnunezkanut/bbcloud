@@ -301,7 +301,186 @@ class BitbucketPullRequestResponseParserTest {
                 pullRequests shouldHaveSize 1
                 pullRequests[0].authorUuid.shouldBeNull()
                 pullRequests[0].approverUuids shouldBe emptySet()
+                pullRequests[0].reviewers shouldBe emptyList()
             }
+        }
+    }
+
+    @Nested
+    inner class ListingReviewers {
+        @Test
+        fun `parsePullRequestsPage - should read reviewers from participants with role REVIEWER`() {
+            // GIVEN two REVIEWER participants and one PARTICIPANT
+            val json = reviewersJson(
+                """{ "role": "REVIEWER", "user": { "uuid": "{a}", "display_name": "Alice", "links": { "avatar": { "href": "https://avatar.example/a" } } } }""",
+                """{ "role": "REVIEWER", "user": { "uuid": "{b}", "display_name": "Bob", "links": { "avatar": { "href": "https://avatar.example/b" } } } }""",
+                """{ "role": "PARTICIPANT", "user": { "uuid": "{c}", "display_name": "Carol" } }"""
+            )
+
+            // WHEN
+            val reviewers = BitbucketPullRequestResponseParser.parsePullRequests(json).single().reviewers
+
+            // THEN only the two reviewers come through, with name and avatar
+            assertSoftly {
+                reviewers.map { reviewer -> reviewer.uuid } shouldBe listOf("{a}", "{b}")
+                reviewers.map { reviewer -> reviewer.displayName } shouldBe listOf("Alice", "Bob")
+                reviewers[0].avatarUrl shouldBe AvatarUrlUpgrader.upgrade(url = "https://avatar.example/a")
+            }
+        }
+
+        @Test
+        fun `parsePullRequestsPage - should map approved, changes_requested and pending states`() {
+            // GIVEN three reviewers with different states
+            val json = reviewersJson(
+                """{ "role": "REVIEWER", "approved": true, "state": "approved", "user": { "uuid": "{a}", "display_name": "Alice" } }""",
+                """{ "role": "REVIEWER", "state": "changes_requested", "user": { "uuid": "{b}", "display_name": "Bob" } }""",
+                """{ "role": "REVIEWER", "user": { "uuid": "{c}", "display_name": "Carol" } }"""
+            )
+
+            // WHEN
+            val reviewers = BitbucketPullRequestResponseParser.parsePullRequests(json).single().reviewers
+
+            // THEN each state maps to the matching reviewer status
+            assertSoftly {
+                reviewers.single { it.uuid == "{a}" }.status shouldBe ReviewerStatus.Approved
+                reviewers.single { it.uuid == "{b}" }.status shouldBe ReviewerStatus.ChangesRequested
+                reviewers.single { it.uuid == "{c}" }.status shouldBe ReviewerStatus.None
+            }
+        }
+
+        @Test
+        fun `parsePullRequestsPage - should prefer changes_requested over approved`() {
+            // GIVEN a reviewer who both approved and then requested changes
+            val json = reviewersJson(
+                """{ "role": "REVIEWER", "approved": true, "state": "changes_requested", "user": { "uuid": "{a}", "display_name": "Alice" } }"""
+            )
+
+            // WHEN
+            val reviewers = BitbucketPullRequestResponseParser.parsePullRequests(json).single().reviewers
+
+            // THEN changes_requested wins, matching the details parser
+            reviewers.single().status shouldBe ReviewerStatus.ChangesRequested
+        }
+
+        @Test
+        fun `parsePullRequestsPage - should drop reviewer participants without a user uuid`() {
+            // GIVEN a REVIEWER participant that carries no user uuid
+            val json = reviewersJson(
+                """{ "role": "REVIEWER", "user": { "display_name": "Nobody" } }""",
+                """{ "role": "REVIEWER", "user": { "uuid": "{a}", "display_name": "Alice" } }"""
+            )
+
+            // WHEN
+            val reviewers = BitbucketPullRequestResponseParser.parsePullRequests(json).single().reviewers
+
+            // THEN only the reviewer with a uuid survives
+            reviewers.map { reviewer -> reviewer.uuid } shouldBe listOf("{a}")
+        }
+
+        @Test
+        fun `parsePullRequestsPage - should fall back to nickname then Unknown for the display name`() {
+            // GIVEN one reviewer with only a nickname and one with neither name
+            val json = reviewersJson(
+                """{ "role": "REVIEWER", "user": { "uuid": "{a}", "nickname": "ali" } }""",
+                """{ "role": "REVIEWER", "user": { "uuid": "{b}" } }"""
+            )
+
+            // WHEN
+            val reviewers = BitbucketPullRequestResponseParser.parsePullRequests(json).single().reviewers
+
+            // THEN the nickname and then "Unknown" fill in the display name
+            assertSoftly {
+                reviewers.single { it.uuid == "{a}" }.displayName shouldBe "ali"
+                reviewers.single { it.uuid == "{b}" }.displayName shouldBe "Unknown"
+            }
+        }
+
+        @Test
+        fun `parsePullRequestsPage - should parse participated_on and leave it null when malformed`() {
+            // GIVEN one reviewer with a valid timestamp and one with a malformed one
+            val json = reviewersJson(
+                """{ "role": "REVIEWER", "participated_on": "2026-09-28T10:00:00+00:00", "user": { "uuid": "{a}", "display_name": "Alice" } }""",
+                """{ "role": "REVIEWER", "participated_on": "not-a-date", "user": { "uuid": "{b}", "display_name": "Bob" } }"""
+            )
+
+            // WHEN
+            val reviewers = BitbucketPullRequestResponseParser.parsePullRequests(json).single().reviewers
+
+            // THEN
+            assertSoftly {
+                reviewers.single { it.uuid == "{a}" }.participatedOn shouldBe Instant.parse("2026-09-28T10:00:00+00:00")
+                reviewers.single { it.uuid == "{b}" }.participatedOn.shouldBeNull()
+            }
+        }
+
+        @Test
+        fun `parsePullRequestsPage - should exclude the author from reviewers`() {
+            // GIVEN a REVIEWER participant whose uuid equals the author's
+            val json =
+                """
+                {
+                  "values": [
+                    {
+                      "id": 1,
+                      "title": "PR 1",
+                      "state": "OPEN",
+                      "updated_on": "2026-09-28T10:00:00+00:00",
+                      "author": { "uuid": "{author}", "display_name": "John Smith" },
+                      "source": { "branch": { "name": "feature" } },
+                      "destination": { "branch": { "name": "main" } },
+                      "links": { "html": { "href": "https://bitbucket.org/my-workspace/examplerepo/pull-requests/1" } },
+                      "participants": [
+                        { "role": "REVIEWER", "user": { "uuid": "{author}", "display_name": "John Smith" } },
+                        { "role": "REVIEWER", "user": { "uuid": "{a}", "display_name": "Alice" } }
+                      ]
+                    }
+                  ]
+                }
+                """.trimIndent()
+
+            // WHEN
+            val reviewers = BitbucketPullRequestResponseParser.parsePullRequests(json).single().reviewers
+
+            // THEN the author is never shown as a reviewer
+            reviewers.map { reviewer -> reviewer.uuid } shouldBe listOf("{a}")
+        }
+
+        @Test
+        fun `parsePullRequestsPage - should keep approverUuids unchanged`() {
+            // GIVEN an approving non-reviewer PARTICIPANT alongside a reviewer
+            val json = reviewersJson(
+                """{ "role": "REVIEWER", "user": { "uuid": "{a}", "display_name": "Alice" } }""",
+                """{ "role": "PARTICIPANT", "approved": true, "user": { "uuid": "{c}", "display_name": "Carol" } }"""
+            )
+
+            // WHEN
+            val summary = BitbucketPullRequestResponseParser.parsePullRequests(json).single()
+
+            // THEN the approving participant counts for the Approved-by-me filter but is not a reviewer
+            assertSoftly {
+                summary.approverUuids shouldBe setOf("{c}")
+                summary.reviewers.map { reviewer -> reviewer.uuid } shouldBe listOf("{a}")
+            }
+        }
+
+        private fun reviewersJson(vararg participants: String): String {
+            return """
+                {
+                  "values": [
+                    {
+                      "id": 1,
+                      "title": "PR 1",
+                      "state": "OPEN",
+                      "updated_on": "2026-09-28T10:00:00+00:00",
+                      "author": { "uuid": "{author}", "display_name": "John Smith" },
+                      "source": { "branch": { "name": "feature" } },
+                      "destination": { "branch": { "name": "main" } },
+                      "links": { "html": { "href": "https://bitbucket.org/my-workspace/examplerepo/pull-requests/1" } },
+                      "participants": [${participants.joinToString(separator = ",")}]
+                    }
+                  ]
+                }
+                """.trimIndent()
         }
     }
 

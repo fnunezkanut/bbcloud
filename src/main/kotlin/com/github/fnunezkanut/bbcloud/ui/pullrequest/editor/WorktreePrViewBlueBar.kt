@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -136,7 +137,14 @@ private fun WorktreePrViewBlueBarHeader(
                 contentDescription = BbCloudBundle.message("worktree.todoRow.openChangedFiles"),
                 outlineColor = ActionButtonOutlines.green(),
                 enabled = state.sourceBranch != null && state.destinationBranch != null,
-                onClick = onOpenChangedFiles
+                onClick = onOpenChangedFiles,
+                trailingContent = {
+                    Text(
+                        text = BbCloudBundle.message("worktree.todoRow.openChangedFiles.label"),
+                        color = labelForeground(),
+                        maxLines = 1
+                    )
+                }
             )
         }
         Tooltip(tooltip = { Text(text = BbCloudBundle.message("worktree.todoRow.openPrPage.tooltip")) }) {
@@ -172,10 +180,15 @@ private fun WorktreePrViewBlueBarHeader(
             text = state.pullRequestId.toString(),
             onClick = onOpenPullRequest
         )
-        BranchChip(text = state.sourceBranch ?: BRANCH_PLACEHOLDER)
-        Text(text = BRANCH_ARROW, color = labelForeground(), maxLines = 1)
-        BranchChip(text = state.destinationBranch ?: BRANCH_PLACEHOLDER)
-        Spacer(modifier = Modifier.weight(1f))
+        // The branch section is the only flexible segment. It fills all the free space (the chips inside it stay at
+        // their natural width and left aligned while the branches fit), so the lines indicator and refresh button are
+        // pinned to the right edge. As the bar narrows the section is the first (and only) part to give, ellipsing each
+        // chip and finally collapsing to nothing before any fixed control shrinks.
+        WorktreePrViewBranchSection(
+            sourceBranch = state.sourceBranch,
+            destinationBranch = state.destinationBranch,
+            modifier = Modifier.weight(1f)
+        )
         HeaderLinesChangedIndicator(lines = state.linesChanged)
         Tooltip(tooltip = { Text(text = BbCloudBundle.message("main.branch.header.refresh.tooltip")) }) {
             BbCloudCompactOutlinedIconButton(
@@ -186,6 +199,34 @@ private fun WorktreePrViewBlueBarHeader(
                 onClick = onRefresh
             )
         }
+    }
+}
+
+/**
+ * The `<sourceBranch> -> <destinationBranch>` segment of the blue bar.
+ *
+ * It is placed in the bar with a filling `weight` so it is the single segment that gives way as the bar narrows:
+ * each chip carries its own `weight(fill = false)`, so both stay at their natural width while there is room and then
+ * ellipse together as space runs out; once the segment is squeezed to nothing the whole arrow-and-chips group clips
+ * away before any fixed control to its right loses room. The arrow keeps its intrinsic width and is clipped with the
+ * group rather than ellipsed on its own.
+ */
+@Composable
+private fun RowScope.WorktreePrViewBranchSection(sourceBranch: String?, destinationBranch: String?, modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(SEGMENT_GAP)
+    ) {
+        BranchChip(
+            text = sourceBranch ?: BRANCH_PLACEHOLDER,
+            modifier = Modifier.weight(weight = 1f, fill = false)
+        )
+        Text(text = BRANCH_ARROW, color = labelForeground(), maxLines = 1)
+        BranchChip(
+            text = destinationBranch ?: BRANCH_PLACEHOLDER,
+            modifier = Modifier.weight(weight = 1f, fill = false)
+        )
     }
 }
 

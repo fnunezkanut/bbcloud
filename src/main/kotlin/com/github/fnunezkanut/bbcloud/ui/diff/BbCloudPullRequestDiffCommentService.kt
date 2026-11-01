@@ -1,6 +1,8 @@
 package com.github.fnunezkanut.bbcloud.ui.diff
 
 import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.awt.ComposePanel
@@ -16,11 +18,12 @@ import com.github.fnunezkanut.bbcloud.ui.main.AuthorAvatarCache
 import com.github.fnunezkanut.bbcloud.ui.main.CommentComposerScreen
 import com.github.fnunezkanut.bbcloud.ui.main.CommentComposerViewModel
 import com.github.fnunezkanut.bbcloud.ui.main.CommentInput
+import com.github.fnunezkanut.bbcloud.ui.main.ComposerDraftCache
+import com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.BbCloudPullRequestPageRevealer
 import com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.BbCloudPullRequestVirtualFile
 import com.intellij.collaboration.ui.codereview.comment.CommentInputActionsComponentFactory
 import com.intellij.collaboration.ui.codereview.editor.CodeReviewEditorGutterControlsRenderer
 import com.intellij.collaboration.ui.codereview.editor.insertComponentAfter
-import com.intellij.diff.FrameDiffTool
 import com.intellij.diff.contents.DocumentContent
 import com.intellij.diff.editor.DiffEditorViewerFileEditor
 import com.intellij.diff.impl.DiffRequestProcessor
@@ -29,9 +32,7 @@ import com.intellij.diff.requests.ContentDiffRequest
 import com.intellij.diff.requests.DiffRequest
 import com.intellij.diff.tools.util.base.DiffViewerBase
 import com.intellij.diff.tools.util.base.DiffViewerListener
-import com.intellij.diff.tools.util.side.TwosideTextDiffViewer
 import com.intellij.diff.util.DiffDrawUtil
-import com.intellij.diff.util.Side
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.logger
@@ -57,7 +58,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import org.jetbrains.jewel.bridge.compose
+import java.awt.KeyboardFocusManager
 import java.util.concurrent.ConcurrentHashMap
+import javax.swing.SwingUtilities
 
 @Service(Service.Level.PROJECT)
 class BbCloudPullRequestDiffCommentService(private val project: Project) : Disposable {
@@ -71,6 +74,9 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
     private val composerSessions = ConcurrentHashMap<String, ComposerSession>()
     private val addCommentGutterEditors = ConcurrentHashMap.newKeySet<EditorEx>()
 
+    /** Which thread each inline thread host shows, so focus can be restored into the right host after a rebuild. EDT-only. */
+    private val hostThreads = java.util.WeakHashMap<DiffCommentThreadHost, HostThread>()
+
     init {
         project.messageBus.connect(this).subscribe(
             FileEditorManagerListener.FILE_EDITOR_MANAGER,
@@ -81,7 +87,7 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
 
                 override fun fileClosed(source: FileEditorManager, file: VirtualFile) {
                     source.getEditors(file).forEach { editor ->
-                        clearFileEditorSession(fileEditor = editor)
+                        clearFileEditorSession(fileEditor = editor, releaseDrafts = true)
                         clearComposerSessions(fileEditor = editor)
                     }
                 }
@@ -98,10 +104,109 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
     }
 
     fun openFileScopedComposer(editor: EditorEx, relativePath: String, pullRequestId: Long) {
-        val key = "$pullRequestId:${PullRequestPathMatcher.normalize(relativePath)}"
-        if (composerSessions[key] != null) {
-            composerSessions[key]?.host?.requestFocusInWindow()
-            LOG.info("File comment composer already open for $relativePath in pull request #$pullRequestId; focused it")
+        val context = BbCloudWorktreePullRequestContext.getInstance(project)
+        openTopOfFileComposer(
+            editor = editor,
+            key = "$pullRequestId:${PullRequestPathMatcher.normalize(relativePath)}",
+            logContext = "File comment composer",
+            input = { session ->
+                CommentInput(
+                    label = "file comment",
+                    placeholder = BbCloudBundle.message("main.branch.comments.placeholder"),
+                    submitLabel = BbCloudBundle.message("main.branch.comments.submit"),
+                    submitHint = BbCloudBundle.message("main.branch.comments.submitHint", CommentInputActionsComponentFactory.submitShortcutText),
+                    failureMessage = BbCloudBundle.message("main.branch.comments.failed.createFileScoped"),
+                    submit = { content, onResult ->
+                        context.submitFileScopedComment(
+                            pullRequestId = pullRequestId,
+                            path = relativePath,
+                            content = content,
+                            onResult = { accepted ->
+                                onResult(accepted)
+                                if (accepted) Disposer.dispose(session)
+                            }
+                        )
+                    }
+                )
+            },
+            onInserted = {
+                LOG.debug("Opened file comment composer for pull request #$pullRequestId at $relativePath")
+            },
+            onInsertFailed = {
+                LOG.warn("Could not insert file comment composer for pull request #$pullRequestId at $relativePath")
+            },
+            alreadyOpenLogSuffix = "$relativePath in pull request #$pullRequestId"
+        )
+    }
+
+    /**
+     * Opens a pull-request-level comment composer at the top of [editor], used for a deleted file whose path no longer
+     * exists on the source branch. Submitting posts a comment on the whole pull request ([CommentChange.Create], no
+     * inline anchor) and, on success, closes the composer and reveals the pull request page scrolled to the newest
+     * activity. The composer content is never logged.
+     */
+    fun openPullRequestLevelComposer(editor: EditorEx, relativePath: String, pullRequestId: Long) {
+        val context = BbCloudWorktreePullRequestContext.getInstance(project)
+        val normalizedPath = PullRequestPathMatcher.normalize(relativePath)
+        openTopOfFileComposer(
+            editor = editor,
+            key = "$pullRequestId:pr-level:$normalizedPath",
+            logContext = "Pull request comment composer",
+            input = { session ->
+                CommentInput(
+                    label = "pull request comment",
+                    placeholder = BbCloudBundle.message("main.branch.comments.placeholder"),
+                    submitLabel = BbCloudBundle.message("main.branch.comments.submit"),
+                    submitHint = BbCloudBundle.message("main.branch.comments.submitHint", CommentInputActionsComponentFactory.submitShortcutText),
+                    failureMessage = BbCloudBundle.message("main.branch.comments.failed.inline"),
+                    initialText = BbCloudBundle.message("main.branch.comments.deletedFile.initialText", normalizedPath),
+                    submit = { content, onResult ->
+                        context.submitPullRequestComment(
+                            pullRequestId = pullRequestId,
+                            content = content,
+                            onResult = { accepted ->
+                                onResult(accepted)
+                                if (accepted) {
+                                    Disposer.dispose(session)
+                                    BbCloudPullRequestPageRevealer.getInstance(project).revealNewestActivity(pullRequestId = pullRequestId)
+                                }
+                            }
+                        )
+                    }
+                )
+            },
+            onInserted = {
+                LOG.debug("Opened pull request comment composer for pull request #$pullRequestId from deleted file $relativePath")
+            },
+            onInsertFailed = {
+                LOG.warn("Could not insert pull request comment composer for pull request #$pullRequestId from deleted file $relativePath")
+            },
+            alreadyOpenLogSuffix = "$relativePath in pull request #$pullRequestId"
+        )
+    }
+
+    /**
+     * Shared Compose/inlay body of the top-of-file composers ([openFileScopedComposer] and
+     * [openPullRequestLevelComposer]). It dedupes on [key] (focusing the open composer instead of opening a second
+     * one), hosts the composer in a [DiffCommentThreadHost] inlay at the top of [editor], and disposes everything
+     * through the session. [input] receives the session so its submit callback can dispose the composer after a
+     * successful submission. The line-anchored composer is intentionally not routed through here: it inserts at a
+     * mapped line and refreshes the add-comment gutters.
+     */
+    private fun openTopOfFileComposer(
+        editor: EditorEx,
+        key: String,
+        logContext: String,
+        input: (session: Disposable) -> CommentInput,
+        onInserted: () -> Unit,
+        onInsertFailed: () -> Unit,
+        alreadyOpenLogSuffix: String
+    ) {
+        val openSession = composerSessions[key]
+        if (openSession != null) {
+            openSession.focusGeneration.value++
+            openSession.host.requestComposeFocus()
+            LOG.info("$logContext already open for $alreadyOpenLogSuffix; focused it")
             return
         }
         val context = BbCloudWorktreePullRequestContext.getInstance(project)
@@ -110,25 +215,7 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
         val composerSession = ComposerSession(disposable = session, host = host, editor = editor)
         composerSessions[key] = composerSession
         Disposer.register(session) { composerSessions.remove(key, composerSession) }
-        val input = CommentInput(
-            label = "file comment",
-            placeholder = BbCloudBundle.message("main.branch.comments.placeholder"),
-            submitLabel = BbCloudBundle.message("main.branch.comments.submit"),
-            submitHint = BbCloudBundle.message("main.branch.comments.submitHint", CommentInputActionsComponentFactory.submitShortcutText),
-            failureMessage = BbCloudBundle.message("main.branch.comments.failed.createFileScoped"),
-            submit = { content, onResult ->
-                context.submitFileScopedComment(
-                    pullRequestId = pullRequestId,
-                    path = relativePath,
-                    content = content,
-                    onResult = { accepted ->
-                        onResult(accepted)
-                        if (accepted) Disposer.dispose(session)
-                    }
-                )
-            }
-        )
-        val composerViewModel = CommentComposerViewModel(input = input, startsExpanded = true)
+        val composerViewModel = CommentComposerViewModel(input = input(session), startsExpanded = true)
         var composePanel: ComposePanel? = null
         val content = compose(config = { composePanel = this }) {
             val density = LocalDensity.current.density
@@ -137,6 +224,9 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
                 avatarIcon = avatarCache.iconFor(context.binding?.currentUserAvatarUrl ?: context.currentUserAvatarUrl),
                 showsCollapsedField = false,
                 showsDottedBorder = true,
+                requestEditorFocus = true,
+                focusRequestKey = composerSession.focusGeneration.value,
+                onEditorFocusRequested = { host.requestComposeFocus() },
                 onCollapsed = { Disposer.dispose(session) },
                 modifier = Modifier
                     .wrapContentHeight(align = Alignment.Top, unbounded = true)
@@ -152,12 +242,12 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
         val inlay = editor.insertComponentAfter(0, host, Int.MAX_VALUE)
         if (inlay == null) {
             Disposer.dispose(session)
-            LOG.warn("Could not insert file comment composer for pull request #$pullRequestId at $relativePath")
+            onInsertFailed()
             return
         }
         scheduleDeferredInlayRemeasure(host = host)
         Disposer.register(session) { Disposer.dispose(inlay) }
-        LOG.debug("Opened file comment composer for pull request #$pullRequestId at $relativePath")
+        onInserted()
     }
 
     /**
@@ -169,8 +259,10 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
     fun openInlineLineComposer(editor: EditorEx, relativePath: String, pullRequestId: Long, fileOneBasedLine: Int, side: InlineCommentSide) {
         val normalizedPath = PullRequestPathMatcher.normalize(relativePath)
         val key = "$pullRequestId:$normalizedPath:$side:$fileOneBasedLine"
-        if (composerSessions[key] != null) {
-            composerSessions[key]?.host?.requestFocusInWindow()
+        val openSession = composerSessions[key]
+        if (openSession != null) {
+            openSession.focusGeneration.value++
+            openSession.host.requestComposeFocus()
             LOG.info("Line comment composer already open for $relativePath:$fileOneBasedLine ($side) in pull request #$pullRequestId; focused it")
             return
         }
@@ -217,6 +309,9 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
                 avatarIcon = avatarCache.iconFor(context.binding?.currentUserAvatarUrl ?: context.currentUserAvatarUrl),
                 showsCollapsedField = false,
                 showsDottedBorder = true,
+                requestEditorFocus = true,
+                focusRequestKey = composerSession.focusGeneration.value,
+                onEditorFocusRequested = { host.requestComposeFocus() },
                 onCollapsed = { Disposer.dispose(session) },
                 modifier = Modifier
                     .wrapContentHeight(align = Alignment.Top, unbounded = true)
@@ -240,22 +335,14 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
     }
 
     /**
-     * The inline side [editor] comments against when it is one side of a registered side-by-side diff viewer:
-     * [InlineCommentSide.BEFORE] for the left (pre-image) editor, [InlineCommentSide.AFTER] for the right (source)
-     * editor. Returns null when [editor] is not a registered diff side (a plain work-tree file editor).
+     * The inline side [editor] comments against when it is one side of a registered diff viewer:
+     * [InlineCommentSide.BEFORE] for the left (pre-image) editor of a side-by-side diff,
+     * [InlineCommentSide.AFTER] for the right (source) editor of a side-by-side diff or the single editor of an
+     * added-file oneside diff. Also scans viewers reached through a registered [DiffRequestProcessor]. Returns null
+     * when [editor] is not a registered diff side (a plain work-tree file editor).
      */
     internal fun diffSideForEditor(editor: EditorEx): InlineCommentSide? {
-        registeredTextViewers.forEach { textViewer ->
-            if (textViewer is TwosideTextDiffViewer) {
-                if (textViewer.getEditor(Side.LEFT) === editor) {
-                    return InlineCommentSide.BEFORE
-                }
-                if (textViewer.getEditor(Side.RIGHT) === editor) {
-                    return InlineCommentSide.AFTER
-                }
-            }
-        }
-        return null
+        return sideOfEditor(editor = editor, viewers = registeredTextViewers + registeredProcessors)
     }
 
     /** Repaints the custom add-comment gutter after a composer opens or closes. */
@@ -326,11 +413,17 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
     }
 
     private fun attachToDiffEditor(fileEditor: DiffEditorViewerFileEditor) {
-        when (val editorViewer = fileEditor.editorViewer) {
-            is TwosideTextDiffViewer -> registerTextViewer(textViewer = editorViewer, parentDisposable = editorViewer.disposable)
-            is DiffRequestProcessor -> registerProcessor(processor = editorViewer)
-            else -> LOG.info("Pull request diff comments skipped: unsupported diff editor viewer ${editorViewer.javaClass.simpleName}")
+        val editorViewer = fileEditor.editorViewer
+        if (editorViewer is DiffRequestProcessor) {
+            registerProcessor(processor = editorViewer)
+            return
         }
+        val commentable = PullRequestCommentableDiffViewer.from(viewer = editorViewer)
+        if (commentable != null) {
+            registerTextViewer(commentable = commentable, parentDisposable = commentable.viewer)
+            return
+        }
+        LOG.info("Pull request diff comments skipped: unsupported diff editor viewer ${editorViewer.javaClass.simpleName}")
     }
 
     /**
@@ -396,15 +489,17 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
         attachFromProcessor(processor = processor)
     }
 
-    private fun registerTextViewer(textViewer: TwosideTextDiffViewer, parentDisposable: Disposable) {
+    private fun registerTextViewer(commentable: PullRequestCommentableDiffViewer, parentDisposable: Disposable) {
+        val textViewer = commentable.viewer
         if (!registeredTextViewers.add(textViewer)) {
-            attachFromTextViewer(textViewer = textViewer, request = textViewer.request)
+            attachFromTextViewer(commentable = commentable, request = textViewer.request)
             return
         }
         textViewer.addListener(
             object : DiffViewerListener() {
                 override fun onAfterRediff() {
-                    attachFromTextViewer(textViewer = textViewer, request = textViewer.request)
+                    // The viewer keeps the same editors across a rediff, so the wrapper can be reused.
+                    attachFromTextViewer(commentable = commentable, request = textViewer.request)
                 }
             }
         )
@@ -412,21 +507,24 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
             registeredTextViewers.remove(textViewer)
             clearSession(textViewer = textViewer)
         }
-        attachFromTextViewer(textViewer = textViewer, request = textViewer.request)
+        attachFromTextViewer(commentable = commentable, request = textViewer.request)
     }
 
     private fun attachFromProcessor(processor: DiffRequestProcessor) {
         val activeViewer = processor.activeViewer
-        val textViewer = resolveTwosideTextDiffViewer(activeViewer = activeViewer)
-        if (textViewer == null) {
-            LOG.info("Pull request diff comments skipped: diff tool has no side-by-side text viewer yet")
+        val commentable = PullRequestCommentableDiffViewer.from(viewer = activeViewer)
+        if (commentable == null) {
+            LOG.info(
+                "Pull request diff comments skipped: diff tool has no commentable text viewer (${activeViewer?.javaClass?.simpleName})"
+            )
             return
         }
         val request = processor.activeRequest
-        attachFromTextViewer(textViewer = textViewer, request = request)
+        attachFromTextViewer(commentable = commentable, request = request)
     }
 
-    private fun attachFromTextViewer(textViewer: TwosideTextDiffViewer, request: DiffRequest?) {
+    private fun attachFromTextViewer(commentable: PullRequestCommentableDiffViewer, request: DiffRequest?) {
+        val textViewer = commentable.viewer
         // Clear first so a rediff or comment reload that produces no anchors removes stale inlays.
         clearSession(textViewer = textViewer)
         val pullRequestId = PullRequestCommentDecorationContext.resolvePullRequestId(project = project)
@@ -446,7 +544,7 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
             return
         }
 
-        val change = resolveChange(request = request, textViewer = textViewer)
+        val change = resolveChange(request = request, viewer = textViewer)
         val relativePath = resolveRelativePath(change = change, request = request)
         if (relativePath == null) {
             LOG.info("Pull request diff comments skipped: could not resolve file path for diff")
@@ -467,18 +565,26 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
         }
 
         // Decision 4b/7.4: gutter controls attach once the index is loaded even when this file has zero threads.
-        attachComments(textViewer = textViewer, relativePath = relativePath, anchors = anchors, pullRequestId = pullRequestId)
+        attachComments(commentable = commentable, relativePath = relativePath, anchors = anchors, pullRequestId = pullRequestId)
     }
 
-    private fun attachComments(textViewer: TwosideTextDiffViewer, relativePath: String, anchors: List<InlineCommentAnchor>, pullRequestId: Long) {
-        clearSession(textViewer = textViewer)
-        LOG.info("Attaching ${anchors.size} inline comment thread(s) to diff for pull request #$pullRequestId at $relativePath")
+    private fun attachComments(commentable: PullRequestCommentableDiffViewer, relativePath: String, anchors: List<InlineCommentAnchor>, pullRequestId: Long) {
+        val viewer = commentable.viewer
+        // Remember a composer that currently has keyboard focus before the rebuild disposes its host, so focus can be
+        // restored into the rebuilt card.
+        rememberFocusedComposer()
+        clearSession(textViewer = viewer)
+        val viewerKind = if (commentable.isOneside) "oneside" else "side-by-side"
+        LOG.info(
+            "Attaching ${anchors.size} inline comment thread(s) to $viewerKind diff for pull request #$pullRequestId at $relativePath"
+        )
         val session = newSession()
-        viewerSessions[textViewer] = session
-        // Decision 1b/3.2: the right editor is the source (AFTER) side and is the only diff pane with the hover icon.
-        if (shouldOfferAddCommentGutter(side = InlineCommentSide.AFTER, isFileEditor = false)) {
+        viewerSessions[viewer] = session
+        // Decision 1b/3.2: the AFTER (source) editor is the only diff pane with the hover icon.
+        val afterEditor = commentable.editorFor(side = InlineCommentSide.AFTER)
+        if (afterEditor != null && shouldOfferAddCommentGutter(side = InlineCommentSide.AFTER, isFileEditor = false)) {
             installAddCommentGutter(
-                editor = textViewer.getEditor(Side.RIGHT),
+                editor = afterEditor,
                 relativePath = relativePath,
                 pullRequestId = pullRequestId,
                 side = InlineCommentSide.AFTER,
@@ -486,27 +592,55 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
             )
         }
         val insertedInlays = newInlayList(session = session)
+        // Edge case 5c: BEFORE anchors with no BEFORE editor (an added-file oneside diff) are shown at the top of the
+        // AFTER editor, like a file-scoped thread; they are also indicated at line 0 below.
+        val topOfFileAnchors = mutableListOf<InlineCommentAnchor>()
         anchors.forEachIndexed { index, anchor ->
-            val side = anchor.side.toDiffSide()
+            val editorForSide = commentable.editorFor(side = anchor.side)
+            val forceTopOfFile = editorForSide == null && commentable.isOneside && anchor.side == InlineCommentSide.BEFORE
+            val targetEditor = editorForSide ?: if (forceTopOfFile) afterEditor else null
+            if (targetEditor == null) {
+                LOG.debug(
+                    "Inline comment thread on ${anchor.side} line ${anchor.startLine} of $relativePath skipped: no editor for that side"
+                )
+                return@forEachIndexed
+            }
+            if (forceTopOfFile) {
+                topOfFileAnchors += anchor
+                LOG.debug(
+                    "Inline comment thread on BEFORE line ${anchor.startLine} of added file $relativePath shown at top of file"
+                )
+            }
             installThread(
-                editor = textViewer.getEditor(side),
+                editor = targetEditor,
                 anchor = anchor,
                 relativePath = relativePath,
                 pullRequestId = pullRequestId,
                 priority = anchors.size - index,
                 session = session,
-                insertedInlays = insertedInlays
+                insertedInlays = insertedInlays,
+                forceTopOfFile = forceTopOfFile
             )
         }
-        installCommentLineIndicators(
-            editor = textViewer.getEditor(Side.RIGHT),
-            anchors = anchors.filter { anchor -> anchor.side == InlineCommentSide.AFTER },
-            session = session
-        )
-        installCommentLineIndicators(
-            editor = textViewer.getEditor(Side.LEFT),
-            anchors = anchors.filter { anchor -> anchor.side == InlineCommentSide.BEFORE },
-            session = session
+        commentable.editorFor(side = InlineCommentSide.AFTER)?.let { editor ->
+            installCommentLineIndicators(
+                editor = editor,
+                anchors = anchors.filter { anchor -> anchor.side == InlineCommentSide.AFTER },
+                session = session,
+                topOfFileAnchors = topOfFileAnchors
+            )
+        }
+        commentable.editorFor(side = InlineCommentSide.BEFORE)?.let { editor ->
+            installCommentLineIndicators(
+                editor = editor,
+                anchors = anchors.filter { anchor -> anchor.side == InlineCommentSide.BEFORE },
+                session = session
+            )
+        }
+        closeComposerIfOrphaned(
+            controller = controllerFor(relativePath = relativePath, pullRequestId = pullRequestId),
+            anchors = anchors,
+            pullRequestId = pullRequestId
         )
     }
 
@@ -521,9 +655,12 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
         LOG.info(
             "Attaching ${anchors.size} inline comment thread(s) to file editor for pull request #$pullRequestId at $relativePath"
         )
+        // Remember a composer that currently has keyboard focus before the rebuild disposes its host.
+        rememberFocusedComposer()
         clearFileEditorSession(textEditor = textEditor)
         val session = newSession()
         fileEditorSessions[textEditor] = session
+        val controller = controllerFor(relativePath = relativePath, pullRequestId = pullRequestId)
         // The file on disk is the pull request source, so its gutter icon anchors to the AFTER side (inline.to).
         if (editor is EditorEx && shouldOfferAddCommentGutter(side = InlineCommentSide.AFTER, isFileEditor = true)) {
             installAddCommentGutter(
@@ -535,6 +672,7 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
             )
         }
         if (anchors.isEmpty()) {
+            closeComposerIfOrphaned(controller = controller, anchors = anchors, pullRequestId = pullRequestId)
             return
         }
         val insertedInlays = newInlayList(session = session)
@@ -550,6 +688,38 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
             )
         }
         installCommentLineIndicators(editor = editor, anchors = anchors, session = session)
+        closeComposerIfOrphaned(controller = controller, anchors = anchors, pullRequestId = pullRequestId)
+    }
+
+    /**
+     * If the keyboard focus is inside an inline thread host whose composer is open, marks a focus restore for that
+     * host's editor and comment, so the rebuilt card takes focus again. Top-of-file and line composers live in
+     * [composerSessions] and are not rebuilt, so they are intentionally not handled here. Runs on the EDT.
+     */
+    private fun rememberFocusedComposer() {
+        val focusOwner = KeyboardFocusManager.getCurrentKeyboardFocusManager().focusOwner ?: return
+        val host = SwingUtilities.getAncestorOfClass(DiffCommentThreadHost::class.java, focusOwner) as? DiffCommentThreadHost ?: return
+        val hostThread = hostThreads[host] ?: return
+        val target = hostThread.controller.openComposer ?: return
+        if (target.commentId in hostThread.threadCommentIds) {
+            hostThread.controller.markFocusRestore(editor = hostThread.editor, commentId = target.commentId)
+            LOG.debug("Remembering focused composer of comment ${target.commentId} for focus restore after rebuild")
+        }
+    }
+
+    /**
+     * Closes the controller's open composer when its comment is no longer shown by any of [anchors] (deleted remotely,
+     * or resolved and collapsed), so no orphaned composer lingers hidden. Uses the full anchor list of the attach, not
+     * only the threads installed successfully, so a thread skipped because its side has no editor does not close a
+     * composer that is still shown in another editor.
+     */
+    private fun closeComposerIfOrphaned(controller: EditorCommentThreadController, anchors: List<InlineCommentAnchor>, pullRequestId: Long) {
+        val openCommentId = controller.openComposer?.commentId ?: return
+        val shownIds = anchors.flatMap { anchor -> threadCommentIds(anchor = anchor) }.toSet()
+        if (ComposerDraftCache.isOrphaned(openCommentId = openCommentId, shownIds = shownIds)) {
+            LOG.info("Closed the open composer of comment $openCommentId in pull request #$pullRequestId: the comment is no longer shown")
+            controller.closeComposer()
+        }
     }
 
     private fun installThread(
@@ -559,9 +729,18 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
         pullRequestId: Long,
         priority: Int,
         session: Disposable,
-        insertedInlays: MutableList<Inlay<*>>
+        insertedInlays: MutableList<Inlay<*>>,
+        forceTopOfFile: Boolean = false
     ) {
-        val editorLine = mapFileLineToEditorLine(fileOneBasedLine = anchor.startLine, editor = editor) ?: run {
+        // A thread forced to the top of the file (an orphan BEFORE anchor on an added file) does not map its line into
+        // this editor: the pre-image line number does not refer to the added file, so line 0 is used directly.
+        val mappedLine = if (forceTopOfFile) {
+            null
+        } else {
+            mapFileLineToEditorLine(fileOneBasedLine = anchor.startLine, editor = editor)
+        }
+        val inlayLine = threadInlayLine(anchor = anchor, mappedLine = mappedLine, forceTopOfFile = forceTopOfFile)
+        if (inlayLine == null) {
             LOG.debug("Could not map Bitbucket line ${anchor.startLine} for $relativePath on ${anchor.side}; skipping thread inlay")
             return
         }
@@ -569,7 +748,6 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
             LOG.debug("Inline comment thread for pull request #$pullRequestId skipped at $relativePath: editor is not an EditorEx")
             return
         }
-        val inlayLine = if (anchor.isFileScoped) 0 else editorLine
         installInlay(
             editor = editor,
             editorLine = inlayLine,
@@ -613,8 +791,8 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
         )
     }
 
-    private fun resolveChange(request: DiffRequest?, textViewer: TwosideTextDiffViewer): Change? {
-        return textViewer.request.getUserData(ChangeDiffRequestProducer.CHANGE_KEY)
+    private fun resolveChange(request: DiffRequest?, viewer: DiffViewerBase): Change? {
+        return viewer.request.getUserData(ChangeDiffRequestProducer.CHANGE_KEY)
             ?: request?.getUserData(ChangeDiffRequestProducer.CHANGE_KEY)
     }
 
@@ -641,20 +819,27 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
             .firstOrNull { path -> path.isNotBlank() }
     }
 
-    private fun resolveTwosideTextDiffViewer(activeViewer: FrameDiffTool.DiffViewer?): TwosideTextDiffViewer? {
-        return activeViewer as? TwosideTextDiffViewer
-    }
-
-    private fun installCommentLineIndicators(editor: Editor, anchors: List<InlineCommentAnchor>, session: Disposable) {
-        if (anchors.isEmpty()) {
+    private fun installCommentLineIndicators(
+        editor: Editor,
+        anchors: List<InlineCommentAnchor>,
+        session: Disposable,
+        topOfFileAnchors: List<InlineCommentAnchor> = emptyList()
+    ) {
+        val allAnchors = anchors + topOfFileAnchors
+        if (allAnchors.isEmpty()) {
             return
         }
-        val ranges = indicatorRangesForAnchors(anchors = anchors) { anchor ->
-            mapFileLineRangeToEditorLines(
-                startOneBasedLine = anchor.startLine,
-                endOneBasedLine = anchor.endLine,
-                editor = editor
-            )
+        val topOfFileAnchorSet = topOfFileAnchors.toSet()
+        val ranges = indicatorRangesForAnchors(anchors = allAnchors) { anchor ->
+            if (anchor in topOfFileAnchorSet) {
+                0..0
+            } else {
+                mapFileLineRangeToEditorLines(
+                    startOneBasedLine = anchor.startLine,
+                    endOneBasedLine = anchor.endLine,
+                    editor = editor
+                )
+            }
         }
         if (ranges.isEmpty()) {
             return
@@ -723,11 +908,17 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
         var composePanel: ComposePanel? = null
         val controller = controllerFor(relativePath = relativePath, pullRequestId = pullRequestId)
         controller.prefetch(thread = anchor.thread)
+        val threadCommentIds = threadCommentIds(anchor = anchor)
+        // A rebuild during an open composer marks a focus restore for this editor and comment; consume it here so the
+        // rebuilt card takes keyboard focus once.
+        val restoreFocus = controller.consumeFocusRestore(editor = editor, threadCommentIds = threadCommentIds)
         val content = compose(config = { composePanel = this }) {
             DiffInlineCommentThreadCard(
                 thread = anchor.thread,
                 host = host,
-                controller = controller
+                controller = controller,
+                composerScope = editor,
+                requestComposerFocus = restoreFocus
             )
         }
         // The inlay takes its height from the preferred size of the host, and the host measures the Compose content at
@@ -743,8 +934,15 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
             )
             return
         }
+        hostThreads[host] = HostThread(controller = controller, editor = editor, threadCommentIds = threadCommentIds)
+        Disposer.register(inlay) { hostThreads.remove(host) }
         scheduleDeferredInlayRemeasure(host = host)
         insertedInlays.add(inlay)
+    }
+
+    /** The root id plus the reply ids of the thread an anchor carries. */
+    private fun threadCommentIds(anchor: InlineCommentAnchor): Set<Long> {
+        return (listOf(anchor.thread.root.id) + anchor.thread.replies.map { reply -> reply.id }).toSet()
     }
 
     /** When attach runs before the editor viewport is laid out, remeasure once on the next EDT tick. */
@@ -794,20 +992,16 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
         return zeroBased
     }
 
-    private fun InlineCommentSide.toDiffSide(): Side {
-        return when (this) {
-            InlineCommentSide.BEFORE -> Side.LEFT
-            InlineCommentSide.AFTER -> Side.RIGHT
-        }
-    }
-
     private fun clearComposerSessions(fileEditor: FileEditor) {
         val editor = when (fileEditor) {
             is TextEditor -> fileEditor.editor as? EditorEx
             is DiffEditorViewerFileEditor -> when (val viewer = fileEditor.editorViewer) {
-                is TwosideTextDiffViewer -> viewer.getEditor(Side.RIGHT)
-                is DiffRequestProcessor -> (viewer.activeViewer as? TwosideTextDiffViewer)?.getEditor(Side.RIGHT)
-                else -> null
+                is DiffRequestProcessor -> {
+                    PullRequestCommentableDiffViewer.from(viewer = viewer.activeViewer)?.editorFor(side = InlineCommentSide.AFTER)
+                }
+                else -> {
+                    PullRequestCommentableDiffViewer.from(viewer = viewer)?.editorFor(side = InlineCommentSide.AFTER)
+                }
             }
             else -> null
         } ?: return
@@ -816,31 +1010,51 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
             .forEach { composerSession -> Disposer.dispose(composerSession.disposable) }
     }
 
-    private fun clearFileEditorSession(fileEditor: FileEditor) {
+    private fun clearFileEditorSession(fileEditor: FileEditor, releaseDrafts: Boolean = false) {
         when (fileEditor) {
-            is TextEditor -> clearFileEditorSession(textEditor = fileEditor)
-            is DiffEditorViewerFileEditor -> clearDiffFileEditorSession(fileEditor = fileEditor)
+            is TextEditor -> clearFileEditorSession(textEditor = fileEditor, releaseDrafts = releaseDrafts)
+            is DiffEditorViewerFileEditor -> clearDiffFileEditorSession(fileEditor = fileEditor, releaseDrafts = releaseDrafts)
         }
     }
 
-    private fun clearDiffFileEditorSession(fileEditor: DiffEditorViewerFileEditor) {
-        when (val editorViewer = fileEditor.editorViewer) {
-            is TwosideTextDiffViewer -> {
-                clearSession(textViewer = editorViewer)
-                registeredTextViewers.remove(editorViewer)
-            }
-            is DiffRequestProcessor -> {
-                registeredProcessors.remove(editorViewer)
-                resolveTwosideTextDiffViewer(activeViewer = editorViewer.activeViewer)?.let { textViewer ->
-                    clearSession(textViewer = textViewer)
-                    registeredTextViewers.remove(textViewer)
+    private fun clearDiffFileEditorSession(fileEditor: DiffEditorViewerFileEditor, releaseDrafts: Boolean = false) {
+        val editorViewer = fileEditor.editorViewer
+        if (editorViewer is DiffRequestProcessor) {
+            registeredProcessors.remove(editorViewer)
+            PullRequestCommentableDiffViewer.from(viewer = editorViewer.activeViewer)?.let { commentable ->
+                clearSession(textViewer = commentable.viewer)
+                registeredTextViewers.remove(commentable.viewer)
+                if (releaseDrafts) {
+                    forgetEditorScopes(commentable = commentable)
                 }
             }
+            return
+        }
+        PullRequestCommentableDiffViewer.from(viewer = editorViewer)?.let { commentable ->
+            clearSession(textViewer = commentable.viewer)
+            registeredTextViewers.remove(commentable.viewer)
+            if (releaseDrafts) {
+                forgetEditorScopes(commentable = commentable)
+            }
         }
     }
 
-    private fun clearFileEditorSession(textEditor: TextEditor) {
+    private fun clearFileEditorSession(textEditor: TextEditor, releaseDrafts: Boolean = false) {
         fileEditorSessions.remove(textEditor)?.let { session -> Disposer.dispose(session) }
+        if (releaseDrafts) {
+            (textEditor.editor as? EditorEx)?.let { editor -> forgetEditorScope(editor = editor) }
+        }
+    }
+
+    /** Drops the cached composer drafts whose scope is [editor] from every controller, when that editor is closed. */
+    private fun forgetEditorScope(editor: EditorEx) {
+        controllers.values.forEach { controller -> controller.forgetScope(scope = editor) }
+    }
+
+    /** Drops the cached composer drafts of both diff sides of [commentable] when the diff editor is closed. */
+    private fun forgetEditorScopes(commentable: PullRequestCommentableDiffViewer) {
+        commentable.editorFor(side = InlineCommentSide.AFTER)?.let { editor -> forgetEditorScope(editor = editor) }
+        commentable.editorFor(side = InlineCommentSide.BEFORE)?.let { editor -> forgetEditorScope(editor = editor) }
     }
 
     private fun clearSession(textViewer: DiffViewerBase) {
@@ -869,8 +1083,14 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
         val host: DiffCommentThreadHost,
         val editor: EditorEx,
         val side: InlineCommentSide? = null,
-        val editorLine: Int? = null
+        val editorLine: Int? = null,
+        // Bumped when an already-open composer is re-triggered, so its text area re-requests keyboard focus. A Compose
+        // state so the composer recomposes and its focus LaunchedEffect(focusRequestKey) re-runs. EDT-only.
+        val focusGeneration: MutableState<Int> = mutableStateOf(0)
     )
+
+    /** Identifies the thread an inline host shows, so a rebuild can restore focus into the composer of that thread. */
+    private data class HostThread(val controller: EditorCommentThreadController, val editor: EditorEx, val threadCommentIds: Set<Long>)
 
     companion object {
         private val LOG = logger<BbCloudPullRequestDiffCommentService>()

@@ -20,7 +20,7 @@ import org.jetbrains.jewel.ui.component.Tooltip
 /**
  * The per-file added and removed line counts.
  *
- * The review bar shows the leading emoji so it reads like the branch header; the Changes file tree passes
+ * The review bar shows the leading emoji so it reads like the branch header; the PR Changes file tree passes
  * [showEmoji] = false for a compact green/red badge that fits a tree row. The emoji is omitted entirely when
  * [showEmoji] is false, so the badge starts at the green `+` count.
  */

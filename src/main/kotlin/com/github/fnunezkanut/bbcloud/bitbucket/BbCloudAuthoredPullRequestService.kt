@@ -1,6 +1,6 @@
 package com.github.fnunezkanut.bbcloud.bitbucket
 
-import com.github.fnunezkanut.bbcloud.credentials.BbCloudCredentialStore
+import com.github.fnunezkanut.bbcloud.auth.BbCloudAccessTokenProvider
 import com.intellij.openapi.diagnostic.logger
 
 /**
@@ -13,7 +13,10 @@ import com.intellij.openapi.diagnostic.logger
  * repository per row, so the repository behind each pull request is recovered from its own links; see
  * [BitbucketWorkspacePullRequestResponseParser].
  */
-class BbCloudAuthoredPullRequestService(private val credentialStore: BbCloudCredentialStore, private val pullRequestClient: BitbucketPullRequestClient) {
+class BbCloudAuthoredPullRequestService(
+    private val accessTokenProvider: BbCloudAccessTokenProvider,
+    private val pullRequestClient: BitbucketPullRequestClient
+) {
     suspend fun listAuthoredPullRequests(organizationUrl: String, excludedRepoSlug: String?): AuthoredPullRequestListResult {
         val workspace = BitbucketRepositoryUrls.workspaceFromOrganizationUrl(organizationUrl)
         if (workspace == null) {
@@ -21,9 +24,9 @@ class BbCloudAuthoredPullRequestService(private val credentialStore: BbCloudCred
             return AuthoredPullRequestListResult.Failed()
         }
 
-        val apiToken = credentialStore.getToken()
+        val apiToken = accessTokenProvider.bearerTokenOrNull()
         if (apiToken == null) {
-            LOG.info("Cannot list the pull requests you opened: no stored API token")
+            LOG.info("Cannot list the pull requests you opened: no Bitbucket credentials")
             return AuthoredPullRequestListResult.Failed()
         }
 

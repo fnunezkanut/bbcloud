@@ -6,6 +6,8 @@ import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestState
 import com.github.fnunezkanut.bbcloud.bitbucket.ReviewingPullRequest
 import com.github.fnunezkanut.bbcloud.ui.main.PullRequestRelativeTime
 import com.github.fnunezkanut.bbcloud.ui.main.PullRequestStateStyle
+import com.github.fnunezkanut.bbcloud.ui.pullrequests.ReviewerStack
+import com.github.fnunezkanut.bbcloud.ui.pullrequests.buildReviewerStack
 
 data class WorkspacePullRequestRow(
     val pullRequest: ReviewingPullRequest,
@@ -15,6 +17,8 @@ data class WorkspacePullRequestRow(
     val stateLabel: String,
     val state: PullRequestState,
     val isDraft: Boolean,
+    /** True when the current user has approved the pull request; the card shows the Approved badge for open rows. */
+    val isApprovedByMe: Boolean,
     val title: String,
     val prId: String,
     val authorDisplayName: String,
@@ -24,14 +28,17 @@ data class WorkspacePullRequestRow(
     val branches: String,
     val updatedRelative: String,
     val createdRelative: String,
-    val commentCount: Int
+    val commentCount: Int,
+    /** Reviewer avatars for the listing card; empty on the detail info card and for merged or declined rows. */
+    val reviewerStack: ReviewerStack = ReviewerStack.EMPTY
 )
 
 internal fun buildWorkspacePullRequestRow(
     pullRequest: ReviewingPullRequest,
     organizationUrl: String?,
     authorAvatarUrl: String?,
-    repoAvatarUrl: String?
+    repoAvatarUrl: String?,
+    isApprovedByMe: Boolean = false
 ): WorkspacePullRequestRow {
     val summary = pullRequest.summary
     val repositoryWebUrl = if (pullRequest.workspace.isBlank()) {
@@ -55,6 +62,7 @@ internal fun buildWorkspacePullRequestRow(
         stateLabel = PullRequestStateStyle.label(summary.state),
         state = summary.state,
         isDraft = summary.isDraft,
+        isApprovedByMe = isApprovedByMe,
         title = summary.title,
         prId = "#${summary.id}",
         authorDisplayName = summary.authorDisplayName,
@@ -68,6 +76,12 @@ internal fun buildWorkspacePullRequestRow(
         ),
         updatedRelative = PullRequestRelativeTime.formatRelativeThenAbsolute(date = summary.updatedOn),
         createdRelative = PullRequestRelativeTime.formatRelativeThenAbsolute(date = summary.createdOn),
-        commentCount = summary.commentCount
+        commentCount = summary.commentCount,
+        // Open pull requests only, matching the Approved badge rule; merged and declined rows show no reviewer stack.
+        reviewerStack = if (summary.state == PullRequestState.Open) {
+            buildReviewerStack(reviewers = summary.reviewers)
+        } else {
+            ReviewerStack.EMPTY
+        }
     )
 }

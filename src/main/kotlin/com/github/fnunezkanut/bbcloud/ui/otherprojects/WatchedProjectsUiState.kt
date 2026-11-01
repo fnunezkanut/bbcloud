@@ -31,8 +31,16 @@ data class WatchedProjectsUiState(
     val syncEnabled: Boolean = true,
     val pruneEnabled: Boolean = true,
     val masterToggle: ToggleableState = ToggleableState.Off,
-    val avatarRevision: Int = 0
-)
+    val avatarRevision: Int = 0,
+    /** Session-only filter text for the table; [rows] stays complete and [visibleRows] applies this query. */
+    val searchQuery: String = ""
+) {
+    /** The rows that match [searchQuery], in the same order as [rows]. */
+    val visibleRows: List<WatchedProjectRow>
+        get() {
+            return filterWatchedProjectRows(rows = rows, query = searchQuery)
+        }
+}
 
 internal fun deriveMasterToggle(rows: List<WatchedProjectRow>): ToggleableState {
     val watchedCount = rows.count { row -> row.mapping.watched }
@@ -41,6 +49,36 @@ internal fun deriveMasterToggle(rows: List<WatchedProjectRow>): ToggleableState 
         watchedCount == rows.size -> ToggleableState.On
         else -> ToggleableState.Indeterminate
     }
+}
+
+private val WHITESPACE = Regex("\\s+")
+
+/**
+ * Keeps the rows where every whitespace-separated token of [query] is contained, ignoring case, in at least one of the
+ * row's searchable texts (see [searchableText]). A blank query returns [rows] unchanged.
+ */
+internal fun filterWatchedProjectRows(rows: List<WatchedProjectRow>, query: String): List<WatchedProjectRow> {
+    val tokens = query.trim().lowercase().split(WHITESPACE).filter { token -> token.isNotEmpty() }
+    if (tokens.isEmpty()) {
+        return rows
+    }
+    return rows.filter { row ->
+        val entries = searchableText(row)
+        tokens.all { token -> entries.any { entry -> entry.contains(token) } }
+    }
+}
+
+/**
+ * The lower-case texts a search token can match: the remote slug, the local slug, the local folder path, and for each
+ * worktree its `#<PR number>` and branch name. A missing branch name contributes an empty entry, never the text "null".
+ */
+private fun searchableText(row: WatchedProjectRow): List<String> {
+    val entries = mutableListOf(row.mapping.remoteRepoSlug, row.localSlug, row.mapping.localFolderPath)
+    row.worktrees.forEach { worktree ->
+        entries.add("#${worktree.prNumber}")
+        entries.add(worktree.branchName.orEmpty())
+    }
+    return entries.map { entry -> entry.lowercase() }
 }
 
 internal fun buildWatchedProjectRow(

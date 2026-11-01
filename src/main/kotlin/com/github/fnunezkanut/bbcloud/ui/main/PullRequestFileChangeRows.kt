@@ -15,12 +15,16 @@ import com.intellij.openapi.vcs.changes.ChangesUtil
  * The per-file line counts come from the local Git `--numstat` diff and are keyed by the normalized relative path,
  * so each row is resolved through [PullRequestPathMatcher.normalize] only, the same lookup the work tree review bar
  * uses. A missing or empty map leaves [PullRequestFileChangeRow.lineCount] null, which hides the line badge.
+ *
+ * The source-branch revisions come from [fileRevisions], keyed the same way. The revision decides whether a stored
+ * Viewed mark still applies to the file, so a missing entry leaves [PullRequestFileChangeRow.revision] null.
  */
 internal fun toFileChangeRows(
     changes: List<Change>,
     commentCounts: PullRequestFileCommentCounts?,
     projectBasePath: String?,
-    fileLineCounts: Map<String, FileLineCount>? = null
+    fileLineCounts: Map<String, FileLineCount>? = null,
+    fileRevisions: Map<String, String>? = null
 ): List<PullRequestFileChangeRow> {
     return changes.mapIndexed { index, change ->
         val absolutePath = ChangesUtil.getFilePath(change).path
@@ -32,14 +36,16 @@ internal fun toFileChangeRows(
             projectBasePath = projectBasePath,
             changeRelativePath = relativePath
         ) ?: 0
-        val lineCount = fileLineCounts?.get(PullRequestPathMatcher.normalize(relativePath))
+        val normalizedPath = PullRequestPathMatcher.normalize(relativePath)
+        val lineCount = fileLineCounts?.get(normalizedPath)
         PullRequestFileChangeRow(
             changeId = index,
             relativePath = relativePath,
             fileName = relativePath.substringAfterLast('/'),
             commentCount = commentCount,
             statusColorArgb = change.fileStatus.color?.rgb,
-            lineCount = lineCount
+            lineCount = lineCount,
+            revision = fileRevisions?.get(normalizedPath)
         )
     }
 }

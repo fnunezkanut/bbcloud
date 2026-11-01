@@ -158,6 +158,46 @@ class BitbucketWorkspacePullRequestResponseParserTest {
                 isTruncated shouldBe false
             }
         }
+
+        @Test
+        fun `parseAuthoredPullRequestPage - should read reviewers from REVIEWER participants through the shared summary parser`() {
+            // GIVEN a workspace authored-PR page whose single entry carries two REVIEWER participants
+            val body =
+                """
+                {
+                  "values": [
+                    {
+                      "id": 273,
+                      "title": "ABC-663 test",
+                      "state": "OPEN",
+                      "comment_count": 1,
+                      "created_on": "$CREATED_ON",
+                      "updated_on": "$UPDATED_ON",
+                      "author": { "uuid": "{author}", "display_name": "John Smith" },
+                      "source": { "branch": { "name": "feature" } },
+                      "destination": { "branch": { "name": "main" } },
+                      "links": {
+                        "self": { "href": "https://api.bitbucket.org/2.0/repositories/my-workspace/other-repo/pullrequests/273" },
+                        "html": { "href": "https://bitbucket.org/my-workspace/other-repo/pull-requests/273" }
+                      },
+                      "participants": [
+                        { "role": "REVIEWER", "approved": true, "user": { "uuid": "{a}", "display_name": "Alice" } },
+                        { "role": "PARTICIPANT", "user": { "uuid": "{c}", "display_name": "Carol" } }
+                      ]
+                    }
+                  ]
+                }
+                """.trimIndent()
+
+            // WHEN
+            val page = BitbucketWorkspacePullRequestResponseParser.parseAuthoredPullRequestPage(responseBody = body)
+
+            // THEN the shared summary parser exposes only the reviewer
+            assertSoftly(page.entries.single().summary) {
+                reviewers.map { reviewer -> reviewer.uuid } shouldContainExactly listOf("{a}")
+                reviewers.single().status shouldBe ReviewerStatus.Approved
+            }
+        }
     }
 
     @Nested

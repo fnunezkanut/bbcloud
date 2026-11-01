@@ -1,5 +1,18 @@
 # CHANGELOG
 
+
+## *1.4.0* - 2026-11-01
+* Fixed: keyboard input in diff and file-editor comment boxes (including paste) edits the comment instead of the read-only file
+* Changed: reply, edit, line, and file comment boxes take focus when opened and keep their text and focus when comments refresh; reply and edit boxes close if the comment was deleted or resolved elsewhere
+* Fixed: inline and file comments on added files appear in the file diff view, as in the file editor
+* Fixed: "Add Comment" in added-file, deleted-file, and unified diffs opens the correct comment UI; deleted-file comments are created on the pull request and shown on the pull request page
+* Changed: Bitbucket sign-in uses OAuth or an API token
+* Removed: Overview, Conversation, and Changes tabs on the pull request page; that content is on one page, and changed files are listed in the PR Changes tool window
+* Added: PR Changes tool window from "Show changed files" in a work tree — file list with line and comment counts, branch names only in the header, Enter to open the selected diff, purple tick instead of line counts for viewed files, and optional diff navigation over unviewed files only
+* Changed: the History card is renamed Activity; commits, approvals, tasks, builds, and comment threads appear in chronological order, with the main comment box at the top
+* Changed: opening a PR work tree while the project is on that PR's branch switches to the main branch first; uncommitted changes trigger a warning instead of switching
+* Added: a local REST endpoint at `/api/bbcloud/open` on the IDE built-in server, used by the bbcloud Chrome extension to open a pull request in its own work tree from bitbucket.org. The IDE must be running; open requests are accepted only from the extension origin
+
 ## *1.3.0* - 2026-10-30
 * Changed: "Project - Open PRs" and "Project - Completed PRs" are merged into one "Current Project - PRs" tab
 * Changed: "Workspace - My PRs" and "Workspace - Assigned PRs" are merged into one "Workspace - PRs" tab

@@ -1,6 +1,7 @@
 import org.gradle.api.tasks.testing.TestDescriptor
 import org.gradle.api.tasks.testing.TestListener
 import org.gradle.api.tasks.testing.TestResult
+import org.jetbrains.intellij.platform.gradle.tasks.VerifyPluginTask.FailureLevel
 
 plugins {
     kotlin("jvm") version "2.4.20"
@@ -13,7 +14,7 @@ plugins {
 }
 
 group = "com.github.fnunezkanut"
-version = "1.3.0"
+version = "1.4.0"
 
 val isLocalBuild = providers.environmentVariable("CI").orNull.isNullOrEmpty()
 
@@ -35,6 +36,7 @@ dependencies {
         bundledModule("intellij.platform.jewel.foundation")
         bundledModule("intellij.platform.jewel.ideLafBridge")
         bundledModule("intellij.platform.jewel.markdown.core")
+        bundledModule("intellij.platform.jewel.markdown.extensions.gfmTables")
         bundledModule("intellij.platform.jewel.markdown.ideLafBridgeStyling")
         bundledModule("intellij.platform.jewel.ui")
         bundledModule("intellij.platform.vcs.dvcs")
@@ -74,6 +76,11 @@ tasks.processResources {
     filesMatching("bbcloud-build.properties") {
         expand(mapOf("version" to project.version))
     }
+    // Packages the Work Trees help page from docs/ so the plugin and README share one copy of the markdown and images.
+    from("docs") {
+        include("worktrees.md", "worktrees*.jpeg")
+        into("help")
+    }
 }
 
 intellijPlatform {
@@ -89,6 +96,12 @@ intellijPlatform {
         ides {
             recommended()
         }
+        // verifyPlugin fails the build on any of these. INTERNAL_API_USAGES makes build fail on internal API usage.
+        failureLevel = listOf(
+            FailureLevel.COMPATIBILITY_PROBLEMS,
+            FailureLevel.INTERNAL_API_USAGES,
+            FailureLevel.OVERRIDE_ONLY_API_USAGES,
+        )
     }
 }
 

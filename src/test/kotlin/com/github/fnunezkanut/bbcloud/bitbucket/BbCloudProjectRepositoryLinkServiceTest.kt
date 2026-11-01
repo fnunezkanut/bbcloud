@@ -1,6 +1,6 @@
 package com.github.fnunezkanut.bbcloud.bitbucket
 
-import com.github.fnunezkanut.bbcloud.credentials.BbCloudCredentialStore
+import com.github.fnunezkanut.bbcloud.auth.BbCloudAccessTokenProvider
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
 import io.mockk.coEvery
@@ -21,9 +21,9 @@ class BbCloudProjectRepositoryLinkServiceTest {
     fun `resolveAndVerify - should not call api when base path missing`(): Unit =
         runBlocking {
             val client = mockk<BitbucketRepositoryClient>()
-            val store = mockk<BbCloudCredentialStore>()
+            val store = mockk<BbCloudAccessTokenProvider>()
             val service = BbCloudProjectRepositoryLinkService(
-                credentialStore = store,
+                accessTokenProvider = store,
                 repositoryClient = client,
                 readRemoteUrl = noRemote
             )
@@ -45,10 +45,10 @@ class BbCloudProjectRepositoryLinkServiceTest {
                     apiToken = "token"
                 )
             } returns RepositoryCheckResult.Exists(avatarUrl = avatarUrl)
-            val store = mockk<BbCloudCredentialStore>()
-            coEvery { store.getToken() } returns "token"
+            val store = mockk<BbCloudAccessTokenProvider>()
+            coEvery { store.bearerTokenOrNull() } returns "token"
             val service = BbCloudProjectRepositoryLinkService(
-                credentialStore = store,
+                accessTokenProvider = store,
                 repositoryClient = client,
                 readRemoteUrl = noRemote
             )
@@ -74,10 +74,10 @@ class BbCloudProjectRepositoryLinkServiceTest {
                     apiToken = "token"
                 )
             } returns RepositoryCheckResult.NotFound
-            val store = mockk<BbCloudCredentialStore>()
-            coEvery { store.getToken() } returns "token"
+            val store = mockk<BbCloudAccessTokenProvider>()
+            coEvery { store.bearerTokenOrNull() } returns "token"
             val service = BbCloudProjectRepositoryLinkService(
-                credentialStore = store,
+                accessTokenProvider = store,
                 repositoryClient = client,
                 readRemoteUrl = noRemote
             )
@@ -103,11 +103,11 @@ class BbCloudProjectRepositoryLinkServiceTest {
                     apiToken = "token"
                 )
             } returns RepositoryCheckResult.Exists()
-            val store = mockk<BbCloudCredentialStore>()
-            coEvery { store.getToken() } returns "token"
+            val store = mockk<BbCloudAccessTokenProvider>()
+            coEvery { store.bearerTokenOrNull() } returns "token"
             val worktreeRemote: (Path) -> String? = { "https://bitbucket.org/my-workspace/examplerepo.git" }
             val service = BbCloudProjectRepositoryLinkService(
-                credentialStore = store,
+                accessTokenProvider = store,
                 repositoryClient = client,
                 readRemoteUrl = worktreeRemote
             )
@@ -135,11 +135,11 @@ class BbCloudProjectRepositoryLinkServiceTest {
                     apiToken = "token"
                 )
             } returns RepositoryCheckResult.Exists()
-            val store = mockk<BbCloudCredentialStore>()
-            coEvery { store.getToken() } returns "token"
+            val store = mockk<BbCloudAccessTokenProvider>()
+            coEvery { store.bearerTokenOrNull() } returns "token"
             val crossWorkspaceRemote: (Path) -> String? = { "git@bitbucket.org:other-team/payments.git" }
             val service = BbCloudProjectRepositoryLinkService(
-                credentialStore = store,
+                accessTokenProvider = store,
                 repositoryClient = client,
                 readRemoteUrl = crossWorkspaceRemote
             )

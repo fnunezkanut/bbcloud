@@ -1,6 +1,6 @@
 package com.github.fnunezkanut.bbcloud.bitbucket
 
-import com.github.fnunezkanut.bbcloud.credentials.BbCloudCredentialStore
+import com.github.fnunezkanut.bbcloud.auth.BbCloudAccessTokenProvider
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.shouldBe
@@ -330,10 +330,10 @@ class BbCloudReviewQueueServiceTest {
         }
 
     private fun service(client: BitbucketPullRequestClient, token: String?): BbCloudReviewQueueService {
-        val store = mockk<BbCloudCredentialStore> {
-            coEvery { getToken() } returns token
+        val provider = mockk<BbCloudAccessTokenProvider> {
+            coEvery { bearerTokenOrNull() } returns token
         }
-        return BbCloudReviewQueueService(credentialStore = store, pullRequestClient = client)
+        return BbCloudReviewQueueService(accessTokenProvider = provider, pullRequestClient = client)
     }
 
     private fun mockClientForSlugs(currentUserUuid: String?, slugResults: Map<String, ReviewerQueueQueryResult>): BitbucketPullRequestClient {

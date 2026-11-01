@@ -1,12 +1,24 @@
 package com.github.fnunezkanut.bbcloud.bitbucket
 
+import kotlin.time.Instant
+
 enum class ReviewerStatus {
     Approved,
     ChangesRequested,
     None
 }
 
-data class PullRequestReviewer(val uuid: String, val displayName: String, val avatarUrl: String?, val status: ReviewerStatus)
+data class PullRequestReviewer(
+    val uuid: String,
+    val displayName: String,
+    val avatarUrl: String?,
+    val status: ReviewerStatus,
+    /**
+     * When the reviewer last acted on the pull request (Bitbucket `participated_on`); null when unknown. Used to
+     * order approvals by recency.
+     */
+    val participatedOn: Instant? = null
+)
 
 data class ReviewerCandidate(val uuid: String, val displayName: String, val nickname: String?, val avatarUrl: String?)
 

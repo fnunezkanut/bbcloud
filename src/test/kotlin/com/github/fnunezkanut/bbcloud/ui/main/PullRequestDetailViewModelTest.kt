@@ -15,55 +15,16 @@ import kotlin.time.Instant
 @Tag("unit")
 class PullRequestDetailViewModelTest {
     @Test
-    fun `selectTab - should update the selected tab and notify tab-specific loaders`() {
-        // GIVEN
-        var conversationSelections = 0
-        var changesSelections = 0
-        val viewModel = createViewModel(
-            onConversationTabSelected = { conversationSelections++ },
-            onChangesTabSelected = { changesSelections++ }
-        )
-
-        // WHEN
-        viewModel.selectTab(PullRequestDetailTab.Conversation)
-        viewModel.selectTab(PullRequestDetailTab.Changes)
-
-        // THEN
-        assertSoftly {
-            viewModel.state.value.selectedTab shouldBe PullRequestDetailTab.Changes
-            conversationSelections shouldBe 1
-            changesSelections shouldBe 1
-        }
-    }
-
-    @Test
-    fun `resetTab - should return to Overview`() {
-        // GIVEN
-        val viewModel = createViewModel()
-        viewModel.selectTab(PullRequestDetailTab.Changes)
-
-        // WHEN
-        viewModel.resetTab()
-
-        // THEN
-        viewModel.state.value.selectedTab shouldBe PullRequestDetailTab.Overview
-    }
-
-    @Test
-    fun `onRefreshClicked - should notify refresh without changing the selected tab`() {
+    fun `onRefreshClicked - should notify refresh`() {
         // GIVEN
         var refreshes = 0
         val viewModel = createViewModel(onRefreshRequested = { refreshes++ })
-        viewModel.selectTab(PullRequestDetailTab.Conversation)
 
         // WHEN
         viewModel.onRefreshClicked()
 
         // THEN
-        assertSoftly {
-            refreshes shouldBe 1
-            viewModel.state.value.selectedTab shouldBe PullRequestDetailTab.Conversation
-        }
+        refreshes shouldBe 1
     }
 
     @Test
@@ -195,16 +156,10 @@ class PullRequestDetailViewModelTest {
         }
     }
 
-    private fun createViewModel(
-        onRefreshRequested: () -> Unit = {},
-        onConversationTabSelected: () -> Unit = {},
-        onChangesTabSelected: () -> Unit = {}
-    ): PullRequestDetailViewModel {
+    private fun createViewModel(onRefreshRequested: () -> Unit = {}): PullRequestDetailViewModel {
         return PullRequestDetailViewModel(
             onActionRequested = {},
-            onRefreshRequested = onRefreshRequested,
-            onConversationTabSelected = onConversationTabSelected,
-            onChangesTabSelected = onChangesTabSelected
+            onRefreshRequested = onRefreshRequested
         )
     }
 

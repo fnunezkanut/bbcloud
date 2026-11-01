@@ -14,7 +14,7 @@ class PullRequestFileCommentCountsLoadStateTest {
     private val author = ActivityUser(uuid = "{author}", displayName = "Author", avatarUrl = null)
 
     @Test
-    fun `comments before files - should retain counts for the displayed pull request`() {
+    fun `comments complete - should report the displayed pull request without a reload`() {
         // GIVEN
         val state = PullRequestFileCommentCountsLoadState()
         state.bind(pullRequestId = 1)
@@ -25,45 +25,16 @@ class PullRequestFileCommentCountsLoadStateTest {
             pullRequestId = 1,
             comments = listOf(comment(id = 1, path = "src/Main.kt"))
         )
-        val fileCompletion = state.filesChangedCompleted(pullRequestId = 1)
 
         // THEN
         assertSoftly {
             completion.isForDisplayedPullRequest shouldBe true
             completion.shouldReload shouldBe false
-            fileCompletion?.countForChangePath(projectBasePath = null, changeRelativePath = "src/Main.kt") shouldBe 1
-            state.countsForDisplayedPullRequest()
-                ?.countForChangePath(projectBasePath = null, changeRelativePath = "src/Main.kt") shouldBe 1
         }
     }
 
     @Test
-    fun `files before comments - should expose no count until comments complete`() {
-        // GIVEN
-        val state = PullRequestFileCommentCountsLoadState()
-        state.bind(pullRequestId = 1)
-
-        // WHEN
-        val beforeComments = state.countsForDisplayedPullRequest()
-        state.request(pullRequestId = 1, force = false)
-        val beforeCommentCompletion = state.filesChangedCompleted(pullRequestId = 1)
-        val afterComments = state.complete(
-            pullRequestId = 1,
-            comments = listOf(comment(id = 1, path = "src/Main.kt"))
-        )
-        val afterCommentCompletion = state.filesChangedCompleted(pullRequestId = 1)
-
-        // THEN
-        assertSoftly {
-            beforeComments shouldBe null
-            beforeCommentCompletion shouldBe null
-            afterComments.counts?.countForChangePath(projectBasePath = null, changeRelativePath = "src/Main.kt") shouldBe 1
-            afterCommentCompletion?.countForChangePath(projectBasePath = null, changeRelativePath = "src/Main.kt") shouldBe 1
-        }
-    }
-
-    @Test
-    fun `late completion from a previous pull request - should not replace displayed counts`() {
+    fun `late completion from a previous pull request - should not be for the displayed pull request`() {
         // GIVEN
         val state = PullRequestFileCommentCountsLoadState()
         state.bind(pullRequestId = 1)
@@ -84,12 +55,7 @@ class PullRequestFileCommentCountsLoadStateTest {
         // THEN
         assertSoftly {
             oldCompletion.isForDisplayedPullRequest shouldBe false
-            oldCompletion.counts shouldBe null
             currentCompletion.isForDisplayedPullRequest shouldBe true
-            state.countsForDisplayedPullRequest()
-                ?.countForChangePath(projectBasePath = null, changeRelativePath = "current.kt") shouldBe 1
-            state.countsForDisplayedPullRequest()
-                ?.countForChangePath(projectBasePath = null, changeRelativePath = "old.kt") shouldBe 0
         }
     }
 

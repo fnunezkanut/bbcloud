@@ -23,6 +23,7 @@ class PullRequestInfoViewModel(private val avatarCache: AuthorAvatarCache = Auth
         workspace: String,
         repositorySlug: String,
         repositoryAvatarUrl: String?,
+        isApprovedByMe: Boolean,
         coroutineScope: CoroutineScope
     ) {
         displayedPullRequestId = summary.id
@@ -58,7 +59,8 @@ class PullRequestInfoViewModel(private val avatarCache: AuthorAvatarCache = Auth
             pullRequest = pullRequest,
             organizationUrl = organizationUrl,
             authorAvatarUrl = summary.authorAvatarUrl,
-            repoAvatarUrl = repositoryAvatarUrl
+            repoAvatarUrl = repositoryAvatarUrl,
+            isApprovedByMe = isApprovedByMe
         ).copy(repositoryWebUrl = resolvedRepositoryUrl)
         state.value = PullRequestInfoUiState(
             hasContent = true,

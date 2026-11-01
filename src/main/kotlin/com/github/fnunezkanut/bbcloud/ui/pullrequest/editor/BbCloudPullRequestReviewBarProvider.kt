@@ -4,12 +4,10 @@ import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestPathMatcher
 import com.github.fnunezkanut.bbcloud.git.FileLineCount
 import com.github.fnunezkanut.bbcloud.review.BbCloudWorktreePullRequestContext
 import com.github.fnunezkanut.bbcloud.ui.diff.BbCloudPullRequestDiffCommentService
+import com.github.fnunezkanut.bbcloud.ui.diff.PullRequestReviewCommentTarget
 import com.github.fnunezkanut.bbcloud.ui.main.PullRequestCommentFileOpener
 import com.intellij.diff.editor.DiffEditorViewerFileEditor
 import com.intellij.diff.editor.DiffViewerVirtualFile
-import com.intellij.diff.impl.DiffRequestProcessor
-import com.intellij.diff.tools.util.side.TwosideTextDiffViewer
-import com.intellij.diff.util.Side
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.editor.ex.EditorEx
 import com.intellij.openapi.fileEditor.FileEditor
@@ -176,17 +174,19 @@ class BbCloudPullRequestReviewBarProvider : EditorNotificationProvider {
 
     private fun addCommentAction(project: Project, fileEditor: FileEditor, relativePath: String, pullRequestId: Long): () -> Unit {
         return {
+            // A deleted file has no TextEditor, and this provider skips diff viewer virtual files, so the comment here
+            // is always file-scoped.
             val editor = when (fileEditor) {
                 is TextEditor -> fileEditor.editor as? EditorEx
-                is DiffEditorViewerFileEditor -> when (val viewer = fileEditor.editorViewer) {
-                    is TwosideTextDiffViewer -> viewer.getEditor(Side.RIGHT)
-                    is DiffRequestProcessor -> (viewer.activeViewer as? TwosideTextDiffViewer)?.getEditor(Side.RIGHT)
-                    else -> null
-                }
+                is DiffEditorViewerFileEditor -> ReviewBarDiffEditors.commentEditorFor(viewer = fileEditor.editorViewer)
                 else -> null
             }
             if (editor == null) {
                 LOG.info("Cannot open file comment composer for $relativePath: no text editor is available")
+            } else if (!PullRequestReviewCommentTarget.isPullRequestReviewable(project = project, pullRequestId = pullRequestId)) {
+                LOG.info(
+                    "Cannot open file comment composer for '$relativePath': the work tree is no longer bound to pull request #$pullRequestId"
+                )
             } else {
                 LOG.info("User clicked 'Add Comment' for $relativePath in pull request #$pullRequestId")
                 BbCloudPullRequestDiffCommentService.getInstance(project).openFileScopedComposer(
@@ -228,7 +228,8 @@ class BbCloudPullRequestReviewBarProvider : EditorNotificationProvider {
             surface = surface,
             action = action,
             onAddComment = onAddComment,
-            project = project
+            project = project,
+            navigator = null
         )
         bars[fileEditor] = bar
         if (!Disposer.tryRegister(fileEditor, bar)) {

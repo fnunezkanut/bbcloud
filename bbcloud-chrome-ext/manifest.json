@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "Bitbucket Cloud: Open in IntelliJ",
+  "version": "1.0.0",
+  "description": "Adds an Open in IntelliJ icon next to pull requests on bitbucket.org that opens them in a git worktree in a running IntelliJ IDE.",
+  "minimum_chrome_version": "116",
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": ["storage"],
+  "host_permissions": ["http://localhost/*", "http://127.0.0.1/*"],
+  "content_scripts": [
+    {
+      "matches": ["https://bitbucket.org/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["icons/icon48.png"],
+      "matches": ["https://bitbucket.org/*"]
+    }
+  ],
+  "key" : "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA2ljt5r8T12LRGEpRfFMCfnijOmY6D6juD8Zl7+PKtZsfQAdQRQwSrzaS/ihIl5BLOlE1aqMgbgq0O/7ti1J/atIquOJmiDL13k4ZI6A5q5Naa6Dr+DxKtFqt9qnVY76pRLb4aMWLdKW0CuBAxb+2auXSfBWxRrfDQ1UHuchdQJZYYLpwyv0A0WuTDmbLoSe/nU89qHBmYUbrezhwn4iWtvDn1otIEFz/dSCqZZuEShnb6l56o86w683h0oIdqRKOLtLJC3xa84PhHBbQVYSo0W3C9oeRoRdm2OXhhx9x7P7M79tshP1VxlXhQ97LZ7nYI8PNvWMp0uF7gO1muxoY3QIDAQAB"
+}

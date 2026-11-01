@@ -13,15 +13,15 @@ import kotlinx.coroutines.CoroutineScope
 
 /**
  * The reusable view model behind both merged pull request tabs. It is instantiated twice: once by the main panel for
- * Current Project - PRs (sources ProjectOpen and ProjectResolved), and once by the other-projects panel for
- * Workspace - PRs (sources WorkspaceAuthored and WorkspaceAssigned). Each instance owns its source slots, its filter,
+ * Current Project (sources ProjectOpen and ProjectResolved), and once by the other-projects panel for
+ * Workspace (sources WorkspaceAuthored and WorkspaceAssigned). Each instance owns its source slots, its filter,
  * one [AuthorAvatarCache], and the derived visible rows.
  *
  * Filtering is pure and local: a toggle re-filters the already-loaded rows and persists the flag; it does not reload.
  * All source-map mutation happens on the EDT, as the coordinators already arrange via invokeLater.
  */
 class PullRequestsViewModel(
-    // "Current Project - PRs" or "Workspace - PRs", used in log lines only.
+    // "Current Project" or "Workspace", used in log lines only.
     private val logName: String,
     private val sourcesOfTab: Set<PullRequestListingSource>,
     // Decides whether the Resolved checkbox is offered and whether open rows are listed first.
@@ -103,6 +103,17 @@ class PullRequestsViewModel(
         )
         avatarCache.prefetch(
             urls = entries.mapNotNull { entry -> entry.repoAvatarUrl },
+            coroutineScope = coroutineScope,
+            onLoaded = { bumpAvatarRevision() }
+        )
+        // Only the reviewers that can actually be visible, and only for open pull requests (decisions 8a and 11b).
+        val reviewerAvatarUrls = entries
+            .filter { entry -> entry.pullRequest.summary.state == PullRequestState.Open }
+            .flatMap { entry -> buildReviewerStack(reviewers = entry.pullRequest.summary.reviewers).visible }
+            .mapNotNull { reviewer -> reviewer.avatarUrl }
+        LOG.debug("$logName: queueing ${reviewerAvatarUrls.distinct().size} reviewer avatar URLs for prefetch")
+        avatarCache.prefetch(
+            urls = reviewerAvatarUrls,
             coroutineScope = coroutineScope,
             onLoaded = { bumpAvatarRevision() }
         )
@@ -206,7 +217,11 @@ class PullRequestsViewModel(
                 pullRequest = entry.pullRequest,
                 organizationUrl = resolvedOrganizationUrl,
                 authorAvatarUrl = entry.pullRequest.summary.authorAvatarUrl,
-                repoAvatarUrl = entry.repoAvatarUrl
+                repoAvatarUrl = entry.repoAvatarUrl,
+                isApprovedByMe = PullRequestListFiltering.isApprovedBy(
+                    summary = entry.pullRequest.summary,
+                    userUuid = currentUserUuid
+                )
             )
         }
         val totalCount = merged.size

@@ -9,9 +9,9 @@ import com.github.fnunezkanut.bbcloud.bitbucket.TimelineEntry
 import com.intellij.util.ui.JBUI
 
 /**
- * The rules of the Conversation tab that do not depend on how the tab is drawn: which threads still show their body,
- * which line of an inline comment can be opened, how far from the top an in-place refresh still counts as being at the
- * top, and how a comment body, a location and a resolver are derived from what Bitbucket reported.
+ * The rules of the comment threads of the Activity timeline that do not depend on how they are drawn: which threads
+ * still show their body, which line of an inline comment can be opened, how far from the top an in-place refresh still
+ * counts as being at the top, and how a comment body, a location and a resolver are derived from what Bitbucket reported.
  *
  * They used to live in the companion object of the Swing `ActivityTimelineSection`, which the Jewel conversation screen
  * replaced; the helpers themselves are unchanged, so the diff inline-comment panel keeps rendering the same way.
@@ -41,7 +41,7 @@ object ConversationThreadRules {
     private val NEAR_TOP_THRESHOLD = JBUI.scale(48)
 
     /**
-     * An in-place refresh only returns to the newest entry when the reader has not scrolled away; scrolling is never
+     * An in-place refresh only returns to the top of the Activity timeline when the reader has not scrolled away; scrolling is never
      * yanked from someone who is reading older activity.
      */
     fun shouldSnapToTop(offsetPx: Int): Boolean {

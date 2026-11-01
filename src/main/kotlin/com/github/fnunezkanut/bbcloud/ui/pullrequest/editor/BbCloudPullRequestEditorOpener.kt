@@ -60,36 +60,16 @@ class BbCloudPullRequestEditorOpener(private val project: Project) : Disposable 
      * name is used as a fallback, which may not match the Bitbucket slug when they differ.
      */
     fun open(summary: PullRequestSummary, branchName: String, repositoryWebUrl: String, repositorySlug: String? = null): Boolean {
-        val organizationUrl = configurationService.organizationUrlOrNull()
-        val projectBasePath = project.basePath
-        val repositorySlugResolved = LocalProjectRepositorySlug.resolve(explicitSlug = repositorySlug, basePath = projectBasePath)
-        val workspaceUrl = organizationUrl?.let { url -> BitbucketRepositoryUrls.workspaceFromOrganizationUrl(url) }
-        if (organizationUrl == null || projectBasePath == null || repositorySlugResolved == null || workspaceUrl == null) {
-            LOG.info("Cannot open pull request #${summary.id}: project repository metadata is unavailable")
+        val resolvedFile = resolveManagedFile(pullRequestId = summary.id, repositorySlug = repositorySlug)
+        if (resolvedFile == null) {
             return false
         }
-
-        val path = BbCloudPullRequestPath(
-            sessionId = BbCloudPullRequestVirtualFileSystem.sessionId(project),
-            projectHash = project.locationHash,
-            workspaceUrl = organizationUrl,
-            repositorySlug = repositorySlugResolved,
-            pullRequestId = summary.id
-        )
-        val fileSystem = BbCloudPullRequestVirtualFileSystem.getInstance()
-        val pathString = fileSystem.getPath(path)
-        val file = fileSystem.refreshAndFindFileByPath(pathString) as? BbCloudPullRequestVirtualFile
-        if (file == null) {
-            LOG.info("Cannot open pull request #${summary.id}: the editor virtual file was not created")
-            return false
-        }
-        val fileManager = FileEditorManager.getInstance(project)
-        val managedFile = fileManager.openFiles.firstOrNull { openFile -> openFile == file }
-            as? BbCloudPullRequestVirtualFile ?: file
+        val managedFile = resolvedFile.file
         managedFile.setPullRequestSummary(summary)
         managedFile.putUserData(BbCloudPullRequestVirtualFile.REPOSITORY_WEB_URL_KEY, repositoryWebUrl)
         managedFile.putUserData(BbCloudPullRequestVirtualFile.BRANCH_NAME_KEY, branchName)
-        managedFile.putUserData(BbCloudPullRequestVirtualFile.ORGANIZATION_URL_KEY, organizationUrl)
+        managedFile.putUserData(BbCloudPullRequestVirtualFile.ORGANIZATION_URL_KEY, resolvedFile.organizationUrl)
+        val fileManager = FileEditorManager.getInstance(project)
         fileManager.openFile(managedFile, true)
         fileManager.updateFilePresentation(managedFile)
         // The platform may select a restored editor after this open call; re-select the PR tab on the next EDT cycle.
@@ -103,6 +83,78 @@ class BbCloudPullRequestEditorOpener(private val project: Project) : Disposable 
         LOG.debug("Opened pull request editor for #${summary.id}")
         return true
     }
+
+    /**
+     * Opens or selects the `<prNum>.pr` editor tab of [pullRequestId] without a Bitbucket summary.
+     *
+     * When the tab is already open it is selected and [PullRequestPageOpenResult.SelectedExisting] is returned, so the
+     * caller can trigger a reload to pick up new activity. Otherwise the tab is opened without a summary and the
+     * session's restored-editor path loads the pull request (including its conversation), so the first display already
+     * shows the new activity and scrolls to the top; this returns [PullRequestPageOpenResult.OpenedNew]. When the
+     * repository metadata is missing or the virtual file cannot be created, [PullRequestPageOpenResult.Failed] is
+     * returned.
+     */
+    fun openById(pullRequestId: Long): PullRequestPageOpenResult {
+        val fileManager = FileEditorManager.getInstance(project)
+        val alreadyOpen = fileManager.openFiles
+            .filterIsInstance<BbCloudPullRequestVirtualFile>()
+            .firstOrNull { openFile ->
+                openFile.pullRequestPath.pullRequestId == pullRequestId &&
+                    openFile.pullRequestPath.projectHash == project.locationHash
+            }
+        if (alreadyOpen != null) {
+            fileManager.openFile(alreadyOpen, true)
+            LOG.info("Selected the already-open page of pull request #$pullRequestId")
+            return PullRequestPageOpenResult.SelectedExisting
+        }
+        val resolvedFile = resolveManagedFile(pullRequestId = pullRequestId, repositorySlug = null)
+        if (resolvedFile == null) {
+            return PullRequestPageOpenResult.Failed
+        }
+        // The summary is not set here on purpose: the session's restored-editor path fetches the details and binds the
+        // page, which loads the conversation with the new comment and forces a scroll to the top.
+        fileManager.openFile(resolvedFile.file, true)
+        fileManager.updateFilePresentation(resolvedFile.file)
+        LOG.info("Opened the page of pull request #$pullRequestId")
+        return PullRequestPageOpenResult.OpenedNew
+    }
+
+    /**
+     * Resolves the managed `<prNum>.pr` virtual file for [pullRequestId], reusing an already-open file when one exists.
+     *
+     * Returns null, after an `info` log, when the organization URL, project base path, repository slug or workspace
+     * URL is missing, or when the virtual file cannot be created.
+     */
+    private fun resolveManagedFile(pullRequestId: Long, repositorySlug: String?): ResolvedManagedFile? {
+        val organizationUrl = configurationService.organizationUrlOrNull()
+        val projectBasePath = project.basePath
+        val repositorySlugResolved = LocalProjectRepositorySlug.resolve(explicitSlug = repositorySlug, basePath = projectBasePath)
+        val workspaceUrl = organizationUrl?.let { url -> BitbucketRepositoryUrls.workspaceFromOrganizationUrl(url) }
+        if (organizationUrl == null || projectBasePath == null || repositorySlugResolved == null || workspaceUrl == null) {
+            LOG.info("Cannot open pull request #$pullRequestId: project repository metadata is unavailable")
+            return null
+        }
+        val path = BbCloudPullRequestPath(
+            sessionId = BbCloudPullRequestVirtualFileSystem.sessionId(project),
+            projectHash = project.locationHash,
+            workspaceUrl = organizationUrl,
+            repositorySlug = repositorySlugResolved,
+            pullRequestId = pullRequestId
+        )
+        val fileSystem = BbCloudPullRequestVirtualFileSystem.getInstance()
+        val pathString = fileSystem.getPath(path)
+        val file = fileSystem.refreshAndFindFileByPath(pathString) as? BbCloudPullRequestVirtualFile
+        if (file == null) {
+            LOG.info("Cannot open pull request #$pullRequestId: the editor virtual file was not created")
+            return null
+        }
+        val managedFile = FileEditorManager.getInstance(project).openFiles
+            .firstOrNull { openFile -> openFile == file } as? BbCloudPullRequestVirtualFile ?: file
+        return ResolvedManagedFile(file = managedFile, organizationUrl = organizationUrl)
+    }
+
+    /** The managed virtual file of a pull request page, together with the organization URL it was resolved against. */
+    private data class ResolvedManagedFile(val file: BbCloudPullRequestVirtualFile, val organizationUrl: String)
 
     private fun synchronizeSelection(fileManager: FileEditorManager, fallbackToOpenFile: Boolean) {
         val openFiles = fileManager.openFiles.filterIsInstance<BbCloudPullRequestVirtualFile>()

@@ -1,6 +1,6 @@
 package com.github.fnunezkanut.bbcloud.bitbucket
 
-import com.github.fnunezkanut.bbcloud.credentials.BbCloudCredentialStore
+import com.github.fnunezkanut.bbcloud.auth.BbCloudAccessTokenProvider
 import com.intellij.openapi.diagnostic.logger
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -13,7 +13,7 @@ import kotlinx.coroutines.sync.withPermit
  * configured workspace; each repository slug is used as given; the current project is left out; a 404 or 403 skips a
  * repository; a 401 fails the load; failed repositories and the cap mark the result as truncated.
  */
-class BbCloudReviewQueueService(private val credentialStore: BbCloudCredentialStore, private val pullRequestClient: BitbucketPullRequestClient) {
+class BbCloudReviewQueueService(private val accessTokenProvider: BbCloudAccessTokenProvider, private val pullRequestClient: BitbucketPullRequestClient) {
     /**
      * Lists the open pull requests the current user reviews, across [repoSlugs]. Empty [repoSlugs] yields an empty
      * success without any repository request.
@@ -25,9 +25,9 @@ class BbCloudReviewQueueService(private val credentialStore: BbCloudCredentialSt
             return ReviewingPullRequestListResult.Failed()
         }
 
-        val apiToken = credentialStore.getToken()
+        val apiToken = accessTokenProvider.bearerTokenOrNull()
         if (apiToken == null) {
-            LOG.info("Cannot list the pull requests to review: no stored API token")
+            LOG.info("Cannot list the pull requests to review: no Bitbucket credentials")
             return ReviewingPullRequestListResult.Failed()
         }
 

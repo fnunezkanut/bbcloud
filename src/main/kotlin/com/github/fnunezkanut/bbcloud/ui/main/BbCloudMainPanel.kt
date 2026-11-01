@@ -28,13 +28,9 @@ import com.github.fnunezkanut.bbcloud.bitbucket.ReviewingPullRequest
 import com.github.fnunezkanut.bbcloud.config.BbCloudConfigurationService
 import com.github.fnunezkanut.bbcloud.git.BbCloudBranchCheckoutService
 import com.github.fnunezkanut.bbcloud.git.BbCloudWorktreeService
-import com.github.fnunezkanut.bbcloud.git.BitbucketGitRemoteReader
 import com.github.fnunezkanut.bbcloud.git.BranchCheckoutResult
-import com.github.fnunezkanut.bbcloud.git.WorktreeSetupResult
 import com.github.fnunezkanut.bbcloud.project.LocalRepositoryProjectOpener
 import com.github.fnunezkanut.bbcloud.project.ProjectRepositoryResolver
-import com.github.fnunezkanut.bbcloud.project.PullRequestOpenCheck
-import com.github.fnunezkanut.bbcloud.project.PullRequestOpenCheckResult
 import com.github.fnunezkanut.bbcloud.project.PullRequestWorktreeListing
 import com.github.fnunezkanut.bbcloud.project.PullRequestWorktreeResolution
 import com.github.fnunezkanut.bbcloud.project.PullRequestWorktreeResolver
@@ -46,22 +42,22 @@ import com.github.fnunezkanut.bbcloud.ui.components.NotConfiguredContent
 import com.github.fnunezkanut.bbcloud.ui.otherprojects.toComposeImageBitmap
 import com.github.fnunezkanut.bbcloud.ui.pullrequest.create.BbCloudNewPullRequestEditorOpener
 import com.github.fnunezkanut.bbcloud.ui.pullrequest.create.NewPullRequestContext
-import com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.BbCloudPendingEditorOpen
-import com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.BbCloudPullRequestEditorOpenQueue
 import com.github.fnunezkanut.bbcloud.ui.pullrequests.PullRequestExcludeCheckboxes
 import com.github.fnunezkanut.bbcloud.ui.pullrequests.PullRequestListEntry
 import com.github.fnunezkanut.bbcloud.ui.pullrequests.PullRequestListingSource
 import com.github.fnunezkanut.bbcloud.ui.pullrequests.PullRequestsCard
 import com.github.fnunezkanut.bbcloud.ui.pullrequests.PullRequestsListingBody
 import com.github.fnunezkanut.bbcloud.ui.pullrequests.PullRequestsViewModel
+import com.github.fnunezkanut.bbcloud.ui.worktree.PullRequestWorktreeOpener
 import com.github.fnunezkanut.bbcloud.ui.worktree.WorktreeBranchCollisionDialog
+import com.github.fnunezkanut.bbcloud.ui.worktree.WorktreeBranchCollisionResolver
+import com.github.fnunezkanut.bbcloud.ui.worktree.WorktreeOpenOutcome
 import com.intellij.icons.AllIcons
 import com.intellij.ide.BrowserUtil
 import com.intellij.notification.NotificationAction
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.components.service
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.project.Project
@@ -81,18 +77,18 @@ import java.nio.file.Path
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.swing.JComponent
 
-/** The three cards the single Current Project - PRs tab root can show. */
+/** The three cards the single Current Project tab root can show. */
 private enum class ViewCard {
     NotConfigured,
     Listing,
     ProjectStatus
 }
 
-/** The centered status message that stands in for the whole body of the Current Project - PRs tab root. */
+/** The centered status message that stands in for the whole body of the Current Project tab root. */
 private data class CenteredProjectStatus(val icon: ImageBitmap?, val message: String)
 
 /**
- * The Compose body of the single Current Project - PRs tab root.
+ * The Compose body of the single Current Project tab root.
  *
  * It switches between the not-configured card, the centered project-status card, and the listing with its
  * [ProjectStatusHeader] on top, driven by Compose state instead of the Swing CardLayout the panel used before. The
@@ -165,18 +161,24 @@ class BbCloudMainPanel(
     private val worktreeService = BbCloudWorktreeService.getInstance()
     private val branchCheckoutService = BbCloudBranchCheckoutService()
 
-    /** Guards duplicate worktree opens; all mutations happen on the EDT. */
-    private val worktreesInProgress = mutableSetOf<Path>()
+    /** Shared resolution of a work-tree branch collision: switch this window to main, or warn, or fall back to the modal. */
+    private val collisionResolver = WorktreeBranchCollisionResolver(
+        branchCheckoutService = branchCheckoutService,
+        openPullRequestService = openPullRequestService
+    )
+
+    /** The shared open flow. It also guards against duplicate opens of the same worktree path. */
+    private val worktreeOpener = PullRequestWorktreeOpener.getInstance()
     private val pruneInProgress = AtomicBoolean(false)
 
     /**
-     * The one reusable merged view model for the Current Project - PRs tab. Its two sources are the open and resolved
+     * The one reusable merged view model for the Current Project tab. Its two sources are the open and resolved
      * project pull requests, which one listing request supplies together. The title-click behavior is routed per
      * source by [openProjectPullRequestTitle]: an open row opens its own work tree (former Open tab behavior) and a
      * resolved row opens the browser (former Completed tab behavior).
      */
     private val projectPullRequestsViewModel = PullRequestsViewModel(
-        logName = "Current Project - PRs",
+        logName = "Current Project",
         sourcesOfTab = setOf(PullRequestListingSource.ProjectOpen, PullRequestListingSource.ProjectResolved),
         scope = PullRequestListScope.CurrentProject,
         initialFilter = configurationService.pullRequestListFilter(scope = PullRequestListScope.CurrentProject),
@@ -194,7 +196,7 @@ class BbCloudMainPanel(
         onCreatePullRequestRequested = { openNewPullRequestEditor() }
     )
 
-    /** The three cards of the Current Project - PRs tab root, driven by Compose state instead of a Swing CardLayout. */
+    /** The three cards of the Current Project tab root, driven by Compose state instead of a Swing CardLayout. */
     private val projectCard: MutableState<ViewCard> = mutableStateOf(ViewCard.Listing)
 
     /**
@@ -231,7 +233,7 @@ class BbCloudMainPanel(
     }
 
     /**
-     * Routes a title click on a Current Project - PRs row by its source: an open row opens its own work tree (former
+     * Routes a title click on a Current Project row by its source: an open row opens its own work tree (former
      * Open tab behavior), a resolved row opens the browser (former Completed tab behavior).
      */
     private fun openProjectPullRequestTitle(entry: PullRequestListEntry) {
@@ -244,7 +246,7 @@ class BbCloudMainPanel(
                 BrowserUtil.browse(entry.pullRequest.summary.webUrl)
             }
             else -> {
-                LOG.info("Ignoring a ${entry.source} row on the Current Project - PRs tab")
+                LOG.info("Ignoring a ${entry.source} row on the Current Project tab")
             }
         }
     }
@@ -283,9 +285,9 @@ class BbCloudMainPanel(
         }
     }
 
-    /** Restores the Current Project - PRs listing without affecting open pull-request editor tabs or review state. */
+    /** Restores the Current Project listing without affecting open pull-request editor tabs or review state. */
     fun showCurrentProjectPullRequestsListing() {
-        LOG.info("Restoring the Current Project - PRs listing from a pull request editor")
+        LOG.info("Restoring the Current Project listing from a pull request editor")
         showCard(ViewCard.Listing)
         projectPullRequestsViewModel.showListingCard()
     }
@@ -539,10 +541,7 @@ class BbCloudMainPanel(
                 )
                 return@launch
             }
-            val resolution = PullRequestWorktreeResolver.resolve(
-                mappings = configurationService.watchedProjectsForCurrentWorkspaceWithLocalPaths(),
-                workTreeDirectory = configurationService.workTreeDirectoryOrNull(),
-                projectsDirectory = configurationService.projectsDirectoryOrNull(),
+            val resolution = worktreeOpener.resolve(
                 workspace = resolvedRepository.workspace,
                 repoSlug = resolvedRepository.repoSlug,
                 prNumber = summary.id
@@ -572,235 +571,181 @@ class BbCloudMainPanel(
                 }
             }
             val worktreePath = resolved.worktreePath
-            if (!addWorktreeInProgress(worktreePath = worktreePath)) {
+            if (!worktreeOpener.tryBeginOpen(worktreePath = worktreePath)) {
                 LOG.info("Opening pull request #${summary.id} is already in progress for $worktreePath")
                 return@launch
             }
             try {
-                val preparation = runWorktreeModal(
+                // Attempt 1. On a branch collision, try one automatic switch to the main branch and retry (decision
+                // 8a: exactly one switch and retry per click; a repeated collision falls back to the modal).
+                val firstAttempt = runWorktreeModal(
                     summary = summary,
                     repository = resolvedRepository,
                     resolution = resolved
                 )
-                when (preparation) {
-                    is WorktreePreparation.Prepared -> {
-                        openWorktreeProjectAndEditor(
+                if (firstAttempt is WorktreeOpenOutcome.BranchCollision) {
+                    val switched = resolveBranchCollision(
+                        project = project,
+                        summary = summary,
+                        repository = resolvedRepository,
+                        preparation = firstAttempt
+                    )
+                    if (switched) {
+                        val secondAttempt = runWorktreeModal(
                             summary = summary,
-                            repoSlug = resolvedRepository.repoSlug,
                             repository = resolvedRepository,
-                            worktreePath = preparation.worktreePath
+                            resolution = resolved
                         )
-                    }
-                    is WorktreePreparation.Failed -> {
-                        showWorktreeErrorNotification(summary = summary, content = preparation.content)
-                    }
-                    is WorktreePreparation.BranchCheckedOutInSource -> {
-                        // The modal marshals to and blocks on the EDT itself, so call it directly from the coroutine
-                        // (the progress modal has already closed and no write lock is held here).
-                        val choice = WorktreeBranchCollisionDialog.show(
+                        handleWorktreePreparation(
                             project = project,
-                            prNumber = summary.id,
-                            branchName = preparation.branchName,
-                            sourceCheckoutPath = preparation.sourceCheckoutPath
+                            summary = summary,
+                            repository = resolvedRepository,
+                            preparation = secondAttempt
                         )
-                        if (choice == WorktreeBranchCollisionDialog.Choice.OPEN_IN_BITBUCKET) {
-                            LOG.info("User opened Bitbucket PR #${summary.id} from the branch-collision modal")
-                            BrowserUtil.browse(summary.webUrl)
-                        }
                     }
+                } else {
+                    handleWorktreePreparation(
+                        project = project,
+                        summary = summary,
+                        repository = resolvedRepository,
+                        preparation = firstAttempt
+                    )
                 }
             } catch (exception: CancellationException) {
                 LOG.info("User cancelled work tree preparation for pull request #${summary.id}")
                 throw exception
             } finally {
                 ApplicationManager.getApplication().invokeLater {
-                    worktreesInProgress.remove(worktreePath)
+                    worktreeOpener.endOpen(worktreePath = worktreePath)
                 }
             }
         }
     }
 
-    private fun addWorktreeInProgress(worktreePath: Path): Boolean {
-        if (ApplicationManager.getApplication().isDispatchThread) {
-            return worktreesInProgress.add(worktreePath)
+    /**
+     * Handles a [runWorktreeModal] result: opens the work tree project, shows the failure balloon, or shows the
+     * fallback collision modal. Shared by the first and the retried attempt. A [WorktreeOpenOutcome.BranchCollision]
+     * here is a collision that could not be (or was already) auto-resolved, so it always shows the explanatory modal.
+     */
+    private suspend fun handleWorktreePreparation(
+        project: Project,
+        summary: PullRequestSummary,
+        repository: ResolvedProjectRepository,
+        preparation: WorktreeOpenOutcome
+    ) {
+        when (preparation) {
+            is WorktreeOpenOutcome.Prepared -> {
+                openWorktreeProjectAndEditor(
+                    summary = preparation.summary,
+                    repository = repository,
+                    worktreePath = preparation.worktreePath
+                )
+            }
+            is WorktreeOpenOutcome.Failed -> {
+                showWorktreeErrorNotification(summary = summary, content = preparation.content)
+            }
+            is WorktreeOpenOutcome.BranchCollision -> {
+                // The modal marshals to and blocks on the EDT itself, so call it directly from the coroutine
+                // (the progress modal has already closed and no write lock is held here).
+                val choice = WorktreeBranchCollisionDialog.show(
+                    project = project,
+                    prNumber = summary.id,
+                    branchName = preparation.branchName,
+                    sourceCheckoutPath = preparation.sourceCheckoutPath
+                )
+                if (choice == WorktreeBranchCollisionDialog.Choice.OPEN_IN_BITBUCKET) {
+                    LOG.info("User opened Bitbucket PR #${summary.id} from the branch-collision modal")
+                    BrowserUtil.browse(summary.webUrl)
+                }
+            }
         }
-        var added = false
-        ApplicationManager.getApplication().invokeAndWait({
-            added = worktreesInProgress.add(worktreePath)
-        }, ModalityState.any())
-        return added
     }
 
-    private sealed interface WorktreePreparation {
-        data class Prepared(val worktreePath: Path) : WorktreePreparation
-
-        /** A localized failure body or sanitized git output shown in the worktree error balloon. */
-        data class Failed(val content: String) : WorktreePreparation
-
-        /**
-         * The source clone is currently on the pull request branch, so the work tree could not be created. The caller
-         * shows the explanatory [WorktreeBranchCollisionDialog] modal instead of the error balloon.
-         */
-        data class BranchCheckedOutInSource(val branchName: String, val sourceCheckoutPath: Path) : WorktreePreparation
+    /**
+     * Tries to free the pull request branch by switching the current checkout to the main branch via the shared
+     * [WorktreeBranchCollisionResolver]. Returns true when the switch succeeded (the caller retries the work tree),
+     * false when the resolver already handled the collision (uncommitted-changes modal, switch-failed balloon) or when
+     * the collision must fall back to the explanatory modal, which this method shows itself.
+     */
+    private suspend fun resolveBranchCollision(
+        project: Project,
+        summary: PullRequestSummary,
+        repository: ResolvedProjectRepository,
+        preparation: WorktreeOpenOutcome.BranchCollision
+    ): Boolean {
+        val resolution = collisionResolver.resolve(
+            project = project,
+            workspace = repository.workspace,
+            repoSlug = repository.repoSlug,
+            summary = summary,
+            branchName = preparation.branchName,
+            sourceCheckoutPath = preparation.sourceCheckoutPath
+        )
+        return when (resolution) {
+            WorktreeBranchCollisionResolver.CollisionResolution.Switched -> {
+                ApplicationManager.getApplication().invokeLater {
+                    triggerLoadPullRequests(source = "branch switched for work tree")
+                }
+                true
+            }
+            WorktreeBranchCollisionResolver.CollisionResolution.Handled -> {
+                false
+            }
+            WorktreeBranchCollisionResolver.CollisionResolution.ShowDialog -> {
+                val choice = WorktreeBranchCollisionDialog.show(
+                    project = project,
+                    prNumber = summary.id,
+                    branchName = preparation.branchName,
+                    sourceCheckoutPath = preparation.sourceCheckoutPath
+                )
+                if (choice == WorktreeBranchCollisionDialog.Choice.OPEN_IN_BITBUCKET) {
+                    LOG.info("User opened Bitbucket PR #${summary.id} from the branch-collision modal")
+                    BrowserUtil.browse(summary.webUrl)
+                }
+                false
+            }
+        }
     }
 
     private suspend fun runWorktreeModal(
         summary: PullRequestSummary,
         repository: ResolvedProjectRepository,
         resolution: PullRequestWorktreeResolution.Resolved
-    ): WorktreePreparation {
+    ): WorktreeOpenOutcome {
         val organizationUrl = configurationService.organizationUrlOrNull()
         if (organizationUrl == null) {
             LOG.info("Cannot open pull request #${summary.id}: no organization URL configured")
-            return WorktreePreparation.Failed(content = BbCloudBundle.message("otherProjects.worktree.failed.noOrgUrl"))
+            return WorktreeOpenOutcome.Failed(content = BbCloudBundle.message("otherProjects.worktree.failed.noOrgUrl"))
         }
         return withModalProgress(
             owner = ModalTaskOwner.guess(),
             title = BbCloudBundle.message("otherProjects.worktree.modalTitle"),
             cancellation = TaskCancellation.cancellable()
         ) {
-            val checkResult = checkStillOpen(
-                summary = summary,
-                repository = repository,
-                organizationUrl = organizationUrl
-            )
-            if (checkResult != null) {
-                return@withModalProgress checkResult
-            }
-            val remoteUrl = withContext(Dispatchers.IO) {
-                BitbucketGitRemoteReader.readRemoteUrl(checkoutRoot = resolution.sourceCheckoutPath)
-            }
-            if (remoteUrl == null) {
-                LOG.info("Cannot open pull request #${summary.id}: source checkout is not a git repository")
-                return@withModalProgress WorktreePreparation.Failed(
-                    content = BbCloudBundle.message("otherProjects.worktree.failed.notAGitRepo")
-                )
-            }
-            when (
-                val setupResult = worktreeService.ensureWorktree(
-                    sourceCheckoutRoot = resolution.sourceCheckoutPath,
-                    worktreePath = resolution.worktreePath,
-                    remoteUrl = remoteUrl,
-                    prNumber = summary.id,
-                    sourceBranch = summary.sourceBranch
-                )
-            ) {
-                is WorktreeSetupResult.Success -> {
-                    WorktreePreparation.Prepared(worktreePath = setupResult.worktreePath)
-                }
-                is WorktreeSetupResult.Failed -> {
-                    LOG.warn("Could not prepare the work tree for pull request #${summary.id}: ${setupResult.output}", setupResult.cause)
-                    WorktreePreparation.Failed(content = setupResult.output)
-                }
-                is WorktreeSetupResult.BranchCheckedOutInSource -> {
-                    LOG.info(
-                        "Cannot open pull request #${summary.id} in its own work tree: " +
-                            "the current checkout is on the PR branch '${setupResult.branchName}'"
-                    )
-                    WorktreePreparation.BranchCheckedOutInSource(
-                        branchName = setupResult.branchName,
-                        sourceCheckoutPath = setupResult.sourceCheckoutPath
-                    )
-                }
-            }
-        }
-    }
-
-    private suspend fun checkStillOpen(
-        summary: PullRequestSummary,
-        repository: ResolvedProjectRepository,
-        organizationUrl: String
-    ): WorktreePreparation.Failed? {
-        val details = try {
-            openPullRequestService.pullRequestDetailsFor(
+            worktreeOpener.prepareWorktree(
                 workspace = repository.workspace,
                 repoSlug = repository.repoSlug,
+                prNumber = summary.id,
                 organizationUrl = organizationUrl,
-                pullRequestId = summary.id
+                resolved = resolution
             )
-        } catch (exception: CancellationException) {
-            throw exception
-        } catch (exception: Exception) {
-            LOG.warn("PR state check failed for pull request #${summary.id}", exception)
-            return WorktreePreparation.Failed(
-                content = BbCloudBundle.message("otherProjects.worktree.failed.prStateCheckFailed", summary.id)
-            )
-        }
-        return when (val result = PullRequestOpenCheck.evaluate(details = details)) {
-            is PullRequestOpenCheckResult.StillOpen -> {
-                null
-            }
-            is PullRequestOpenCheckResult.NotOpen -> {
-                LOG.info("Cannot open pull request #${summary.id}: it is ${result.state}")
-                WorktreePreparation.Failed(
-                    content = BbCloudBundle.message("otherProjects.worktree.failed.prNotOpen", summary.id, result.state)
-                )
-            }
-            PullRequestOpenCheckResult.NotFound -> {
-                LOG.info("Cannot open pull request #${summary.id}: it was not found")
-                WorktreePreparation.Failed(
-                    content = BbCloudBundle.message("otherProjects.worktree.failed.prNotFound", summary.id)
-                )
-            }
-            is PullRequestOpenCheckResult.Failed -> {
-                LOG.warn("PR state check failed for pull request #${summary.id}", result.cause)
-                WorktreePreparation.Failed(
-                    content = BbCloudBundle.message("otherProjects.worktree.failed.prStateCheckFailed", summary.id)
-                )
-            }
         }
     }
 
-    private suspend fun openWorktreeProjectAndEditor(summary: PullRequestSummary, repoSlug: String, repository: ResolvedProjectRepository, worktreePath: Path) {
-        val openedProject = LocalRepositoryProjectOpener.openOrFocus(repoSlug = repoSlug, checkoutPath = worktreePath)
+    /** Opens the work tree window and queues the pull request editor in it. A failed window open shows the error balloon. */
+    private suspend fun openWorktreeProjectAndEditor(summary: PullRequestSummary, repository: ResolvedProjectRepository, worktreePath: Path) {
+        val openedProject = worktreeOpener.openProjectAndEditor(
+            summary = summary,
+            workspace = repository.workspace,
+            repoSlug = repository.repoSlug,
+            organizationUrl = configurationService.organizationUrlOrNull(),
+            worktreePath = worktreePath
+        )
         if (openedProject == null) {
-            LOG.info("Cannot open pull request #${summary.id}: the IDE could not open the work tree project")
             showWorktreeErrorNotification(
                 summary = summary,
                 content = BbCloudBundle.message("otherProjects.worktree.failed.openProjectFailed")
             )
-            return
-        }
-        openPullRequestEditor(
-            openedProject = openedProject,
-            summary = summary,
-            repoSlug = repoSlug,
-            repository = repository
-        )
-    }
-
-    private fun openPullRequestEditor(
-        openedProject: LocalRepositoryProjectOpener.OpenedProject,
-        summary: PullRequestSummary,
-        repoSlug: String,
-        repository: ResolvedProjectRepository
-    ) {
-        val project = openedProject.project
-        if (project.isDisposed) {
-            LOG.info("The project was disposed before the pull request editor could be opened")
-            return
-        }
-        val repositoryWebUrl = configurationService.organizationUrlOrNull()?.let { organizationUrl ->
-            BitbucketRepositoryUrls.repositoryWebUrlForWorkspace(
-                workspace = repository.workspace,
-                repoSlug = repoSlug
-            ) ?: BitbucketRepositoryUrls.repositoryWebUrl(organizationUrl = organizationUrl, repoSlug = repoSlug)
-        }
-        if (repositoryWebUrl == null) {
-            LOG.info("Cannot open pull request #${summary.id}: no repository web URL")
-            return
-        }
-        val queue = project.service<BbCloudPullRequestEditorOpenQueue>()
-        queue.enqueue(
-            BbCloudPendingEditorOpen(
-                summary = summary,
-                branchName = summary.sourceBranch,
-                repositoryWebUrl = repositoryWebUrl,
-                repositorySlug = repoSlug
-            )
-        )
-        if (openedProject.wasAlreadyOpen) {
-            queue.drainAndOpen(project)
         }
     }
 
@@ -875,7 +820,7 @@ class BbCloudMainPanel(
                     )
                 }
                 val openPrNumbers = (openResult as PullRequestListResult.Success).pullRequests.map { summary -> summary.id }.toSet()
-                val inProgress = worktreesInProgressSnapshot()
+                val inProgress = worktreeOpener.worktreesBeingOpened()
                 val stale = StaleWorktreePruneSelection.worktreesToPrune(
                     discovered = discovered,
                     openPrNumbers = openPrNumbers
@@ -932,19 +877,8 @@ class BbCloudMainPanel(
         }
     }
 
-    private fun worktreesInProgressSnapshot(): Set<Path> {
-        if (ApplicationManager.getApplication().isDispatchThread) {
-            return worktreesInProgress.toSet()
-        }
-        var snapshot = emptySet<Path>()
-        ApplicationManager.getApplication().invokeAndWait({
-            snapshot = worktreesInProgress.toSet()
-        }, ModalityState.any())
-        return snapshot
-    }
-
     private fun showCard(card: ViewCard) {
-        LOG.debug("Showing Current Project - PRs card $card")
+        LOG.debug("Showing Current Project card $card")
         projectCard.value = card
     }
 

@@ -1,0 +1,7 @@
+<!-- PR Changes tool window glyph (New UI 20x20 grid, dark); lines from JetBrains expui/toolwindows/changes@20x20.svg, chevrons after expui/vcs/changes_dark.svg (Apache 2.0); lines #CED0D6, arrows #548AF7 -->
+<svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+<rect x="3" y="3" width="14" height="1.5" rx="0.75" fill="#CED0D6"/>
+<rect x="3" y="7" width="9" height="1.5" rx="0.75" fill="#CED0D6"/>
+<rect x="3" y="11" width="6" height="1.5" rx="0.75" fill="#CED0D6"/>
+<path d="M15.75 9.25L13.25 11.75L15.75 14.25M19 11.75H14M10.75 14L13.25 16.5L10.75 19M6.75 16.5H12.5" stroke="#548AF7" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

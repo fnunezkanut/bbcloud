@@ -2,6 +2,7 @@ package com.github.fnunezkanut.bbcloud.ui.pullrequests
 
 import com.github.fnunezkanut.bbcloud.bitbucket.BitbucketAccountUuid
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestState
+import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestSummary
 import com.github.fnunezkanut.bbcloud.settings.PullRequestListFilter
 
 /** Applies the Exclude: checkboxes to a merged list of pull request entries. Pure: no Compose, no IntelliJ APIs. */
@@ -46,11 +47,16 @@ object PullRequestListFiltering {
 
     /** Whether the current user approves [entry]; always false when [currentUserUuid] is null. */
     private fun isApprovedByMe(entry: PullRequestListEntry, currentUserUuid: String?): Boolean {
-        if (currentUserUuid == null) {
+        return isApprovedBy(summary = entry.pullRequest.summary, userUuid = currentUserUuid)
+    }
+
+    /** Whether the user with [userUuid] approves [summary]; always false when [userUuid] is null or blank. */
+    internal fun isApprovedBy(summary: PullRequestSummary, userUuid: String?): Boolean {
+        if (userUuid == null) {
             return false
         }
-        return entry.pullRequest.summary.approverUuids.any { approver ->
-            BitbucketAccountUuid.matches(first = approver, second = currentUserUuid)
+        return summary.approverUuids.any { approver ->
+            BitbucketAccountUuid.matches(first = approver, second = userUuid)
         }
     }
 }

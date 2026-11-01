@@ -2,6 +2,7 @@ package com.github.fnunezkanut.bbcloud.ui.otherprojects
 
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
+import com.github.fnunezkanut.bbcloud.ui.pullrequests.PullRequestsCard
 import com.intellij.openapi.diagnostic.logger
 
 /**
@@ -36,6 +37,20 @@ class WorkspaceHeaderViewModel(private val onRefreshRequested: () -> Unit) {
     /** Sets the open pull request count shown in the header pill, or hides it when not [visible]. */
     fun setOpenCount(text: String?, visible: Boolean) {
         state.value = state.value.copy(openCountText = if (visible) text else null)
+    }
+
+    /**
+     * Updates the open-count pill from a pull request list's counts callback. [openCount] is the number of visible open
+     * rows after the Exclude filters, so toggling an Exclude checkbox that hides open rows updates the pill. The pill is
+     * hidden on the Hidden, Loading, and Error cards, matching the Current Project header's visibility rule.
+     */
+    fun setOpenCount(openCount: Int, card: PullRequestsCard) {
+        setOpenCount(
+            text = openCount.toString(),
+            visible = card != PullRequestsCard.Hidden &&
+                card != PullRequestsCard.Loading &&
+                card != PullRequestsCard.Error
+        )
     }
 
     fun setRefreshVisible(visible: Boolean) {

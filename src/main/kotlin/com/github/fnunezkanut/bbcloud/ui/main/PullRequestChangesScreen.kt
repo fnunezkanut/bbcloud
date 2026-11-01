@@ -25,12 +25,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.github.fnunezkanut.bbcloud.BbCloudBundle
+import com.github.fnunezkanut.bbcloud.git.FileLineCount
 import com.github.fnunezkanut.bbcloud.ui.components.LinesChangedBadge
 import com.github.fnunezkanut.bbcloud.ui.components.RoundedBadge
 import com.github.fnunezkanut.bbcloud.ui.components.actionButtonHoverBackground
+import com.github.fnunezkanut.bbcloud.ui.components.viewedTickPurple
 import com.github.fnunezkanut.bbcloud.ui.otherprojects.toComposeImageBitmap
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.fileTypes.FileTypeManager
@@ -57,8 +64,8 @@ private val LINE_STATS_LEADING_GAP = 5.dp
 private val LOG = logger<PullRequestChangesViewModel>()
 
 /**
- * The Jewel Changes tab: the file-changes card fills the whole width and height of the tab. The activity feed is shown
- * on the Overview tab, below the description.
+ * The file-changes view of the PR Changes tool window: the file-changes card fills the whole width and height of the
+ * window. The Activity timeline is shown on the pull-request page, below the description.
  */
 @Composable
 internal fun PullRequestChangesScreen(filesViewModel: PullRequestChangesViewModel) {
@@ -88,6 +95,18 @@ private fun FileChangesBody(viewModel: PullRequestChangesViewModel) {
         PullRequestFileChangesCard.Listing -> {
             FileChangesTree(viewModel = viewModel, rows = state.rows)
         }
+        PullRequestFileChangesCard.Resolved -> {
+            CenteredMessage(message = resolvedMessage(state.resolvedPullRequestId))
+        }
+    }
+}
+
+/** The centered message shown by the `Resolved` card, naming the pull request when its number is known. */
+private fun resolvedMessage(pullRequestId: Long?): String {
+    return if (pullRequestId != null) {
+        BbCloudBundle.message("main.branch.filesChanged.resolved", pullRequestId)
+    } else {
+        BbCloudBundle.message("main.branch.filesChanged.resolvedNoId")
     }
 }
 
@@ -120,6 +139,8 @@ private fun FileChangesTree(viewModel: PullRequestChangesViewModel, rows: List<P
     // collapse folders the user had expanded. A genuinely new set of rows is expanded by default.
     val tree = remember(rows) { buildChangesTree(rows) }
     val directoryIds = remember(rows) { changesTreeDirectoryIds(rows) }
+    val rowsById = remember(rows) { rows.associateBy { row -> fileId(row.relativePath) } }
+    val rowsByDirectory = remember(rows) { fileRowsByDirectory(rows) }
     val treeState = rememberTreeState()
     LaunchedEffect(rows) {
         treeState.openNodes(directoryIds)
@@ -127,11 +148,11 @@ private fun FileChangesTree(viewModel: PullRequestChangesViewModel, rows: List<P
     Column(modifier = Modifier.fillMaxSize()) {
         ChangesTreeToolbar(
             onExpandAll = {
-                LOG.info("User expanded all folders of the Changes file tree")
+                LOG.info("User expanded all folders of the PR Changes file tree")
                 treeState.openNodes(directoryIds)
             },
             onCollapseAll = {
-                LOG.info("User collapsed all folders of the Changes file tree")
+                LOG.info("User collapsed all folders of the PR Changes file tree")
                 treeState.openNodes = emptySet()
             }
         )
@@ -139,11 +160,34 @@ private fun FileChangesTree(viewModel: PullRequestChangesViewModel, rows: List<P
             tree = tree,
             treeState = treeState,
             modifier = Modifier
+                // Jewel's tree has no Enter action; Enter opens the diff of the selected file like a double click,
+                // and toggles a selected folder.
+                .onPreviewKeyEvent { event ->
+                    if (event.type != KeyEventType.KeyDown || (event.key != Key.Enter && event.key != Key.NumPadEnter)) {
+                        return@onPreviewKeyEvent false
+                    }
+                    val row = selectedFileRow(selectedKeys = treeState.selectedKeys, rowsById = rowsById)
+                    if (row != null) {
+                        LOG.info("User pressed Enter on a file of the PR Changes file tree")
+                        viewModel.onFileOpened(row.changeId)
+                        return@onPreviewKeyEvent true
+                    }
+                    val key = treeState.selectedKeys.singleOrNull()
+                    if (key is String && key.startsWith("dir:")) {
+                        treeState.toggleNode(key)
+                        return@onPreviewKeyEvent true
+                    }
+                    false
+                }
                 .weight(1f)
                 .fillMaxSize(),
             onElementDoubleClick = { element -> openDiff(element = element, viewModel = viewModel) }
         ) { element ->
-            ChangesTreeNodeContent(node = element.data, viewModel = viewModel)
+            ChangesTreeNodeContent(
+                node = element.data,
+                viewModel = viewModel,
+                rowsByDirectory = rowsByDirectory
+            )
         }
     }
 }
@@ -180,18 +224,18 @@ private fun openDiff(element: Tree.Element<PullRequestChangesTreeNode>, viewMode
 }
 
 @Composable
-private fun ChangesTreeNodeContent(node: PullRequestChangesTreeNode, viewModel: PullRequestChangesViewModel) {
+private fun ChangesTreeNodeContent(
+    node: PullRequestChangesTreeNode,
+    viewModel: PullRequestChangesViewModel,
+    rowsByDirectory: Map<String, List<PullRequestFileChangeRow>>
+) {
     when (node) {
         is PullRequestChangesTreeNode.Directory -> {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(key = AllIconsKeys.Nodes.Folder, contentDescription = null)
-                Text(
-                    text = node.name,
-                    modifier = Modifier.padding(start = 4.dp),
-                    overflow = TextOverflow.Ellipsis,
-                    maxLines = 1
-                )
-            }
+            DirectoryRowContent(
+                directory = node,
+                descendantRows = rowsByDirectory[node.path].orEmpty(),
+                viewModel = viewModel
+            )
         }
         is PullRequestChangesTreeNode.File -> {
             FileChangeRowContent(row = node.row, viewModel = viewModel)
@@ -199,8 +243,72 @@ private fun ChangesTreeNodeContent(node: PullRequestChangesTreeNode, viewModel: 
     }
 }
 
+/**
+ * A folder row. The folder shows the Viewed tick at the end of the row when every changed file below it is viewed.
+ * Folders have no line counts, so the tick sits where the file badge would be.
+ */
+@Composable
+private fun DirectoryRowContent(
+    directory: PullRequestChangesTreeNode.Directory,
+    descendantRows: List<PullRequestFileChangeRow>,
+    viewModel: PullRequestChangesViewModel
+) {
+    val allViewed = directoryFullyViewed(descendantRows = descendantRows, isViewed = viewModel::isViewed)
+    ContextMenuArea(
+        items = {
+            listOf(
+                ContextMenuItem(label = BbCloudBundle.message("main.branch.filesChanged.copyAbsolutePath")) {
+                    val absolutePath = viewModel.directoryAbsolutePathFor(directory.path)
+                    if (absolutePath != null) {
+                        copyPathToClipboard(path = absolutePath)
+                    }
+                }
+            )
+        }
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(key = AllIconsKeys.Nodes.Folder, contentDescription = null)
+            Text(
+                text = directory.name,
+                modifier = Modifier
+                    .padding(start = 4.dp)
+                    .weight(1f, fill = true),
+                overflow = TextOverflow.Ellipsis,
+                maxLines = 1
+            )
+            if (allViewed) {
+                ViewedTick(
+                    tooltip = BbCloudBundle.message("main.branch.filesChanged.viewed.tooltip"),
+                    modifier = Modifier.padding(start = LINE_STATS_LEADING_GAP)
+                )
+            }
+        }
+    }
+}
+
+/**
+ * The purple tick that replaces the line counts of a Viewed file, or the Viewed mark of a folder whose files are all
+ * viewed. The tooltip doubles as the content description.
+ */
+@Composable
+private fun ViewedTick(tooltip: String, modifier: Modifier = Modifier) {
+    Tooltip(tooltip = { Text(text = tooltip) }) {
+        Icon(
+            key = AllIconsKeys.Actions.Checked,
+            contentDescription = tooltip,
+            modifier = modifier.size(FILE_ICON_SIZE),
+            tint = viewedTickPurple()
+        )
+    }
+}
+
 @Composable
 private fun FileChangeRowContent(row: PullRequestFileChangeRow, viewModel: PullRequestChangesViewModel) {
+    // Read in composition, so toggling the Viewed checkbox in the diff review bar updates this row without a reload.
+    val viewed = viewModel.isViewed(row)
     ContextMenuArea(
         items = {
             listOf(
@@ -210,6 +318,12 @@ private fun FileChangeRowContent(row: PullRequestFileChangeRow, viewModel: PullR
                 ContextMenuItem(label = BbCloudBundle.message("main.branch.filesChanged.copyPath")) {
                     viewModel.onCopyPath(row.relativePath)
                     copyPathToClipboard(path = row.relativePath)
+                },
+                ContextMenuItem(label = BbCloudBundle.message("main.branch.filesChanged.copyAbsolutePath")) {
+                    val absolutePath = viewModel.absolutePathFor(row.changeId)
+                    if (absolutePath != null) {
+                        copyPathToClipboard(path = absolutePath)
+                    }
                 }
             )
         }
@@ -258,9 +372,14 @@ private fun FileChangeRowContent(row: PullRequestFileChangeRow, viewModel: PullR
                 }
             }
             val lineCount = row.lineCount
-            // The compact tree badge shows only when the counts are known, the file is not binary, and at least one
-            // line changed. The 5 dp leading gap sits between the comment pill (or the file name) and the counts.
-            if (lineCount != null && !lineCount.isBinary && (lineCount.linesAdded != 0 || lineCount.linesRemoved != 0)) {
+            // A Viewed file shows the purple tick instead of the line counts, so the tick is the only trailing widget
+            // for it. The 5 dp leading gap sits between the comment pill (or the file name) and the tick or counts.
+            if (viewed) {
+                ViewedTick(
+                    tooltip = viewedTooltip(lineCount = lineCount),
+                    modifier = Modifier.padding(start = LINE_STATS_LEADING_GAP)
+                )
+            } else if (lineCount != null && shouldShowLinesBadge(lineCount = lineCount, viewed = viewed)) {
                 LinesChangedBadge(
                     linesAdded = lineCount.linesAdded,
                     linesRemoved = lineCount.linesRemoved,
@@ -270,6 +389,32 @@ private fun FileChangeRowContent(row: PullRequestFileChangeRow, viewModel: PullR
             }
         }
     }
+}
+
+/**
+ * Tells whether the compact `+N -N` line badge shows for a file. The badge shows only for a file that is not viewed,
+ * whose counts are known, that is not binary, and where at least one line changed.
+ */
+internal fun shouldShowLinesBadge(lineCount: FileLineCount?, viewed: Boolean): Boolean {
+    if (viewed || lineCount == null || lineCount.isBinary) {
+        return false
+    }
+    return lineCount.linesAdded != 0 || lineCount.linesRemoved != 0
+}
+
+/**
+ * The tooltip of the Viewed tick. It names the line counts when the file has changed lines, for example
+ * `Viewed (+40 -0)`, and is plain `Viewed` when the counts are unknown, binary, or both zero.
+ */
+internal fun viewedTooltip(lineCount: FileLineCount?): String {
+    if (lineCount == null || lineCount.isBinary || (lineCount.linesAdded == 0 && lineCount.linesRemoved == 0)) {
+        return BbCloudBundle.message("main.branch.filesChanged.viewed.tooltip")
+    }
+    return BbCloudBundle.message(
+        "main.branch.filesChanged.viewed.tooltipWithCounts",
+        lineCount.linesAdded,
+        lineCount.linesRemoved
+    )
 }
 
 /** The icon of the file type of [fileName], or null when the file type has no icon. */

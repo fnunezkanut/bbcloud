@@ -20,9 +20,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -103,6 +107,15 @@ interface CommentThreadCardHost {
 
     fun editInput(comment: PullRequestComment): CommentInput
 
+    /**
+     * Returns the view model of the open reply or edit composer. The same instance is returned for the same [target]
+     * and [scope] until the composer closes, so a rebuilt card keeps the draft, caret and selection. [scope] identifies
+     * the surface that shows the card, for example the host editor, so two editors that show the same file do not share
+     * one text field state. The draft is intentionally kept when the comment text changes remotely, so the user's text
+     * is never discarded silently.
+     */
+    fun composerViewModel(target: ConversationComposerTarget, comment: PullRequestComment, scope: Any): CommentComposerViewModel
+
     fun openFile(path: String, line: Int?)
 
     /**
@@ -127,9 +140,32 @@ private val CARD_META_BODY_PADDING = 8.dp
 private val CARD_CORNER = 8.dp
 private val CARD_BORDER_WIDTH = 1.dp
 
+/**
+ * A one-shot "focus the composer when it opens" request, scoped to a single card instance. The card sets it to true
+ * right before it opens a composer, or inherits an initial true from a focus restore after an inlay rebuild; the
+ * composer consumes it once so recompositions do not steal the focus again. Only the card instance where the user
+ * clicked requests focus, even when the same controller drives cards in several editors.
+ */
+private val LocalComposerFocusRequest = staticCompositionLocalOf<MutableState<Boolean>> {
+    error("LocalComposerFocusRequest is not provided")
+}
+
+/** The surface that shows the card, keying its composer draft (see [CommentThreadCardHost.composerViewModel]). */
+private val LocalComposerScope = staticCompositionLocalOf<Any> { Unit }
+
+/** Runs when the card asks AWT focus to move to the surface before the Compose focus request (see [CardOpenComposer]). */
+private val LocalOnComposerFocusRequested = staticCompositionLocalOf<() -> Unit> { {} }
+
 /** Renders the full Conversation-style thread card in any host surface. */
 @Composable
-internal fun PullRequestCommentThreadCard(thread: TimelineEntry.CommentThread, host: CommentThreadCardHost, modifier: Modifier = Modifier) {
+internal fun PullRequestCommentThreadCard(
+    thread: TimelineEntry.CommentThread,
+    host: CommentThreadCardHost,
+    modifier: Modifier = Modifier,
+    requestComposerFocus: Boolean = false,
+    composerScope: Any = Unit,
+    onComposerFocusRequested: () -> Unit = {}
+) {
     val showsBody = ConversationThreadRules.showsThreadBody(thread)
     val borderColor = if (showsBody) reviewBarPurple() else JewelTheme.globalColors.borders.normal
     val shape = RoundedCornerShape(CARD_CORNER)
@@ -145,20 +181,27 @@ internal fun PullRequestCommentThreadCard(thread: TimelineEntry.CommentThread, h
         }
         return
     }
+    val composerFocusRequest = remember { mutableStateOf(requestComposerFocus) }
     val viewed = host.isThreadViewed(thread = thread)
-    Column(
-        modifier = modifier.fillMaxWidth().border(CARD_BORDER_WIDTH, borderColor, shape).clip(shape)
+    CompositionLocalProvider(
+        LocalComposerFocusRequest provides composerFocusRequest,
+        LocalComposerScope provides composerScope,
+        LocalOnComposerFocusRequested provides onComposerFocusRequested
     ) {
-        CardLocationStrip(
-            comment = thread.root,
-            host = host,
-            viewed = viewed,
-            onViewedToggled = { checked -> host.setThreadViewed(thread = thread, viewed = checked) },
-            showBottomBorder = !viewed
-        )
-        if (!viewed) {
-            CardThreadMiddle(thread = thread, host = host)
-            CardActionsFooter(comment = thread.root, host = host)
+        Column(
+            modifier = modifier.fillMaxWidth().border(CARD_BORDER_WIDTH, borderColor, shape).clip(shape)
+        ) {
+            CardLocationStrip(
+                comment = thread.root,
+                host = host,
+                viewed = viewed,
+                onViewedToggled = { checked -> host.setThreadViewed(thread = thread, viewed = checked) },
+                showBottomBorder = !viewed
+            )
+            if (!viewed) {
+                CardThreadMiddle(thread = thread, host = host)
+                CardActionsFooter(comment = thread.root, host = host)
+            }
         }
     }
 }
@@ -324,6 +367,7 @@ private fun CardMetaHeadline(authorName: String, headlineKind: ConversationMetaH
 
 @Composable
 private fun CardMetaActions(comment: PullRequestComment, headlineKind: ConversationMetaHeadlineKind, host: CommentThreadCardHost) {
+    val composerFocusRequest = LocalComposerFocusRequest.current
     val actions = CommentThreadActionVisibility.metaHeaderActions(
         comment = comment,
         headlineKind = headlineKind,
@@ -354,9 +398,11 @@ private fun CardMetaActions(comment: PullRequestComment, headlineKind: Conversat
                         } else {
                             when (action) {
                                 CommentThreadAction.Reply -> {
+                                    composerFocusRequest.value = true
                                     host.openReply(commentId = comment.id)
                                 }
                                 CommentThreadAction.Edit -> {
+                                    composerFocusRequest.value = true
                                     host.openEdit(commentId = comment.id)
                                 }
                                 CommentThreadAction.Delete -> {
@@ -374,6 +420,7 @@ private fun CardMetaActions(comment: PullRequestComment, headlineKind: Conversat
 
 @Composable
 private fun CardActionsFooter(comment: PullRequestComment, host: CommentThreadCardHost) {
+    val composerFocusRequest = LocalComposerFocusRequest.current
     Box(
         modifier = Modifier.fillMaxWidth().background(conversationThreadStripBackground()).cardTopBorder(reviewBarPurple())
             .padding(horizontal = CARD_STRIP_HORIZONTAL_PADDING, vertical = CARD_STRIP_VERTICAL_PADDING)
@@ -391,7 +438,10 @@ private fun CardActionsFooter(comment: PullRequestComment, host: CommentThreadCa
                     contentDescription = CommentThreadActionVisibility.label(action = action),
                     outlineColor = ActionButtonOutlines.green(),
                     enabled = !host.isUpdating(commentId = comment.id),
-                    onClick = { host.openReply(commentId = comment.id) },
+                    onClick = {
+                        composerFocusRequest.value = true
+                        host.openReply(commentId = comment.id)
+                    },
                     showOutline = true,
                     modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
                     trailingContent = {
@@ -434,14 +484,13 @@ private fun ResolvedCardThread(thread: TimelineEntry.CommentThread, host: Commen
 private fun CardOpenComposer(comment: PullRequestComment, host: CommentThreadCardHost, modifier: Modifier = Modifier) {
     val openComposer = host.openComposer ?: return
     if (openComposer.commentId != comment.id) return
-    val input = remember(openComposer.commentId, openComposer.kind, comment.raw) {
-        when (openComposer.kind) {
-            ConversationComposerKind.Reply -> host.replyInput(commentId = openComposer.commentId)
-            ConversationComposerKind.Edit -> host.editInput(comment = comment)
-        }
-    }
-    val composerViewModel = remember(openComposer.commentId, openComposer.kind, comment.raw) {
-        CommentComposerViewModel(input = input, startsExpanded = true)
+    val scope = LocalComposerScope.current
+    val composerFocusRequest = LocalComposerFocusRequest.current
+    val onComposerFocusRequested = LocalOnComposerFocusRequested.current
+    // The comment is intentionally not part of the key, so a background refresh that changes the comment text does not
+    // wipe a draft in progress; the cache returns the same view model until the composer closes.
+    val composerViewModel = remember(openComposer, scope) {
+        host.composerViewModel(target = openComposer, comment = comment, scope = scope)
     }
     CommentComposerScreen(
         viewModel = composerViewModel,
@@ -449,6 +498,11 @@ private fun CardOpenComposer(comment: PullRequestComment, host: CommentThreadCar
         modifier = modifier,
         showsCollapsedField = false,
         avatarSize = CARD_AVATAR_SIZE,
+        requestEditorFocus = composerFocusRequest.value,
+        onEditorFocusRequested = {
+            composerFocusRequest.value = false
+            onComposerFocusRequested()
+        },
         onCollapsed = { host.closeComposer() },
         onSubmitted = { host.closeComposer() }
     )

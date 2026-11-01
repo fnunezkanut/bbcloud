@@ -28,6 +28,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.github.fnunezkanut.bbcloud.BbCloudBundle
+import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestState
 import com.github.fnunezkanut.bbcloud.bitbucket.ReviewingPullRequest
 import com.github.fnunezkanut.bbcloud.ui.components.BRANCH_ARROW
 import com.github.fnunezkanut.bbcloud.ui.components.BranchChip
@@ -114,8 +115,7 @@ internal fun PullRequestCardListing(
 
 /**
  * The pull-request detail info card. Unlike the listing card (`showRepositoryColumn = true`), the author subtitle here
- * shows the updated/created timestamps with an absolute-date tooltip; conversation volume lives on the Conversation tab
- * badge instead of a comment count under the author.
+ * shows the updated/created timestamps with an absolute-date tooltip, and it does not show a comment count under the author.
  */
 @Composable
 internal fun PullRequestInfoCard(
@@ -213,6 +213,11 @@ private fun PullRequestCard(
                                         }
                                     }
                                 }
+                                if (row.isApprovedByMe && row.state == PullRequestState.Open) {
+                                    Badge(style = PullRequestBadgeStyles.approved()) {
+                                        Text(text = BbCloudBundle.message("main.pullRequests.approved"))
+                                    }
+                                }
                             }
                         }
                         Text(
@@ -223,28 +228,39 @@ private fun PullRequestCard(
                             overflow = TextOverflow.Ellipsis
                         )
                         if (showRepositoryColumn) {
-                            // Listings keep the balloon comment count under the author; the Conversation tab badge on
-                            // the detail card already carries conversation volume, so the detail card shows dates here.
-                            Tooltip(
-                                tooltip = {
-                                    Text(
-                                        text = BbCloudBundle.message(
-                                            "main.pullRequests.commentCount",
-                                            row.commentCount
-                                        )
-                                    )
-                                }
+                            // Listings keep the balloon comment count under the author, with the reviewer avatar stack
+                            // beside it; the detail card shows dates here instead.
+                            Row(
+                                modifier = Modifier.padding(top = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                Tooltip(
+                                    tooltip = {
+                                        Text(
+                                            text = BbCloudBundle.message(
+                                                "main.pullRequests.commentCount",
+                                                row.commentCount
+                                            )
+                                        )
+                                    }
                                 ) {
-                                    Icon(
-                                        key = AllIconsKeys.General.Balloon,
-                                        contentDescription = "Comments"
-                                    )
-                                    Text(text = row.commentCount.toString())
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Icon(
+                                            key = AllIconsKeys.General.Balloon,
+                                            contentDescription = "Comments"
+                                        )
+                                        Text(text = row.commentCount.toString())
+                                    }
                                 }
+                                ReviewerAvatarStack(
+                                    stack = row.reviewerStack,
+                                    avatarRevision = avatarRevision,
+                                    avatarIconFor = avatarIconFor
+                                )
                             }
                         } else {
                             val authorDates = pullRequestAuthorDates(

@@ -1,5 +1,10 @@
 package com.github.fnunezkanut.bbcloud.config
 
+import com.github.fnunezkanut.bbcloud.auth.BbCloudAccessTokenProvider
+import com.github.fnunezkanut.bbcloud.auth.BbCloudCredentialValidator
+import com.github.fnunezkanut.bbcloud.auth.BitbucketCredentialCheckClient
+import com.github.fnunezkanut.bbcloud.auth.CredentialCheckResult
+import com.github.fnunezkanut.bbcloud.auth.OAuthTokens
 import com.github.fnunezkanut.bbcloud.bitbucket.BitbucketWorkspace
 import com.github.fnunezkanut.bbcloud.bitbucket.BitbucketWorkspaceClient
 import com.github.fnunezkanut.bbcloud.bitbucket.WorkspaceListResult
@@ -20,6 +25,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
 import java.nio.file.Paths
+import kotlin.time.Clock
 
 @Tag("unit")
 class BbCloudConfigurationServiceTest {
@@ -106,6 +112,161 @@ class BbCloudConfigurationServiceTest {
             // WHEN / THEN
             service.isConfigured() shouldBe false
         }
+
+    @Test
+    fun `isConfigured - should be true with working OAuth and a valid directory`(): Unit =
+        runBlocking {
+            // GIVEN slug, a valid directory, OAuth tokens but no API token
+            val settings = settings(workspaceSlug = "my-workspace")
+            settings.projectsDirectory = projectsDir.toString()
+            val store = FakeCredentialStore(hasToken = false)
+            store.oauthTokens = oauthTokens()
+            val service = service(settings, store)
+
+            // WHEN / THEN
+            service.isConfigured() shouldBe true
+        }
+
+    @Test
+    fun `isConfigured - should be true with both OAuth and an API token`(): Unit =
+        runBlocking {
+            val settings = settings(workspaceSlug = "my-workspace")
+            settings.projectsDirectory = projectsDir.toString()
+            val store = FakeCredentialStore(hasToken = true, storedToken = "token")
+            store.oauthTokens = oauthTokens()
+            val service = service(settings, store)
+
+            service.isConfigured() shouldBe true
+        }
+
+    @Test
+    fun `isConfigured - should not call the validator when the slug is missing`(): Unit =
+        runBlocking {
+            // GIVEN no slug, a valid directory, and a check client that would fail the test if called
+            val settings = settings()
+            settings.projectsDirectory = projectsDir.toString()
+            val store = FakeCredentialStore(hasToken = true, storedToken = "token")
+            var checkCalls = 0
+            val countingCheckClient = object : BitbucketCredentialCheckClient {
+                override suspend fun check(bearerToken: String): CredentialCheckResult {
+                    checkCalls++
+                    return CredentialCheckResult.Valid
+                }
+            }
+            val provider = FakeAccessTokenProvider(store = store)
+            val validator = BbCloudCredentialValidator(
+                credentialStore = store,
+                accessTokenProvider = provider,
+                checkClient = countingCheckClient,
+                clock = Clock.System,
+                ttl = kotlin.time.Duration.ZERO
+            )
+            val service = service(settings, store, provider = provider, validator = validator)
+
+            // WHEN / THEN the cheap slug check short-circuits before any online check
+            service.isConfigured() shouldBe false
+            checkCalls shouldBe 0
+        }
+
+    @Test
+    fun `saveOAuthSetup - should reject an invalid workspace slug`(): Unit =
+        runBlocking {
+            val settings = settings()
+            val store = FakeCredentialStore(hasToken = false)
+            val service = service(settings, store)
+
+            val result = service.saveOAuthSetup(workspaceSlug = "https://bitbucket.org/x/", tokens = oauthTokens())
+
+            assertSoftly {
+                result.isFailure shouldBe true
+                result.exceptionOrNull().shouldBeInstanceOf<BbCloudConfigurationService.SaveException.WorkspaceRequired>()
+                store.oauthTokens shouldBe null
+            }
+        }
+
+    @Test
+    fun `saveOAuthSetup - should store the tokens and slug and keep the API token`(): Unit =
+        runBlocking {
+            val settings = settings()
+            val store = FakeCredentialStore(hasToken = true, storedToken = "api-token")
+            val service = service(settings, store)
+            val tokens = oauthTokens()
+
+            val result = service.saveOAuthSetup(workspaceSlug = "my-workspace", tokens = tokens)
+
+            assertSoftly {
+                result.isSuccess shouldBe true
+                settings.workspaceSlug shouldBe "my-workspace"
+                store.oauthTokens shouldBe tokens
+                // The API token is kept so both credentials can coexist.
+                store.savedToken shouldBe "api-token"
+            }
+        }
+
+    @Test
+    fun `saveOAuthSetup - a slug change should clear and rescan watched projects`(): Unit =
+        runBlocking {
+            val settings = settings(workspaceSlug = "old")
+            settings.projectsDirectory = projectsDir.toString()
+            val store = FakeCredentialStore(hasToken = false)
+            val discoveryService = FakeDiscoveryService(
+                result = WatchedProjectsDiscoveryResult.Success(mappings = emptyList(), avatarUrlBySlug = emptyMap())
+            )
+            val service = service(settings, store, discoveryService = discoveryService)
+
+            service.saveOAuthSetup(workspaceSlug = "new", tokens = oauthTokens())
+
+            assertSoftly {
+                settings.workspaceSlug shouldBe "new"
+                discoveryService.discoverInvocations shouldBe 1
+            }
+        }
+
+    @Test
+    fun `saveOAuthSetup - the same slug should not clear watched projects`(): Unit =
+        runBlocking {
+            val settings = settings(workspaceSlug = "same")
+            settings.projectsDirectory = projectsDir.toString()
+            settings.replaceWatchedProjects(
+                listOf(WatchedProjectMapping(workspace = "same", remoteRepoSlug = "repo", watched = true, localFolderPath = ""))
+            )
+            val store = FakeCredentialStore(hasToken = false)
+            val discoveryService = FakeDiscoveryService()
+            val service = service(settings, store, discoveryService = discoveryService)
+
+            service.saveOAuthSetup(workspaceSlug = "same", tokens = oauthTokens())
+
+            assertSoftly {
+                // No rescan, and the watched map is preserved on a same-workspace credential change.
+                discoveryService.discoverInvocations shouldBe 0
+                settings.watchedProjects.map { it.remoteRepoSlug } shouldBe listOf("repo")
+            }
+        }
+
+    @Test
+    fun `resetAll - should clear the OAuth tokens`(): Unit =
+        runBlocking {
+            val settings = settings(workspaceSlug = "my-workspace")
+            val store = FakeCredentialStore(hasToken = true, storedToken = "token")
+            store.oauthTokens = oauthTokens()
+            val service = service(settings, store)
+
+            service.resetAll()
+
+            assertSoftly {
+                store.oauthTokens shouldBe null
+                store.clearOAuthInvocations shouldBe 1
+                settings.workspaceSlug shouldBe ""
+            }
+        }
+
+    private fun oauthTokens(): OAuthTokens {
+        return OAuthTokens(
+            accessToken = "oauth-access",
+            refreshToken = "oauth-refresh",
+            expiresAt = Clock.System.now() + kotlin.time.Duration.parse("2h")
+        )
+    }
 
     @Test
     fun `hasStoredToken - should follow the credential store`(): Unit =
@@ -1034,14 +1195,55 @@ class BbCloudConfigurationServiceTest {
         settings: BbCloudSettings,
         store: FakeCredentialStore,
         client: FakeWorkspaceClient = FakeWorkspaceClient(WorkspaceListResult.Success(emptyList())),
-        discoveryService: BbCloudWatchedProjectsDiscoveryService = FakeDiscoveryService()
+        discoveryService: BbCloudWatchedProjectsDiscoveryService = FakeDiscoveryService(),
+        provider: FakeAccessTokenProvider = FakeAccessTokenProvider(store = store),
+        validator: BbCloudCredentialValidator = BbCloudCredentialValidator(
+            credentialStore = store,
+            accessTokenProvider = provider,
+            checkClient = AlwaysValidCheckClient,
+            clock = Clock.System,
+            // No caching in the unit test, so each isConfigured call re-reads the current stored credentials.
+            ttl = kotlin.time.Duration.ZERO
+        )
     ): BbCloudConfigurationService {
         return BbCloudConfigurationService(
             settings = settings,
             credentialStore = store,
             workspaceClient = client,
-            discoveryService = discoveryService
+            discoveryService = discoveryService,
+            accessTokenProvider = provider,
+            credentialValidator = validator
         )
+    }
+
+    /** A provider that mirrors the fake store: an OAuth token wins, otherwise the stored API token. */
+    private class FakeAccessTokenProvider(private val store: FakeCredentialStore) : BbCloudAccessTokenProvider {
+        override suspend fun bearerTokenOrNull(): String? {
+            return store.getOAuthTokens()?.accessToken ?: store.getToken()
+        }
+
+        override suspend fun oauthAccessTokenOrNull(): String? {
+            return store.getOAuthTokens()?.accessToken
+        }
+
+        override suspend fun refreshAfterUnauthorized(rejectedToken: String): String? {
+            return null
+        }
+
+        override fun markOAuthNotWorking() {
+            // No-op in the config-service test; credential state is driven by the store directly.
+        }
+
+        override fun onOAuthTokensChanged() {
+            // No-op.
+        }
+    }
+
+    /** Treats any non-blank bearer token as valid, so "credential present" maps to a working method. */
+    private object AlwaysValidCheckClient : BitbucketCredentialCheckClient {
+        override suspend fun check(bearerToken: String): CredentialCheckResult {
+            return if (bearerToken.isNotBlank()) CredentialCheckResult.Valid else CredentialCheckResult.Unauthorized
+        }
     }
 
     private fun settings(workspaceSlug: String = "", organizationUrl: String = ""): BbCloudSettings {
@@ -1060,10 +1262,17 @@ class BbCloudConfigurationServiceTest {
         }
     }
 
-    private class FakeCredentialStore(private var hasToken: Boolean, storedToken: String = "") : BbCloudCredentialStore {
-        var savedToken: String = storedToken
+    private class FakeCredentialStore(private var hasToken: Boolean, storedToken: String? = null) : BbCloudCredentialStore {
+        // When a token is present but no explicit value was given, use a non-blank default so isConfigured (which now
+        // verifies a usable credential through the validator) sees a working token. A store with no token keeps an
+        // empty value so an early-failing save leaves nothing behind.
+        var savedToken: String = storedToken ?: if (hasToken) DEFAULT_STORED_TOKEN else ""
         var saveInvocations: Int = 0
         var clearInvocations: Int = 0
+
+        var oauthTokens: OAuthTokens? = null
+        var saveOAuthInvocations: Int = 0
+        var clearOAuthInvocations: Int = 0
 
         override suspend fun hasToken(): Boolean {
             return hasToken
@@ -1083,6 +1292,26 @@ class BbCloudConfigurationServiceTest {
             clearInvocations++
             savedToken = ""
             hasToken = false
+        }
+
+        override suspend fun getOAuthTokens(): OAuthTokens? {
+            return oauthTokens
+        }
+
+        override suspend fun saveOAuthTokens(tokens: OAuthTokens) {
+            saveOAuthInvocations++
+            oauthTokens = tokens
+        }
+
+        override suspend fun clearOAuthTokens() {
+            clearOAuthInvocations++
+            oauthTokens = null
+        }
+
+        companion object {
+            // A non-blank default so hasToken=true implies a usable token, matching what isConfigured now verifies
+            // through the credential validator (a blank token is treated as not present).
+            private const val DEFAULT_STORED_TOKEN = "token"
         }
     }
 
