@@ -34,6 +34,10 @@
             "minimum": 1,
             "description": "Pull request number, if it could be parsed."
         },
+        "prTitle": {
+            "type": ["string", "null"],
+            "description": "Title of the PR"
+        },
         "repo": {
             "type": ["string", "null"],
             "pattern": "^[^/]+/[^/]+$",

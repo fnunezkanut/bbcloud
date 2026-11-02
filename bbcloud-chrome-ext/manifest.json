@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Bitbucket Cloud: Open in IntelliJ",
-  "version": "1.0.0",
-  "description": "Adds an Open in IntelliJ icon next to pull requests on bitbucket.org that opens them in a git worktree in a running IntelliJ IDE.",
+  "version": "1.1.0",
+  "description": "Adds an Open in IntelliJ icon next to pull requests on bitbucket.org list and detail pages; opens them in a git worktree in a running IntelliJ IDE.",
   "minimum_chrome_version": "116",
   "background": {
     "service_worker": "background.js"
