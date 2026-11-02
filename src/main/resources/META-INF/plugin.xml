@@ -23,6 +23,7 @@
 
     <change-notes><![CDATA[
         <ul>
+            <li>Bugfix: Unable to leave multiple comments on same line, thanks Olszewski-Jakub!</li>
             <li>Fixed: keyboard input in diff and file-editor comment boxes (including paste) edits the comment instead of the read-only file</li>
             <li>Changed: reply, edit, line, and file comment boxes take focus when opened and keep their text and focus when comments refresh; reply and edit boxes close if the comment was deleted or resolved elsewhere</li>
             <li>Fixed: inline and file comments on added files appear in the file diff view, as in the file editor</li>
