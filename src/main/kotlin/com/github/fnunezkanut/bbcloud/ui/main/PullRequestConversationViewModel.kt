@@ -44,6 +44,7 @@ class PullRequestConversationViewModel(
     /** Whether each inline comment path of the rendered conversation still exists locally; filled off the UI thread. */
     private val fileExistence = mutableStateMapOf<String, Boolean>()
     private var fileExistenceRequestId = 0
+    private val resolvedThreadExpansion = ResolvedThreadExpansion()
 
     override val currentUserUuid: String?
         get() = state.value.currentUserUuid
@@ -214,6 +215,15 @@ class PullRequestConversationViewModel(
     /** Paths that are not resolved yet count as existing, so the file link does not flicker to the PR icon on load. */
     override fun fileExists(path: String): Boolean {
         return fileExistence[path] ?: true
+    }
+
+    override fun isResolvedThreadExpanded(rootCommentId: Long): Boolean {
+        return resolvedThreadExpansion[rootCommentId]
+    }
+
+    override fun setResolvedThreadExpanded(rootCommentId: Long, expanded: Boolean) {
+        LOG.info("User set resolved-thread-expanded=$expanded for thread $rootCommentId in the conversation of pull request #${currentPullRequestId()}")
+        resolvedThreadExpansion[rootCommentId] = expanded
     }
 
     override fun copyPath(path: String) {

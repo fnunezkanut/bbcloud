@@ -71,7 +71,7 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
     private val avatarCache = AuthorAvatarCache(avatarSize = AVATAR_SIZE)
     private val coroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val controllers = ConcurrentHashMap<String, EditorCommentThreadController>()
-    private val composerSessions = ConcurrentHashMap<String, ComposerSession>()
+    private val composerSessions = ConcurrentHashMap<ComposerKey, ComposerSession>()
     private val addCommentGutterEditors = ConcurrentHashMap.newKeySet<EditorEx>()
 
     /** Which thread each inline thread host shows, so focus can be restored into the right host after a rebuild. EDT-only. */
@@ -202,10 +202,8 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
         onInsertFailed: () -> Unit,
         alreadyOpenLogSuffix: String
     ) {
-        val openSession = composerSessions[key]
-        if (openSession != null) {
-            openSession.focusGeneration.value++
-            openSession.host.requestComposeFocus()
+        val composerKey = ComposerKey(scope = key, editor = editor)
+        if (focusLiveComposer(composerKey = composerKey)) {
             LOG.info("$logContext already open for $alreadyOpenLogSuffix; focused it")
             return
         }
@@ -213,8 +211,8 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
         val session = newSession()
         val host = DiffCommentThreadHost(editor = editor)
         val composerSession = ComposerSession(disposable = session, host = host, editor = editor)
-        composerSessions[key] = composerSession
-        Disposer.register(session) { composerSessions.remove(key, composerSession) }
+        composerSessions[composerKey] = composerSession
+        Disposer.register(session) { composerSessions.remove(composerKey, composerSession) }
         val composerViewModel = CommentComposerViewModel(input = input(session), startsExpanded = true)
         var composePanel: ComposePanel? = null
         val content = compose(config = { composePanel = this }) {
@@ -245,6 +243,7 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
             onInsertFailed()
             return
         }
+        composerSession.inlay = inlay
         scheduleDeferredInlayRemeasure(host = host)
         Disposer.register(session) { Disposer.dispose(inlay) }
         onInserted()
@@ -258,11 +257,8 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
      */
     fun openInlineLineComposer(editor: EditorEx, relativePath: String, pullRequestId: Long, fileOneBasedLine: Int, side: InlineCommentSide) {
         val normalizedPath = PullRequestPathMatcher.normalize(relativePath)
-        val key = "$pullRequestId:$normalizedPath:$side:$fileOneBasedLine"
-        val openSession = composerSessions[key]
-        if (openSession != null) {
-            openSession.focusGeneration.value++
-            openSession.host.requestComposeFocus()
+        val composerKey = ComposerKey(scope = "$pullRequestId:$normalizedPath:$side:$fileOneBasedLine", editor = editor)
+        if (focusLiveComposer(composerKey = composerKey)) {
             LOG.info("Line comment composer already open for $relativePath:$fileOneBasedLine ($side) in pull request #$pullRequestId; focused it")
             return
         }
@@ -275,9 +271,9 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
         val session = newSession()
         val host = DiffCommentThreadHost(editor = editor)
         val composerSession = ComposerSession(disposable = session, host = host, editor = editor, side = side, editorLine = editorLine)
-        composerSessions[key] = composerSession
+        composerSessions[composerKey] = composerSession
         Disposer.register(session) {
-            composerSessions.remove(key, composerSession)
+            composerSessions.remove(composerKey, composerSession)
             refreshAddCommentGutters()
         }
         val input = CommentInput(
@@ -328,10 +324,31 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
             LOG.warn("Could not insert line comment composer for pull request #$pullRequestId at $relativePath:$fileOneBasedLine")
             return
         }
+        composerSession.inlay = inlay
         scheduleDeferredInlayRemeasure(host = host)
         Disposer.register(session) { Disposer.dispose(inlay) }
         refreshAddCommentGutters()
         LOG.debug("Opened line comment composer for pull request #$pullRequestId at $relativePath:$fileOneBasedLine on $side")
+    }
+
+    /**
+     * Focuses the composer already open for [composerKey] and returns true. Composers whose editor was released or
+     * whose inlay is gone (a rediff, a file switch in the diff chain, or a closed editor) are disposed first, in every
+     * editor, so a stale entry can no longer swallow a request to open a new composer on that line. Runs on the EDT.
+     */
+    private fun focusLiveComposer(composerKey: ComposerKey): Boolean {
+        composerSessions.values
+            .filterNot(ComposerSession::isLive)
+            .forEach { staleSession ->
+                LOG.info("Disposed a stale comment composer: its editor or inlay is gone")
+                Disposer.dispose(staleSession.disposable)
+            }
+        val openSession = composerSessions[composerKey] ?: return false
+        with(openSession) {
+            focusGeneration.value++
+            host.requestComposeFocus()
+        }
+        return true
     }
 
     /**
@@ -1075,6 +1092,9 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
         coroutineScope.cancel()
     }
 
+    /** A composer is scoped to one editor, so the same line can have a composer in the file editor and in the diff. */
+    private data class ComposerKey(val scope: String, val editor: EditorEx)
+
     /**
      * [side] and [editorLine] are set only for line-anchored composers; the file-scoped composer leaves them null.
      */
@@ -1087,7 +1107,15 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
         // Bumped when an already-open composer is re-triggered, so its text area re-requests keyboard focus. A Compose
         // state so the composer recomposes and its focus LaunchedEffect(focusRequestKey) re-runs. EDT-only.
         val focusGeneration: MutableState<Int> = mutableStateOf(0)
-    )
+    ) {
+        /** Set once the composer inlay is inserted; the composer is shown only while this inlay is valid. EDT-only. */
+        var inlay: Inlay<*>? = null
+
+        val isLive: Boolean
+            get() {
+                return isComposerSessionLive(isEditorDisposed = editor.isDisposed, isInlayValid = inlay?.isValid == true)
+            }
+    }
 
     /** Identifies the thread an inline host shows, so a rebuild can restore focus into the composer of that thread. */
     private data class HostThread(val controller: EditorCommentThreadController, val editor: EditorEx, val threadCommentIds: Set<Long>)

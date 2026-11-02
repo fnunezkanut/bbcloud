@@ -125,6 +125,11 @@ interface CommentThreadCardHost {
     fun fileExists(path: String): Boolean
 
     fun copyPath(path: String)
+
+    /** Whether a resolved thread shows its body below the resolver notice. */
+    fun isResolvedThreadExpanded(rootCommentId: Long): Boolean
+
+    fun setResolvedThreadExpanded(rootCommentId: Long, expanded: Boolean)
 }
 
 private val CARD_AVATAR_SIZE = 16.dp
@@ -169,25 +174,17 @@ internal fun PullRequestCommentThreadCard(
     val showsBody = ConversationThreadRules.showsThreadBody(thread)
     val borderColor = if (showsBody) reviewBarPurple() else JewelTheme.globalColors.borders.normal
     val shape = RoundedCornerShape(CARD_CORNER)
-    if (!showsBody) {
-        Column(
-            modifier = modifier
-                .fillMaxWidth()
-                .border(CARD_BORDER_WIDTH, borderColor, shape)
-                .background(commentThreadContentBackground(), shape)
-                .padding(8.dp)
-        ) {
-            ResolvedCardThread(thread = thread, host = host)
-        }
-        return
-    }
     val composerFocusRequest = remember { mutableStateOf(requestComposerFocus) }
-    val viewed = host.isThreadViewed(thread = thread)
     CompositionLocalProvider(
         LocalComposerFocusRequest provides composerFocusRequest,
         LocalComposerScope provides composerScope,
         LocalOnComposerFocusRequested provides onComposerFocusRequested
     ) {
+        if (!showsBody) {
+            ResolvedCard(thread = thread, host = host, borderColor = borderColor, modifier = modifier)
+            return@CompositionLocalProvider
+        }
+        val viewed = host.isThreadViewed(thread = thread)
         Column(
             modifier = modifier.fillMaxWidth().border(CARD_BORDER_WIDTH, borderColor, shape).clip(shape)
         ) {
@@ -467,10 +464,47 @@ private fun CardActionsFooter(comment: PullRequestComment, host: CommentThreadCa
     }
 }
 
+/**
+ * A resolved thread: the resolver notice with Show/Hide and Unresolve. The expanded state lives in the host, so it
+ * survives editor inlay rebuilds.
+ */
 @Composable
-private fun ResolvedCardThread(thread: TimelineEntry.CommentThread, host: CommentThreadCardHost) {
-    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+private fun ResolvedCard(thread: TimelineEntry.CommentThread, host: CommentThreadCardHost, borderColor: Color, modifier: Modifier) {
+    val shape = RoundedCornerShape(CARD_CORNER)
+    val expanded = host.isResolvedThreadExpanded(rootCommentId = thread.root.id)
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .border(CARD_BORDER_WIDTH, borderColor, shape)
+            .background(commentThreadContentBackground(), shape)
+            .clip(shape)
+    ) {
+        Box(modifier = Modifier.fillMaxWidth().padding(8.dp)) {
+            ResolvedCardThread(thread = thread, host = host, expanded = expanded)
+        }
+        if (expanded) {
+            CardThreadMiddle(thread = thread, host = host)
+        }
+    }
+}
+
+@Composable
+private fun ResolvedCardThread(thread: TimelineEntry.CommentThread, host: CommentThreadCardHost, expanded: Boolean) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(CARD_ACTION_GAP)
+    ) {
         Text(text = ConversationThreadRules.resolvedByText(thread.root.resolvedBy), color = JewelTheme.globalColors.text.info, modifier = Modifier.weight(1f))
+        OutlinedButton(
+            onClick = { host.setResolvedThreadExpanded(rootCommentId = thread.root.id, expanded = !expanded) }
+        ) {
+            val labelKey = when (expanded) {
+                true -> "main.branch.comments.actions.hideResolved"
+                false -> "main.branch.comments.actions.showResolved"
+            }
+            Text(text = BbCloudBundle.message(labelKey))
+        }
         OutlinedButton(
             onClick = { host.applyCommentChange(CommentChange.Unresolve(commentId = thread.root.id)) },
             enabled = !host.isUpdating(commentId = thread.root.id)
