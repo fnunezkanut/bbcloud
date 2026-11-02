@@ -1,5 +1,7 @@
 # CHANGELOG
 
+## *1.5.0* - 2026-11-02
+* Bugfix: Unable to leave multiple comments on same line, thanks Olszewski-Jakub!
 
 ## *1.4.0* - 2026-11-01
 * Fixed: keyboard input in diff and file-editor comment boxes (including paste) edits the comment instead of the read-only file

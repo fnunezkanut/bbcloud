@@ -4,9 +4,6 @@ A Manifest V3 Chrome extension that adds an **Open in IntelliJ** icon (the bbclo
 request on `bitbucket.org`. Clicking it opens that pull request in a git worktree in a running IntelliJ IDE that has
 the **bbcloud** plugin installed.
 
-This is the browser half of the feature described in the repository-root [`plan.md`](../plan.md). The IDE half is a
-REST endpoint provided by the bbcloud IntelliJ plugin.
-
 
 ## Install for your own use
 
