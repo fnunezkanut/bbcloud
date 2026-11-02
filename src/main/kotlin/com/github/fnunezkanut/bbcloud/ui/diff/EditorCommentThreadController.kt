@@ -22,6 +22,7 @@ import com.github.fnunezkanut.bbcloud.ui.main.ComposerDraftCache
 import com.github.fnunezkanut.bbcloud.ui.main.ConversationComposerKind
 import com.github.fnunezkanut.bbcloud.ui.main.ConversationComposerTarget
 import com.github.fnunezkanut.bbcloud.ui.main.PullRequestCommentFileOpener
+import com.github.fnunezkanut.bbcloud.ui.main.ResolvedThreadExpansion
 import com.intellij.collaboration.ui.codereview.comment.CommentInputActionsComponentFactory
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.ide.CopyPasteManager
@@ -56,6 +57,7 @@ internal class EditorCommentThreadController(
     override var openComposer: ConversationComposerTarget? by mutableStateOf(null)
         private set
     private var updatingCommentIds: Set<Long> by mutableStateOf(emptySet())
+    private val resolvedThreadExpansion = ResolvedThreadExpansion()
     override var avatarRevision: Int by mutableIntStateOf(0)
         private set
 
@@ -109,6 +111,15 @@ internal class EditorCommentThreadController(
         val urls = listOfNotNull(thread.root.author?.avatarUrl) + thread.replies.mapNotNull { reply -> reply.author?.avatarUrl }
         if (urls.isEmpty()) return
         avatarCache.prefetch(urls = urls, coroutineScope = coroutineScope, onLoaded = { avatarRevision++ })
+    }
+
+    override fun isResolvedThreadExpanded(rootCommentId: Long): Boolean {
+        return resolvedThreadExpansion[rootCommentId]
+    }
+
+    override fun setResolvedThreadExpanded(rootCommentId: Long, expanded: Boolean) {
+        LOG.info("User set resolved-thread-expanded=$expanded for thread $rootCommentId in pull request #$pullRequestIdValue")
+        resolvedThreadExpansion[rootCommentId] = expanded
     }
 
     override fun isUpdating(commentId: Long): Boolean {
