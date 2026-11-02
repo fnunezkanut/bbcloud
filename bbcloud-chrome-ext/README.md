@@ -13,7 +13,8 @@ REST endpoint provided by the bbcloud IntelliJ plugin.
 1. Open `chrome://extensions`.
 2. Turn on **Developer mode** (top-right).
 3. Click **Load unpacked** and select this `bbcloud-chrome-ext/` directory.
-4. Open any pull request listing on `bitbucket.org`. An **Open in IntelliJ** icon appears next to each PR
+4. Open a pull request list or a pull request page on `bitbucket.org`. An **Open in IntelliJ** icon appears next to
+   each PR in a list, or beside the PR title on detail pages (`/overview`, `/diff`, `/commits`, and other sub-tabs).
 
 
 ## How it works
@@ -26,10 +27,13 @@ the plugin icon                IDE port and POSTs the                 opens the 
                     ◀─result── {workspace, repo, pr}     ◀──JSON──    and replies with JSON
 ```
 
-- `content.js` runs on `https://bitbucket.org/*`. It finds pull request links by their **URL structure**
-  (`/<workspace>/<repo>/pull-requests/<n>`), not by CSS class, because Bitbucket's class names change between
-  frontend releases. It uses a `MutationObserver` to handle the single-page-app rows that load after the initial
-  render.
+- `content.js` runs on `https://bitbucket.org/*`.
+  - **List pages:** finds pull request links by **URL structure** (`/<workspace>/<repo>/pull-requests/<n>`), not by
+    CSS class, because Bitbucket's class names change between frontend releases.
+  - **Detail and sub-tab pages** (`/<workspace>/<repo>/pull-requests/<n>/overview`, `/diff`, `/commits`, etc.): reads
+    `workspace`, `repo`, and `pr` from the browser URL and injects the icon beside the PR title (`h1`), using stable
+    `data-testid` selectors where available.
+  - A `MutationObserver` and history hooks handle Bitbucket's single-page-app navigation after the initial render.
 - `background.js` (the service worker) scans ports **63342–63361** for a running JetBrains IDE that answers the
   bbcloud ping, caches the port for the browser session, then forwards the open request as a `POST`. The request has
   to come from the service worker because Chrome's Private Network Access and CORS rules block the page itself from
