@@ -70,6 +70,9 @@ internal class EditorCommentThreadController(
     override val mentions: Map<String, String>
         get() = context.mentionNames
 
+    override val mentionsPending: Boolean
+        get() = context.mentionsPending
+
     override val embeddedInEditor: Boolean
         get() = true
 

@@ -88,6 +88,8 @@ class BbCloudOtherProjectsPanel(
     private val reviewQueueService: BbCloudReviewQueueService,
     private val coroutineScope: CoroutineScope,
     private val onGoToSettings: () -> Unit,
+    private val onGoToWatchedProjects: () -> Unit,
+    private val onGoToWorkspace: () -> Unit,
     private val onRefreshRequested: () -> Unit
 ) {
     /** Prepares the per-pull-request git worktree the pull request is opened into, without mutating the shared clone. */
@@ -138,10 +140,21 @@ class BbCloudOtherProjectsPanel(
                 BbCloudBundle.message("workspace.watchedProjects.sync.unreadable.title")
             )
         },
+        onWatchedLimitReachedCallback = {
+            Messages.showWarningDialog(
+                watchedProjectsTabComponent,
+                BbCloudBundle.message(
+                    "workspace.watchedProjects.limit.message",
+                    WatchedProjectsViewModel.MAX_WATCHED_PROJECTS
+                ),
+                BbCloudBundle.message("workspace.watchedProjects.limit.title")
+            )
+        },
         onOpenLocalProjectCallback = ::openLocalCheckoutProject,
         onOpenWorktreeCallback = ::openWatchedPrWorktree,
         onPruneWorktreesCallback = ::pruneAllWatchedWorktrees,
-        onOpenWorktreesHelpCallback = ::openWorktreesHelp
+        onOpenWorktreesHelpCallback = ::openWorktreesHelp,
+        onGoToWorkspaceCallback = onGoToWorkspace
     )
 
     // One workspace header for the merged Workspace tab root.
@@ -172,7 +185,8 @@ class BbCloudOtherProjectsPanel(
             excludeContent = {
                 PullRequestExcludeCheckboxes(
                     filter = workspacePullRequestsViewModel.state.value.filter,
-                    viewModel = workspacePullRequestsViewModel
+                    viewModel = workspacePullRequestsViewModel,
+                    isCurrentUserKnown = workspacePullRequestsViewModel.state.value.isCurrentUserKnown
                 )
             },
             content = {
@@ -180,7 +194,9 @@ class BbCloudOtherProjectsPanel(
                     viewModel = workspacePullRequestsViewModel,
                     emptyMessageKey = "pullRequests.workspace.none",
                     errorMessageKey = "pullRequests.workspace.loadFailed",
-                    footer = { state -> WorkspacePullRequestsFooter(state = state) }
+                    footer = { state ->
+                        WorkspacePullRequestsFooter(state = state, onGoToWatchedProjects = onGoToWatchedProjects)
+                    }
                 )
             }
         )

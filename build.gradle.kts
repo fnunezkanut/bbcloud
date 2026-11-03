@@ -14,7 +14,7 @@ plugins {
 }
 
 group = "com.github.fnunezkanut"
-version = "1.5.0"
+version = "1.6.0"
 
 val isLocalBuild = providers.environmentVariable("CI").orNull.isNullOrEmpty()
 

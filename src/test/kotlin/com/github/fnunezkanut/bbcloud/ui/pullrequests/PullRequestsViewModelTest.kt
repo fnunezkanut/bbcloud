@@ -42,7 +42,7 @@ class PullRequestsViewModelTest {
             viewModel.onExcludeDraftsChanged(checked = true)
 
             // THEN the callback is given the updated filter, and the draft row is filtered out without a reload
-            verify { onFilterChanged(PullRequestListFilter(excludeResolved = false, excludeMine = false, excludeApprovedByMe = false, excludeDrafts = true)) }
+            verify { onFilterChanged(PullRequestListFilter(excludeResolved = false, excludeApprovedByMe = false, excludeDrafts = true)) }
             viewModel.state.value.rows.map { it.pullRequest.summary.id } shouldContainExactly listOf(1L)
         } finally {
             scope.cancel()

@@ -57,22 +57,30 @@ internal object CommentMentionResolver {
 
     /**
      * Replaces every mention outside code with a purple-styled `@DisplayName` fragment when [mentions] knows the account.
-     * Keys of [mentions] may use any form that [normalizeKey] accepts. A mention without an entry is left verbatim.
+     * Keys of [mentions] may use any form that [normalizeKey] accepts.
+     *
+     * A mention without an entry renders as `@<pendingLabel>` (bold, through the same markup as a name) while the names
+     * are still loading. When [pendingLabel] is null, such a mention is left verbatim. Mentions inside code are never
+     * changed.
      */
-    fun resolveMentions(body: String, mentions: Map<String, String>): String {
-        if (mentions.isEmpty() || !body.contains("@{")) {
+    fun resolveMentions(body: String, mentions: Map<String, String>, pendingLabel: String? = null): String {
+        if ((mentions.isEmpty() && pendingLabel == null) || !body.contains("@{")) {
             return body
         }
         val namesByKey = mentions.entries.associate { (key, name) -> normalizeKey(rawKey = key) to name }
         return MarkdownCodeRegions.splitCodeRegions(body = body).joinToString(separator = "") { segment ->
-            if (segment.isCode) segment.text else replaceTokens(text = segment.text, namesByKey = namesByKey)
+            if (segment.isCode) segment.text else replaceTokens(text = segment.text, namesByKey = namesByKey, pendingLabel = pendingLabel)
         }
     }
 
-    private fun replaceTokens(text: String, namesByKey: Map<String, String>): String {
+    private fun replaceTokens(text: String, namesByKey: Map<String, String>, pendingLabel: String?): String {
         return MENTION_TOKEN.replace(input = text) { match ->
-            val name = namesByKey[normalizeKey(rawKey = match.groupValues[1])] ?: return@replace match.value
-            mentionMarkdown(displayName = name)
+            val name = namesByKey[normalizeKey(rawKey = match.groupValues[1])]
+            when {
+                name != null -> mentionMarkdown(displayName = name)
+                pendingLabel != null -> mentionMarkdown(displayName = pendingLabel)
+                else -> match.value
+            }
         }
     }
 

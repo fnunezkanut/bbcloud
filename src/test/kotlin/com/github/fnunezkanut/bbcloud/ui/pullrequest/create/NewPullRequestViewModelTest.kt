@@ -1,5 +1,6 @@
 package com.github.fnunezkanut.bbcloud.ui.pullrequest.create
 
+import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import com.github.fnunezkanut.bbcloud.bitbucket.CreatePullRequestResult
 import com.github.fnunezkanut.bbcloud.bitbucket.ExistingPullRequestLookupResult
 import com.github.fnunezkanut.bbcloud.bitbucket.NewPullRequest
@@ -9,6 +10,7 @@ import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestSummary
 import com.github.fnunezkanut.bbcloud.bitbucket.RepositoryBranches
 import com.github.fnunezkanut.bbcloud.bitbucket.ReviewerCandidate
 import com.github.fnunezkanut.bbcloud.bitbucket.ReviewerCandidates
+import com.github.fnunezkanut.bbcloud.git.ParsedCommitMessage
 import com.github.fnunezkanut.bbcloud.git.WorkingTreeStatus
 import com.github.fnunezkanut.bbcloud.ui.main.AuthorAvatarCache
 import com.github.fnunezkanut.bbcloud.ui.main.ReviewerSearchRequest
@@ -17,9 +19,11 @@ import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
 import io.mockk.every
 import io.mockk.mockk
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.yield
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import kotlin.time.Instant
@@ -85,6 +89,9 @@ class NewPullRequestViewModelTest {
         findOpenPullRequest: suspend (String, String) -> ExistingPullRequestLookupResult = { _, _ -> ExistingPullRequestLookupResult.None },
         createPullRequest: suspend (NewPullRequest) -> CreatePullRequestResult = { CreatePullRequestResult.Created(summary(1)) },
         currentLocalBranch: String? = "feature/y",
+        initialTitle: String = "",
+        initialDescription: String = "",
+        loadLastCommitMessageForBranch: suspend (String) -> ParsedCommitMessage? = { null },
         loadWorkingTreeStatus: suspend () -> WorkingTreeStatus? = { WorkingTreeStatus(currentBranch = "feature/y", hasUncommittedChanges = false) },
         confirmExistingCheckRetry: () -> Boolean = { false },
         confirmDiscardDraft: () -> Boolean = { true },
@@ -101,6 +108,9 @@ class NewPullRequestViewModelTest {
             findOpenPullRequest = findOpenPullRequest,
             createPullRequest = createPullRequest,
             currentLocalBranch = currentLocalBranch,
+            initialTitle = initialTitle,
+            initialDescription = initialDescription,
+            loadLastCommitMessageForBranch = loadLastCommitMessageForBranch,
             openReviewerSearch = openReviewerSearch,
             loadWorkingTreeStatus = loadWorkingTreeStatus,
             confirmExistingCheckRetry = confirmExistingCheckRetry,
@@ -369,4 +379,168 @@ class NewPullRequestViewModelTest {
             // THEN
             vm.state.value.reviewers shouldBe emptyList()
         }
+
+    @Test
+    fun `initial prefill - seeds the title and description before the form starts`(): Unit =
+        runBlocking {
+            // GIVEN
+            val vm = buildViewModel(scope = this, initialTitle = "Commit subject", initialDescription = "Commit body")
+
+            // THEN
+            assertSoftly {
+                vm.state.value.title shouldBe "Commit subject"
+                vm.descriptionComposer.currentDraft() shouldBe "Commit body"
+            }
+        }
+
+    @Test
+    fun `start - keeps the seeded title and description when the branches load`(): Unit =
+        runBlocking {
+            // GIVEN
+            val vm = buildViewModel(scope = this, initialTitle = "Commit subject", initialDescription = "Commit body")
+
+            // WHEN
+            vm.start()
+            drain(this)
+
+            // THEN
+            assertSoftly {
+                vm.state.value.branchesLoad shouldBe BranchesLoad.Loaded
+                vm.state.value.title shouldBe "Commit subject"
+                vm.descriptionComposer.currentDraft() shouldBe "Commit body"
+            }
+        }
+
+    @Test
+    fun `onSourceSelected - replaces an untouched title and description with the new source's last commit`(): Unit =
+        runBlocking {
+            // GIVEN a form prefilled from the current checkout
+            val vm = buildViewModel(
+                scope = this,
+                initialTitle = "Open commit",
+                initialDescription = "Open body",
+                loadLastCommitMessageForBranch = { branchName ->
+                    ParsedCommitMessage(title = "Commit of $branchName", description = "Body of $branchName")
+                }
+            )
+            vm.start()
+            drain(this)
+
+            // WHEN
+            vm.onSourceSelected(vm.state.value.sourceOptions.indexOf("feature/x"))
+            drain(this)
+
+            // THEN
+            assertSoftly {
+                vm.state.value.selectedSource shouldBe "feature/x"
+                vm.state.value.title shouldBe "Commit of feature/x"
+                vm.descriptionComposer.currentDraft() shouldBe "Body of feature/x"
+            }
+        }
+
+    @Test
+    fun `onSourceSelected - fills an empty untouched description from the new source's commit body`(): Unit =
+        runBlocking {
+            // GIVEN a form whose checkout commit has no body
+            val vm = buildViewModel(
+                scope = this,
+                loadLastCommitMessageForBranch = { branchName ->
+                    ParsedCommitMessage(title = "Commit of $branchName", description = "Body of $branchName")
+                }
+            )
+            vm.start()
+            drain(this)
+
+            // WHEN
+            vm.onSourceSelected(vm.state.value.sourceOptions.indexOf("feature/x"))
+            drain(this)
+
+            // THEN
+            vm.descriptionComposer.currentDraft() shouldBe "Body of feature/x"
+        }
+
+    @Test
+    fun `onSourceSelected - keeps a title and description the user edited`(): Unit =
+        runBlocking {
+            // GIVEN a prefilled form the user has edited
+            val vm = buildViewModel(
+                scope = this,
+                initialTitle = "Open commit",
+                initialDescription = "Open body",
+                loadLastCommitMessageForBranch = { ParsedCommitMessage(title = "Other", description = "Other body") }
+            )
+            vm.start()
+            drain(this)
+            vm.onTitleChanged("mine")
+            vm.descriptionComposer.editorState.setTextAndPlaceCursorAtEnd("my body")
+
+            // WHEN
+            vm.onSourceSelected(vm.state.value.sourceOptions.indexOf("feature/x"))
+            drain(this)
+
+            // THEN
+            assertSoftly {
+                vm.state.value.title shouldBe "mine"
+                vm.descriptionComposer.currentDraft() shouldBe "my body"
+            }
+        }
+
+    @Test
+    fun `onSourceSelected - keeps the current fields when the new source's commit cannot be read`(): Unit =
+        runBlocking {
+            // GIVEN a prefilled form and a source whose commit cannot be read
+            val vm = buildViewModel(
+                scope = this,
+                initialTitle = "Open commit",
+                initialDescription = "Open body",
+                loadLastCommitMessageForBranch = { null }
+            )
+            vm.start()
+            drain(this)
+
+            // WHEN
+            vm.onSourceSelected(vm.state.value.sourceOptions.indexOf("feature/x"))
+            drain(this)
+
+            // THEN
+            assertSoftly {
+                vm.state.value.title shouldBe "Open commit"
+                vm.descriptionComposer.currentDraft() shouldBe "Open body"
+            }
+        }
+
+    @Test
+    fun `onSourceSelected - ignores a commit read that resolves after the source moved on`(): Unit =
+        runBlocking {
+            // GIVEN the commit read of feature/x is held back until the test releases it
+            val gate = CompletableDeferred<Unit>()
+            val vm = buildViewModel(
+                scope = this,
+                loadLastCommitMessageForBranch = { branchName ->
+                    if (branchName == "feature/x") {
+                        gate.await()
+                    }
+                    ParsedCommitMessage(title = "Commit of $branchName", description = "")
+                }
+            )
+            vm.start()
+            drain(this)
+
+            // WHEN feature/x is selected, then feature/y before the feature/x read resolves
+            vm.onSourceSelected(vm.state.value.sourceOptions.indexOf("feature/x"))
+            vm.onSourceSelected(vm.state.value.sourceOptions.indexOf("feature/y"))
+            repeat(STALE_READ_YIELDS) { yield() }
+            gate.complete(Unit)
+            drain(this)
+
+            // THEN the late feature/x result does not replace the feature/y prefill
+            assertSoftly {
+                vm.state.value.selectedSource shouldBe "feature/y"
+                vm.state.value.title shouldBe "Commit of feature/y"
+            }
+        }
+
+    private companion object {
+        const val STALE_READ_YIELDS = 5
+    }
 }

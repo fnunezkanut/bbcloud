@@ -200,12 +200,12 @@ class BbCloudSettingsTest {
         // WHEN
         val filter = settings.pullRequestListFilter(scope = PullRequestListScope.CurrentProject)
 
-        // THEN Resolved and Drafts default on; Mine and Approved by me default off
+        // THEN Resolved and Drafts default on, Approved by me defaults off, and Created by any user is selected
         filter shouldBe PullRequestListFilter(
             excludeResolved = true,
-            excludeMine = false,
             excludeApprovedByMe = false,
-            excludeDrafts = true
+            excludeDrafts = true,
+            authorScope = PullRequestAuthorScope.AnyUser
         )
     }
 
@@ -220,9 +220,9 @@ class BbCloudSettingsTest {
         // THEN the workspace scope offers no Resolved checkbox, so it always carries excludeResolved = false
         filter shouldBe PullRequestListFilter(
             excludeResolved = false,
-            excludeMine = false,
             excludeApprovedByMe = false,
-            excludeDrafts = true
+            excludeDrafts = true,
+            authorScope = PullRequestAuthorScope.AnyUser
         )
     }
 
@@ -234,16 +234,21 @@ class BbCloudSettingsTest {
         // WHEN saved and read back
         settings.savePullRequestListFilter(
             scope = PullRequestListScope.Workspace,
-            filter = PullRequestListFilter(excludeResolved = true, excludeMine = true, excludeApprovedByMe = true, excludeDrafts = false)
+            filter = PullRequestListFilter(
+                excludeResolved = true,
+                excludeApprovedByMe = true,
+                excludeDrafts = false,
+                authorScope = PullRequestAuthorScope.Me
+            )
         )
         val reread = settings.pullRequestListFilter(scope = PullRequestListScope.Workspace)
 
         // THEN excludeResolved is not persisted for the workspace scope, but the other flags are
         reread shouldBe PullRequestListFilter(
             excludeResolved = false,
-            excludeMine = true,
             excludeApprovedByMe = true,
-            excludeDrafts = false
+            excludeDrafts = false,
+            authorScope = PullRequestAuthorScope.Me
         )
     }
 
@@ -255,26 +260,36 @@ class BbCloudSettingsTest {
         // WHEN each scope saves a distinct filter
         settings.savePullRequestListFilter(
             scope = PullRequestListScope.CurrentProject,
-            filter = PullRequestListFilter(excludeResolved = false, excludeMine = true, excludeApprovedByMe = false, excludeDrafts = false)
+            filter = PullRequestListFilter(
+                excludeResolved = false,
+                excludeApprovedByMe = false,
+                excludeDrafts = false,
+                authorScope = PullRequestAuthorScope.Me
+            )
         )
         settings.savePullRequestListFilter(
             scope = PullRequestListScope.Workspace,
-            filter = PullRequestListFilter(excludeResolved = false, excludeMine = false, excludeApprovedByMe = true, excludeDrafts = true)
+            filter = PullRequestListFilter(
+                excludeResolved = false,
+                excludeApprovedByMe = true,
+                excludeDrafts = true,
+                authorScope = PullRequestAuthorScope.AnyUser
+            )
         )
 
         // THEN each scope reads back its own values without interference
         assertSoftly {
             settings.pullRequestListFilter(scope = PullRequestListScope.CurrentProject) shouldBe PullRequestListFilter(
                 excludeResolved = false,
-                excludeMine = true,
                 excludeApprovedByMe = false,
-                excludeDrafts = false
+                excludeDrafts = false,
+                authorScope = PullRequestAuthorScope.Me
             )
             settings.pullRequestListFilter(scope = PullRequestListScope.Workspace) shouldBe PullRequestListFilter(
                 excludeResolved = false,
-                excludeMine = false,
                 excludeApprovedByMe = true,
-                excludeDrafts = true
+                excludeDrafts = true,
+                authorScope = PullRequestAuthorScope.AnyUser
             )
         }
     }
@@ -285,11 +300,21 @@ class BbCloudSettingsTest {
         val settings = BbCloudSettings()
         settings.savePullRequestListFilter(
             scope = PullRequestListScope.CurrentProject,
-            filter = PullRequestListFilter(excludeResolved = false, excludeMine = true, excludeApprovedByMe = true, excludeDrafts = false)
+            filter = PullRequestListFilter(
+                excludeResolved = false,
+                excludeApprovedByMe = true,
+                excludeDrafts = false,
+                authorScope = PullRequestAuthorScope.Me
+            )
         )
         settings.savePullRequestListFilter(
             scope = PullRequestListScope.Workspace,
-            filter = PullRequestListFilter(excludeResolved = false, excludeMine = true, excludeApprovedByMe = false, excludeDrafts = false)
+            filter = PullRequestListFilter(
+                excludeResolved = false,
+                excludeApprovedByMe = false,
+                excludeDrafts = false,
+                authorScope = PullRequestAuthorScope.Me
+            )
         )
 
         // WHEN the state is serialized to XML and deserialized back
@@ -302,15 +327,15 @@ class BbCloudSettingsTest {
         assertSoftly {
             reloaded.pullRequestListFilter(scope = PullRequestListScope.CurrentProject) shouldBe PullRequestListFilter(
                 excludeResolved = false,
-                excludeMine = true,
                 excludeApprovedByMe = true,
-                excludeDrafts = false
+                excludeDrafts = false,
+                authorScope = PullRequestAuthorScope.Me
             )
             reloaded.pullRequestListFilter(scope = PullRequestListScope.Workspace) shouldBe PullRequestListFilter(
                 excludeResolved = false,
-                excludeMine = true,
                 excludeApprovedByMe = false,
-                excludeDrafts = false
+                excludeDrafts = false,
+                authorScope = PullRequestAuthorScope.Me
             )
         }
     }

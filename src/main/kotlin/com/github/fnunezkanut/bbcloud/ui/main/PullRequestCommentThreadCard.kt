@@ -89,6 +89,10 @@ interface CommentThreadCardHost {
     /** Display names of the `@{account-key}` mentions in the comments, keyed by normalized account key; see `CommentMentionResolver`. */
     val mentions: Map<String, String>
 
+    /** True while some `@{account-key}` mention in [mentions] is still being looked up; unnamed mentions then show a placeholder. */
+    val mentionsPending: Boolean
+        get() = false
+
     fun avatarIconFor(url: String?): javax.swing.Icon
 
     fun isUpdating(commentId: Long): Boolean
@@ -323,7 +327,13 @@ private fun CardMetaBlock(comment: PullRequestComment, headlineKind: Conversatio
             if (comment.isDeleted) {
                 Text(text = BbCloudBundle.message("main.branch.history.comment.deleted"))
             } else {
-                MarkdownDescription(markdown = ConversationThreadRules.commentBodyMarkdown(comment = comment, mentions = host.mentions))
+                MarkdownDescription(
+                    markdown = ConversationThreadRules.commentBodyMarkdown(
+                        comment = comment,
+                        mentions = host.mentions,
+                        pendingMentionLabel = if (host.mentionsPending) BbCloudBundle.message("main.branch.history.mention.pending") else null
+                    )
+                )
             }
         }
         if (host.openComposer?.kind == ConversationComposerKind.Edit && host.openComposer?.commentId == comment.id) {

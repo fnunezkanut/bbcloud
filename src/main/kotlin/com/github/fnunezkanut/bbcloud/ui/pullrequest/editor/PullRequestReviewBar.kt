@@ -93,8 +93,7 @@ internal class PullRequestReviewBar internal constructor(
             action: ReviewBarAction?,
             onAddComment: () -> Unit,
             project: Project,
-            navigator: ReviewBarDiffChainNavigator?,
-            addCommentTooltip: String? = null
+            navigator: ReviewBarDiffChainNavigator?
         ): PullRequestReviewBar {
             val bar = PullRequestReviewBar(
                 relativePath = relativePath,
@@ -159,8 +158,7 @@ internal class PullRequestReviewBar internal constructor(
                             )
                         }
                     },
-                    onAddComment = onAddComment,
-                    addCommentTooltip = addCommentTooltip
+                    onAddComment = onAddComment
                 )
             }
             bar.composePanel = panel

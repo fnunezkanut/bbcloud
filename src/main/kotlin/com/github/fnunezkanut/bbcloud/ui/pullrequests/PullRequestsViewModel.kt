@@ -4,6 +4,7 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestState
 import com.github.fnunezkanut.bbcloud.bitbucket.ReviewingPullRequest
+import com.github.fnunezkanut.bbcloud.settings.PullRequestAuthorScope
 import com.github.fnunezkanut.bbcloud.settings.PullRequestListFilter
 import com.github.fnunezkanut.bbcloud.settings.PullRequestListScope
 import com.github.fnunezkanut.bbcloud.ui.main.AuthorAvatarCache
@@ -50,7 +51,7 @@ class PullRequestsViewModel(
     /** Incremented by [beginRefresh]; stale responses are ignored so a slow reload cannot overwrite a newer one. */
     private var refreshGeneration: Long = 0
 
-    private val avatarCache = AuthorAvatarCache(avatarSize = 48)
+    private val avatarCache = AuthorAvatarCache(avatarSize = LISTING_AUTHOR_AVATAR_SIZE_DP)
 
     /** The visible entries, keyed for action routing; rebuilt by [recompute]. */
     private var visibleEntriesByKey: Map<PullRequestListKey, PullRequestListEntry> = emptyMap()
@@ -135,9 +136,9 @@ class PullRequestsViewModel(
         updateFilter(filter = state.value.filter.copy(excludeResolved = checked))
     }
 
-    fun onExcludeMineChanged(checked: Boolean) {
-        LOG.info("User toggled the Exclude Mine checkbox on the $logName tab: checked=$checked")
-        updateFilter(filter = state.value.filter.copy(excludeMine = checked))
+    fun onAuthorScopeChanged(authorScope: PullRequestAuthorScope) {
+        LOG.info("User changed the Created by dropdown on the $logName tab: authorScope=$authorScope")
+        updateFilter(filter = state.value.filter.copy(authorScope = authorScope))
     }
 
     fun onExcludeApprovedByMeChanged(checked: Boolean) {
@@ -199,6 +200,14 @@ class PullRequestsViewModel(
 
     private fun recompute() {
         val filter = state.value.filter
+        val isCurrentUserKnown = !currentUserUuid.isNullOrBlank()
+        // Created by me needs the current user's uuid. Until it is known, the dropdown offers only Created by any user,
+        // so the rows are filtered as AnyUser. The saved Me choice stays in the filter and applies once the uuid arrives.
+        val effectiveFilter = if (!isCurrentUserKnown && filter.authorScope == PullRequestAuthorScope.Me) {
+            filter.copy(authorScope = PullRequestAuthorScope.AnyUser)
+        } else {
+            filter
+        }
         val entriesBySource = sources
             .mapNotNull { (source, sourceState) ->
                 (sourceState as? PullRequestSourceState.Loaded)?.let { loaded -> source to loaded.entries }
@@ -207,7 +216,7 @@ class PullRequestsViewModel(
         val merged = PullRequestListMerger.merge(entriesBySource = entriesBySource, openFirst = scope.openFirst)
         val visibleEntries = PullRequestListFiltering.apply(
             entries = merged,
-            filter = filter,
+            filter = effectiveFilter,
             currentUserUuid = currentUserUuid
         )
         visibleEntriesByKey = visibleEntries.associateBy { entry -> entry.key }
@@ -227,9 +236,7 @@ class PullRequestsViewModel(
         val totalCount = merged.size
         val card = derivePullRequestsCard(sources = sources, totalCount = totalCount, visibleCount = rows.size)
         val anyLoaded = sources.values.any { sourceState -> sourceState is PullRequestSourceState.Loaded }
-        val isUserFilterUnavailable = (filter.excludeMine || filter.excludeApprovedByMe) &&
-            currentUserUuid == null &&
-            anyLoaded
+        val isUserFilterUnavailable = filter.excludeApprovedByMe && !isCurrentUserKnown && anyLoaded
         // The pill tracks the visible open rows (after filters), so toggling an Exclude checkbox updates it (decision 4c).
         val visibleOpenCount = visibleEntries.count { entry -> entry.pullRequest.summary.state == PullRequestState.Open }
         state.value = state.value.copy(
@@ -242,7 +249,8 @@ class PullRequestsViewModel(
                 .filterValues { sourceState -> sourceState is PullRequestSourceState.Loaded && sourceState.isTruncated }
                 .keys,
             loadedSources = sources.filterValues { sourceState -> sourceState is PullRequestSourceState.Loaded }.keys,
-            isUserFilterUnavailable = isUserFilterUnavailable
+            isUserFilterUnavailable = isUserFilterUnavailable,
+            isCurrentUserKnown = isCurrentUserKnown
         )
         LOG.debug("$logName: merged $totalCount rows, ${rows.size} visible after filters")
         onCountsChanged(visibleOpenCount, card)

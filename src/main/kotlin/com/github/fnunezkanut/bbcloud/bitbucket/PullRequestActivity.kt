@@ -108,15 +108,17 @@ sealed interface ActivityFeedEntry : TimelineEntry
 /**
  * Comment threads for the Activity timeline of the pull-request page.
  * Threads are sorted newest first.
- * [mentions] maps a normalized account UUID to the display name shown for `@{uuid}` mentions; unresolved UUIDs map to
- * the localized unknown-user label.
+ * [mentions] maps a normalized account key to the display name shown for `@{account-key}` mentions. It holds the names
+ * known when the conversation was built. When [mentionsPending] is true, some mentioned accounts are still unnamed, and
+ * the caller resolves them later with `BbCloudOpenPullRequestService.pullRequestMentionNames`.
  */
 data class PullRequestConversation(
     val threads: List<TimelineEntry.CommentThread>,
     val currentUserUuid: String?,
     val currentUserAvatarUrl: String?,
     val isTruncated: Boolean,
-    val mentions: Map<String, String> = emptyMap()
+    val mentions: Map<String, String> = emptyMap(),
+    val mentionsPending: Boolean = false
 )
 
 /**

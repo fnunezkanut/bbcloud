@@ -231,6 +231,11 @@ class CommentComposerViewModel(private val input: CommentInput, private val star
         return editorState.text.toString()
     }
 
+    /** Replaces the whole draft with [text] and places the caret at its end. Used to prefill the new pull request form. */
+    fun replaceDraft(text: String) {
+        editorState.setTextAndPlaceCursorAtEnd(text)
+    }
+
     /** The placeholder of the collapsed field. */
     fun placeholder(): String {
         return input.placeholder

@@ -29,6 +29,9 @@ import com.github.fnunezkanut.bbcloud.config.BbCloudConfigurationService
 import com.github.fnunezkanut.bbcloud.git.BbCloudBranchCheckoutService
 import com.github.fnunezkanut.bbcloud.git.BbCloudWorktreeService
 import com.github.fnunezkanut.bbcloud.git.BranchCheckoutResult
+import com.github.fnunezkanut.bbcloud.git.CommitMessageParser
+import com.github.fnunezkanut.bbcloud.git.LastCommitMessageReader
+import com.github.fnunezkanut.bbcloud.git.ParsedCommitMessage
 import com.github.fnunezkanut.bbcloud.project.LocalRepositoryProjectOpener
 import com.github.fnunezkanut.bbcloud.project.ProjectRepositoryResolver
 import com.github.fnunezkanut.bbcloud.project.PullRequestWorktreeListing
@@ -77,11 +80,30 @@ import java.nio.file.Path
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.swing.JComponent
 
-/** The three cards the single Current Project tab root can show. */
-private enum class ViewCard {
+/**
+ * The cards the single Current Project tab root can show.
+ *
+ * [Checking] is the neutral card shown while the project repository status is being resolved, so no listing chrome
+ * appears for a project that turns out not to be a Bitbucket repository.
+ */
+internal enum class ViewCard {
     NotConfigured,
+    Checking,
     Listing,
     ProjectStatus
+}
+
+/**
+ * Picks the card the Current Project tab root shows once the repository status is resolved. Only a verified
+ * Bitbucket repository reveals the listing; every other outcome shows the centered project status.
+ */
+internal fun viewCardFor(status: ProjectRepositoryStatus): ViewCard {
+    return when (status) {
+        is ProjectRepositoryStatus.Found -> ViewCard.Listing
+        is ProjectRepositoryStatus.NotFound,
+        ProjectRepositoryStatus.NoLocalProjectPath,
+        is ProjectRepositoryStatus.CheckFailed -> ViewCard.ProjectStatus
+    }
 }
 
 /** The centered status message that stands in for the whole body of the Current Project tab root. */
@@ -110,6 +132,7 @@ private fun ProjectRootContent(
     Box(modifier = Modifier.fillMaxSize().padding(8.dp)) {
         when (card) {
             ViewCard.NotConfigured -> NotConfiguredContent(onGoToSettings = onGoToSettings)
+            ViewCard.Checking -> CheckingContent()
             ViewCard.ProjectStatus -> CenteredProjectStatusContent(status = centeredStatus)
             ViewCard.Listing -> Column(modifier = Modifier.fillMaxSize()) {
                 ProjectStatusHeader(
@@ -124,6 +147,14 @@ private fun ProjectRootContent(
                 }
             }
         }
+    }
+}
+
+/** The centered text shown while the project repository status is being resolved. No listing chrome is drawn. */
+@Composable
+private fun CheckingContent() {
+    CenteredContent {
+        Text(text = BbCloudBundle.message("main.checking"))
     }
 }
 
@@ -196,8 +227,8 @@ class BbCloudMainPanel(
         onCreatePullRequestRequested = { openNewPullRequestEditor() }
     )
 
-    /** The three cards of the Current Project tab root, driven by Compose state instead of a Swing CardLayout. */
-    private val projectCard: MutableState<ViewCard> = mutableStateOf(ViewCard.Listing)
+    /** The cards of the Current Project tab root, driven by Compose state instead of a Swing CardLayout. */
+    private val projectCard: MutableState<ViewCard> = mutableStateOf(ViewCard.Checking)
 
     /**
      * Stands in for the whole body when the project repository status cannot be resolved: the listing and
@@ -218,7 +249,8 @@ class BbCloudMainPanel(
             excludeContent = {
                 PullRequestExcludeCheckboxes(
                     filter = projectPullRequestsViewModel.state.value.filter,
-                    viewModel = projectPullRequestsViewModel
+                    viewModel = projectPullRequestsViewModel,
+                    isCurrentUserKnown = projectPullRequestsViewModel.state.value.isCurrentUserKnown
                 )
             },
             listing = {
@@ -261,9 +293,8 @@ class BbCloudMainPanel(
         projectHeaderViewModel.reset()
         projectHeaderViewModel.setRefreshVisible(visible = false)
         projectHeaderViewModel.setCreatePullRequestVisible(visible = false)
-        showCard(ViewCard.Listing)
+        showCard(ViewCard.Checking)
         projectPullRequestsViewModel.showHidden()
-        projectHeaderViewModel.showChecking()
 
         coroutineScope.launch {
             val organizationUrl = configurationService.organizationUrlOrNull()
@@ -300,6 +331,8 @@ class BbCloudMainPanel(
 
     private fun applyProjectStatus(status: ProjectRepositoryStatus) {
         LOG.debug("Project repository status resolved: $status")
+        // The only place that leaves the Checking card. The listing is revealed for a verified Bitbucket repository only.
+        showCard(viewCardFor(status))
         when (status) {
             is ProjectRepositoryStatus.Found -> {
                 repositoryWebUrl = status.repositoryWebUrl
@@ -342,13 +375,13 @@ class BbCloudMainPanel(
     }
 
     /**
-     * Replaces the whole body with [message] centered on both axes. Used by the statuses that leave nothing
-     * to list and no way to retry, so the message is the entire content of the tab.
+     * Sets the centered [message] that fills the whole body of the ProjectStatus card. Used by the statuses that
+     * leave nothing to list and no way to retry, so the message is the entire content of the tab. The card itself is
+     * chosen by [applyProjectStatus].
      */
     private fun showCenteredProjectStatus(icon: ImageBitmap?, message: String) {
         val status = CenteredProjectStatus(icon = icon, message = message)
         projectCenteredStatus.value = status
-        showCard(ViewCard.ProjectStatus)
     }
 
     private fun triggerLoadPullRequests(source: String) {
@@ -904,6 +937,7 @@ class BbCloudMainPanel(
         }
         coroutineScope.launch {
             val currentLocalBranch = withContext(Dispatchers.IO) { readCurrentLocalBranch(project = project) }
+            val lastCommit = withContext(Dispatchers.IO) { readLastCommitPrefill(project = project) }
             ApplicationManager.getApplication().invokeLater {
                 if (project.isDisposed) {
                     return@invokeLater
@@ -914,11 +948,24 @@ class BbCloudMainPanel(
                         workspace = repository.workspace,
                         repositorySlug = repository.repoSlug,
                         repositoryWebUrl = repositoryWebUrl,
-                        currentLocalBranch = currentLocalBranch
+                        currentLocalBranch = currentLocalBranch,
+                        prefilledTitle = lastCommit.title,
+                        prefilledDescription = lastCommit.description,
+                        worktreePath = project.basePath
                     )
                 )
             }
         }
+    }
+
+    /** Reads the last commit of the current checkout and splits it into a title and description; empty when unreadable. */
+    private suspend fun readLastCommitPrefill(project: Project): ParsedCommitMessage {
+        val rawMessage = project.basePath?.let { basePath ->
+            LastCommitMessageReader.readLastCommitMessage(worktreePath = Path.of(basePath))
+        }
+        LOG.debug("Read the last commit for the new pull request prefill: found=${rawMessage != null}")
+        return rawMessage?.let { raw -> CommitMessageParser.parse(rawMessage = raw) }
+            ?: ParsedCommitMessage(title = "", description = "")
     }
 
     private fun readCurrentLocalBranch(project: Project): String? {

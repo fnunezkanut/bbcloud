@@ -1,16 +1,23 @@
 package com.github.fnunezkanut.bbcloud.settings
 
 /**
- * The Exclude: checkbox states of one pull request tab. Defaults match a fresh install.
- * [excludeResolved] is only offered on the Current Project tab; the Workspace filter always carries false.
+ * The filter state of one pull request tab: the three Exclude checkboxes and the "Created by" dropdown. Defaults
+ * match a fresh install. [excludeResolved] is only offered on the Current Project tab; the Workspace filter always
+ * carries false. [authorScope] restricts the list to the current user's pull requests when set to
+ * [PullRequestAuthorScope.Me].
  */
 data class PullRequestListFilter(
     val excludeResolved: Boolean = true,
-    // UI label "Mine": hides the PRs the current user authored.
-    val excludeMine: Boolean = false,
     val excludeApprovedByMe: Boolean = false,
-    val excludeDrafts: Boolean = true
+    val excludeDrafts: Boolean = true,
+    val authorScope: PullRequestAuthorScope = PullRequestAuthorScope.AnyUser
 )
+
+/** The "Created by" dropdown selection for a pull request tab. [AnyUser] is the default and applies no author restriction. */
+enum class PullRequestAuthorScope {
+    AnyUser,
+    Me
+}
 
 /**
  * The tab a [PullRequestListFilter] belongs to. [offersResolved] says whether its Exclude: checkboxes include Resolved.

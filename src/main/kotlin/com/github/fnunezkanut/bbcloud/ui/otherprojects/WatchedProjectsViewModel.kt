@@ -50,7 +50,8 @@ interface WatchedProjectsDataSource {
  * state. Worktree discovery stays here because it is presentation data needed to render each row. Binding the stored
  * mappings, toggling watched flags, and rescanning the projects directory are orchestrated here against
  * [dataSource]; the host only switches its card ([onShowContentCallback], [onShowNotConfiguredCallback]) and shows the
- * unreadable-directory dialog ([onProjectsDirectoryUnreadableCallback]), which needs a Swing parent.
+ * unreadable-directory dialog ([onProjectsDirectoryUnreadableCallback]), which needs a Swing parent. The host also shows
+ * the watched-limit warning ([onWatchedLimitReachedCallback]) when a selection would exceed [MAX_WATCHED_PROJECTS].
  */
 class WatchedProjectsViewModel(
     private val coroutineScope: CoroutineScope,
@@ -58,10 +59,12 @@ class WatchedProjectsViewModel(
     private val onShowContentCallback: () -> Unit,
     private val onShowNotConfiguredCallback: () -> Unit,
     private val onProjectsDirectoryUnreadableCallback: () -> Unit,
+    private val onWatchedLimitReachedCallback: () -> Unit,
     private val onOpenLocalProjectCallback: (WatchedProjectMapping) -> Unit,
     private val onOpenWorktreeCallback: (WatchedProjectMapping, WatchedProjectWorktreeRow) -> Unit,
     private val onPruneWorktreesCallback: () -> Unit,
     private val onOpenWorktreesHelpCallback: () -> Unit,
+    private val onGoToWorkspaceCallback: () -> Unit,
     private val runOnEdt: (() -> Unit) -> Unit = { block -> ApplicationManager.getApplication().invokeLater(block) }
 ) {
     val state: MutableState<WatchedProjectsUiState> = mutableStateOf(WatchedProjectsUiState())
@@ -286,22 +289,33 @@ class WatchedProjectsViewModel(
         state.value = state.value.copy(pruneEnabled = !inProgress)
     }
 
+    /**
+     * Sets the watched flag of one project. Ticking a project on is refused when [MAX_WATCHED_PROJECTS] projects are
+     * already watched; the host then shows the limit warning and the row stays unchecked. Unticking is always allowed.
+     */
     fun onWatchedChanged(mapping: WatchedProjectMapping, watched: Boolean) {
         LOG.info("User toggled the watched checkbox of ${mapping.remoteRepoSlug} to watched=$watched")
+        if (watched && !canWatchProject(slug = mapping.remoteRepoSlug)) {
+            LOG.info("Watched project limit of $MAX_WATCHED_PROJECTS reached; refusing to watch ${mapping.remoteRepoSlug}")
+            onWatchedLimitReachedCallback()
+            refreshWatchedRows()
+            return
+        }
         dataSource.setWatched(mapping = mapping, watched = watched)
         refreshWatchedRows()
     }
 
     /**
      * Watches or unwatches the projects the master checkbox covers. Without a search query that is every project. With
-     * an active query it is only the visible rows, so hidden projects keep their watched flag.
+     * an active query it is only the visible rows, so hidden projects keep their watched flag. Watching never takes the
+     * watched count above [MAX_WATCHED_PROJECTS]; the excess is left unwatched and the limit warning is shown.
      */
     fun onMasterToggleClicked() {
         val query = state.value.searchQuery
         val watched = state.value.masterToggle != ToggleableState.On
         if (query.isBlank()) {
             LOG.info("User toggled the master watched checkbox to watched=$watched")
-            dataSource.setAllWatched(watched = watched)
+            setAllWatchedWithinLimit(watched = watched)
             refreshWatchedRows()
             return
         }
@@ -311,10 +325,71 @@ class WatchedProjectsViewModel(
             return
         }
         LOG.info("User toggled the master watched checkbox of ${targets.size} filtered projects to watched=$watched")
-        targets.forEach { row ->
-            dataSource.setWatched(mapping = row.mapping, watched = watched)
+        if (watched) {
+            watchVisibleWithinLimit(targets = targets)
+        } else {
+            targets.forEach { row ->
+                dataSource.setWatched(mapping = row.mapping, watched = false)
+            }
         }
         refreshWatchedRows()
+    }
+
+    /** Whether the project [slug] may be watched now: it already is, or fewer than [MAX_WATCHED_PROJECTS] are watched. */
+    private fun canWatchProject(slug: String): Boolean {
+        val stored = dataSource.watchedProjectsWithLocalPaths()
+        val alreadyWatched = stored.any { mapping -> mapping.remoteRepoSlug == slug && mapping.watched }
+        return alreadyWatched || stored.count { mapping -> mapping.watched } < MAX_WATCHED_PROJECTS
+    }
+
+    /**
+     * Select-all without a filter. Unwatching clears every project. Watching sets every project when there are at most
+     * [MAX_WATCHED_PROJECTS]; otherwise the first [MAX_WATCHED_PROJECTS] in stored (slug) order are watched, the rest
+     * are left unwatched, and the limit warning is shown.
+     */
+    private fun setAllWatchedWithinLimit(watched: Boolean) {
+        if (!watched) {
+            dataSource.setAllWatched(watched = false)
+            return
+        }
+        val stored = dataSource.watchedProjectsWithLocalPaths()
+        if (stored.size <= MAX_WATCHED_PROJECTS) {
+            dataSource.setAllWatched(watched = true)
+            return
+        }
+        LOG.info("Watched project limit of $MAX_WATCHED_PROJECTS reached on select-all; watching the first $MAX_WATCHED_PROJECTS")
+        stored.forEachIndexed { index, mapping ->
+            dataSource.setWatched(mapping = mapping, watched = index < MAX_WATCHED_PROJECTS)
+        }
+        onWatchedLimitReachedCallback()
+    }
+
+    /**
+     * Filtered select-all. Watches the visible projects in display order until the remaining budget
+     * ([MAX_WATCHED_PROJECTS] minus the projects already watched) is used up. Projects already watched cost nothing. The
+     * limit warning is shown when at least one visible project could not be watched.
+     */
+    private fun watchVisibleWithinLimit(targets: List<WatchedProjectRow>) {
+        val stored = dataSource.watchedProjectsWithLocalPaths()
+        val watchedBySlug = stored.associate { mapping -> mapping.remoteRepoSlug to mapping.watched }
+        var remaining = MAX_WATCHED_PROJECTS - stored.count { mapping -> mapping.watched }
+        var limitReached = false
+        targets.forEach { row ->
+            val alreadyWatched = watchedBySlug[row.mapping.remoteRepoSlug] == true
+            if (alreadyWatched) {
+                return@forEach
+            }
+            if (remaining > 0) {
+                dataSource.setWatched(mapping = row.mapping, watched = true)
+                remaining--
+            } else {
+                limitReached = true
+            }
+        }
+        if (limitReached) {
+            LOG.info("Watched project limit of $MAX_WATCHED_PROJECTS reached on filtered select-all")
+            onWatchedLimitReachedCallback()
+        }
     }
 
     /**
@@ -360,6 +435,11 @@ class WatchedProjectsViewModel(
     fun onWorktreesHelpClicked() {
         LOG.info("User clicked the What are Work Trees? link")
         onOpenWorktreesHelpCallback()
+    }
+
+    fun onGoToWorkspaceClicked() {
+        LOG.info("User opened the Workspace tab from the Watched Projects footer link")
+        onGoToWorkspaceCallback()
     }
 
     fun avatarIconFor(url: String?): javax.swing.Icon {
@@ -460,5 +540,8 @@ class WatchedProjectsViewModel(
 
     companion object {
         private val LOG = logger<WatchedProjectsViewModel>()
+
+        /** The most projects that can be watched at once, to bound the Bitbucket API calls the Workspace tab makes. */
+        const val MAX_WATCHED_PROJECTS = 20
     }
 }

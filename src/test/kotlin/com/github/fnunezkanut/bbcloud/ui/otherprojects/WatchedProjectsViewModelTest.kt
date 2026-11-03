@@ -69,6 +69,19 @@ class WatchedProjectsViewModelTest {
     }
 
     @Test
+    fun `onGoToWorkspaceClicked - invokes the go-to-workspace callback once`() {
+        // GIVEN
+        var workspaceCalls = 0
+        val viewModel = viewModel(onGoToWorkspace = { workspaceCalls++ })
+
+        // WHEN
+        viewModel.onGoToWorkspaceClicked()
+
+        // THEN
+        workspaceCalls shouldBe 1
+    }
+
+    @Test
     fun `bindWatchedProjects - routes to not-configured and hides Sync when no projects directory is set`() {
         // GIVEN
         val dataSource = FakeWatchedProjectsDataSource(projectsDirectorySet = false)
@@ -360,9 +373,177 @@ class WatchedProjectsViewModelTest {
         }
     }
 
+    @Nested
+    inner class WatchedLimitTest {
+        @Test
+        fun `onWatchedChanged - at the limit refuses a new tick, warns, and leaves the flag unchanged`() {
+            // GIVEN
+            val host = HostCalls()
+            val dataSource = FakeWatchedProjectsDataSource(mappings = watchedAndUnwatched(watched = 20, unwatched = 1))
+            val viewModel = viewModel(dataSource = dataSource, host = host)
+            viewModel.bindWatchedProjects()
+
+            // WHEN
+            viewModel.onWatchedChanged(mapping = mapping("repo-21"), watched = true)
+
+            // THEN
+            assertSoftly {
+                host.limitReached shouldBe 1
+                dataSource.setWatchedCalls shouldBe emptyList()
+                dataSource.mappings.last().watched shouldBe false
+                viewModel.state.value.rows.last().mapping.watched shouldBe false
+            }
+        }
+
+        @Test
+        fun `onWatchedChanged - below the limit allows the tick without warning`() {
+            // GIVEN
+            val host = HostCalls()
+            val dataSource = FakeWatchedProjectsDataSource(mappings = watchedAndUnwatched(watched = 19, unwatched = 1))
+            val viewModel = viewModel(dataSource = dataSource, host = host)
+            viewModel.bindWatchedProjects()
+
+            // WHEN
+            viewModel.onWatchedChanged(mapping = mapping("repo-20"), watched = true)
+
+            // THEN
+            assertSoftly {
+                dataSource.mappings.last().watched shouldBe true
+                host.limitReached shouldBe 0
+            }
+        }
+
+        @Test
+        fun `onWatchedChanged - unticking is always allowed even at the limit`() {
+            // GIVEN
+            val host = HostCalls()
+            val dataSource = FakeWatchedProjectsDataSource(mappings = watchedAndUnwatched(watched = 20, unwatched = 0))
+            val viewModel = viewModel(dataSource = dataSource, host = host)
+            viewModel.bindWatchedProjects()
+
+            // WHEN
+            viewModel.onWatchedChanged(mapping = mapping("repo-05", watched = true), watched = false)
+
+            // THEN
+            assertSoftly {
+                dataSource.mappings.count { mapping -> mapping.watched } shouldBe 19
+                host.limitReached shouldBe 0
+            }
+        }
+
+        @Test
+        fun `onWatchedChanged - re-ticking an already watched row does not warn`() {
+            // GIVEN
+            val host = HostCalls()
+            val dataSource = FakeWatchedProjectsDataSource(mappings = watchedAndUnwatched(watched = 20, unwatched = 0))
+            val viewModel = viewModel(dataSource = dataSource, host = host)
+            viewModel.bindWatchedProjects()
+
+            // WHEN
+            viewModel.onWatchedChanged(mapping = mapping("repo-01", watched = true), watched = true)
+
+            // THEN
+            assertSoftly {
+                dataSource.mappings.count { mapping -> mapping.watched } shouldBe 20
+                host.limitReached shouldBe 0
+            }
+        }
+
+        @Test
+        fun `onMasterToggleClicked - without a filter and more than 20 projects watches the first 20 and warns`() {
+            // GIVEN
+            val host = HostCalls()
+            val dataSource = FakeWatchedProjectsDataSource(mappings = watchedAndUnwatched(watched = 0, unwatched = 25))
+            val viewModel = viewModel(dataSource = dataSource, host = host)
+            viewModel.bindWatchedProjects()
+
+            // WHEN
+            viewModel.onMasterToggleClicked()
+
+            // THEN
+            assertSoftly {
+                dataSource.mappings.map { mapping -> mapping.watched } shouldBe List(20) { true } + List(5) { false }
+                dataSource.mappings.first { mapping -> mapping.remoteRepoSlug == "repo-20" }.watched shouldBe true
+                dataSource.mappings.first { mapping -> mapping.remoteRepoSlug == "repo-21" }.watched shouldBe false
+                host.limitReached shouldBe 1
+            }
+        }
+
+        @Test
+        fun `onMasterToggleClicked - without a filter and 20 or fewer projects watches all without warning`() {
+            // GIVEN
+            val host = HostCalls()
+            val dataSource = FakeWatchedProjectsDataSource(mappings = watchedAndUnwatched(watched = 0, unwatched = 20))
+            val viewModel = viewModel(dataSource = dataSource, host = host)
+            viewModel.bindWatchedProjects()
+
+            // WHEN
+            viewModel.onMasterToggleClicked()
+
+            // THEN
+            assertSoftly {
+                dataSource.mappings.all { mapping -> mapping.watched } shouldBe true
+                host.limitReached shouldBe 0
+            }
+        }
+
+        @Test
+        fun `onMasterToggleClicked - unwatch-all is always allowed at the limit`() {
+            // GIVEN
+            val host = HostCalls()
+            val dataSource = FakeWatchedProjectsDataSource(mappings = watchedAndUnwatched(watched = 20, unwatched = 0))
+            val viewModel = viewModel(dataSource = dataSource, host = host)
+            viewModel.bindWatchedProjects()
+
+            // WHEN
+            viewModel.onMasterToggleClicked()
+
+            // THEN
+            assertSoftly {
+                dataSource.mappings.none { mapping -> mapping.watched } shouldBe true
+                host.limitReached shouldBe 0
+            }
+        }
+
+        @Test
+        fun `onMasterToggleClicked - filtered select-all watches only the remaining budget and warns`() {
+            // GIVEN
+            val host = HostCalls()
+            val mappings = slugs(prefix = "api", count = 18).map { slug -> mapping(slug, watched = true) } +
+                slugs(prefix = "web", count = 5).map { slug -> mapping(slug) }
+            val dataSource = FakeWatchedProjectsDataSource(mappings = mappings)
+            val viewModel = viewModel(dataSource = dataSource, host = host)
+            viewModel.bindWatchedProjects()
+            viewModel.onSearchQueryChanged(query = "web")
+
+            // WHEN
+            viewModel.onMasterToggleClicked()
+
+            // THEN
+            assertSoftly {
+                dataSource.setWatchedCalls shouldBe listOf("web-01" to true, "web-02" to true)
+                dataSource.mappings.filter { mapping -> mapping.remoteRepoSlug.startsWith("web") }
+                    .map { mapping -> mapping.watched } shouldBe listOf(true, true, false, false, false)
+                dataSource.mappings.count { mapping -> mapping.watched } shouldBe 20
+                host.limitReached shouldBe 1
+            }
+        }
+
+        private fun watchedAndUnwatched(watched: Int, unwatched: Int): List<WatchedProjectMapping> {
+            return slugs(prefix = "repo", count = watched + unwatched).mapIndexed { index, slug ->
+                mapping(slug, watched = index < watched)
+            }
+        }
+
+        private fun slugs(prefix: String, count: Int): List<String> {
+            return (1..count).map { index -> "%s-%02d".format(prefix, index) }
+        }
+    }
+
     private fun viewModel(
         onPruneWorktrees: () -> Unit = {},
         onOpenWorktreesHelp: () -> Unit = {},
+        onGoToWorkspace: () -> Unit = {},
         dataSource: WatchedProjectsDataSource = FakeWatchedProjectsDataSource(),
         host: HostCalls = HostCalls()
     ): WatchedProjectsViewModel {
@@ -372,10 +553,12 @@ class WatchedProjectsViewModelTest {
             onShowContentCallback = { host.content++ },
             onShowNotConfiguredCallback = { host.notConfigured++ },
             onProjectsDirectoryUnreadableCallback = { host.unreadable++ },
+            onWatchedLimitReachedCallback = { host.limitReached++ },
             onOpenLocalProjectCallback = { _ -> },
             onOpenWorktreeCallback = { _, _ -> },
             onPruneWorktreesCallback = onPruneWorktrees,
             onOpenWorktreesHelpCallback = onOpenWorktreesHelp,
+            onGoToWorkspaceCallback = onGoToWorkspace,
             runOnEdt = { block -> block() }
         )
     }
@@ -393,6 +576,7 @@ class WatchedProjectsViewModelTest {
         var content = 0
         var notConfigured = 0
         var unreadable = 0
+        var limitReached = 0
     }
 
     private class FakeWatchedProjectsDataSource(

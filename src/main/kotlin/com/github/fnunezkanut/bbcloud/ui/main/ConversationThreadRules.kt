@@ -51,17 +51,18 @@ object ConversationThreadRules {
     /**
      * The Markdown of a comment body. Bitbucket reports the Markdown source as [PullRequestComment.raw], but only
      * sometimes; when it is missing, the rendered HTML is stripped down to its text so that the comment never renders
-     * blank. `@{account-key}` mentions are replaced with the names in [mentions]; a mention without a name stays as written.
+     * blank. `@{account-key}` mentions are replaced with the names in [mentions]. A mention without a name stays as written,
+     * or renders as [pendingMentionLabel] when names are still loading.
      * Emoji markup is not resolved here; `normalizeDescription` resolves it when the body is rendered.
      */
-    fun commentBodyMarkdown(comment: PullRequestComment, mentions: Map<String, String> = emptyMap()): String {
+    fun commentBodyMarkdown(comment: PullRequestComment, mentions: Map<String, String> = emptyMap(), pendingMentionLabel: String? = null): String {
         val raw = comment.raw
         val body = if (!raw.isNullOrBlank()) {
             raw
         } else {
             normalizeDescription(comment.html)
         }
-        return CommentMentionResolver.resolveMentions(body = body, mentions = mentions)
+        return CommentMentionResolver.resolveMentions(body = body, mentions = mentions, pendingLabel = pendingMentionLabel)
     }
 
     /**

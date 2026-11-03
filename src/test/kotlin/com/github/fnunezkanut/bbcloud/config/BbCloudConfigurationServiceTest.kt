@@ -774,6 +774,48 @@ class BbCloudConfigurationServiceTest {
         }
 
     @Test
+    fun `watchedProjectsForCurrentWorkspace - should trim more than 20 watched projects to the first 20 by slug and persist it`(): Unit =
+        runBlocking {
+            // GIVEN 25 watched projects, as an install from before the limit existed can hold
+            val settings = settings(workspaceSlug = "my-workspace")
+            settings.replaceWatchedProjects(
+                (1..25).map { index ->
+                    WatchedProjectMapping(localFolderPath = "", remoteRepoSlug = "repo-%02d".format(index), workspace = "my-workspace", watched = true)
+                }
+            )
+            val service = service(settings, FakeCredentialStore(hasToken = true))
+
+            // WHEN the watched projects are read
+            val watchedSlugs = service.watchedProjectsForCurrentWorkspace().filter { it.watched }.map { it.remoteRepoSlug }
+
+            // THEN the first 20 by slug keep their flag, and the trim is written back to the settings
+            assertSoftly {
+                watchedSlugs shouldBe (1..20).map { index -> "repo-%02d".format(index) }
+                settings.watchedProjects.count { it.watched } shouldBe 20
+            }
+        }
+
+    @Test
+    fun `watchedProjectsForCurrentWorkspace - should leave exactly 20 watched projects untouched`(): Unit =
+        runBlocking {
+            // GIVEN exactly the limit of watched projects
+            val settings = settings(workspaceSlug = "my-workspace")
+            settings.replaceWatchedProjects(
+                (1..20).map { index ->
+                    WatchedProjectMapping(localFolderPath = "", remoteRepoSlug = "repo-%02d".format(index), workspace = "my-workspace", watched = true)
+                }
+            )
+            val service = service(settings, FakeCredentialStore(hasToken = true))
+
+            // WHEN the watched projects are read
+            // THEN all 20 stay watched
+            assertSoftly {
+                service.watchedProjectsForCurrentWorkspace().count { it.watched } shouldBe 20
+                settings.watchedProjects.count { it.watched } shouldBe 20
+            }
+        }
+
+    @Test
     fun `replaceWatchedProjects - should overwrite previous mappings`(): Unit =
         runBlocking {
             val settings = settings(workspaceSlug = "my-workspace")

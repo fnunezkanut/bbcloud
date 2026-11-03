@@ -7,6 +7,7 @@ import com.github.fnunezkanut.bbcloud.auth.BbCloudAccessTokenProvider
 import com.github.fnunezkanut.bbcloud.bitbucket.BbCloudOpenPullRequestService
 import com.github.fnunezkanut.bbcloud.bitbucket.CommentChange
 import com.github.fnunezkanut.bbcloud.bitbucket.InlineCommentSide
+import com.github.fnunezkanut.bbcloud.bitbucket.MentionNames
 import com.github.fnunezkanut.bbcloud.bitbucket.OkHttpBitbucketPullRequestClient
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestActionResult
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestComment
@@ -101,6 +102,10 @@ class BbCloudWorktreePullRequestContext(private val project: Project, private va
     private val commentLoadLock = Any()
     private var reloadJob: Job? = null
     private var commentLoadJob: Job? = null
+
+    /** Looks up the mentions that the last comment load could not name from memory. */
+    @Volatile
+    private var mentionJob: Job? = null
     private var commentReloadQueued = false
     private var commentUpdateInProgress = false
     private var loadedCommentsPullRequestId: Long? = null
@@ -114,6 +119,11 @@ class BbCloudWorktreePullRequestContext(private val project: Project, private va
     /** Display names of the `@{account-key}` mentions in [comments], read by the inline comment cards. */
     @Volatile
     var mentionNames: Map<String, String> = emptyMap()
+        private set
+
+    /** True while some mention in [mentionNames] is still being looked up; the inline cards then show a placeholder. */
+    @Volatile
+    var mentionsPending: Boolean = false
         private set
 
     /** Avatar URL of the configured Bitbucket user, used by the file comment composer. */
@@ -205,13 +215,8 @@ class BbCloudWorktreePullRequestContext(private val project: Project, private va
                     projectBasePath = project.basePath,
                     organizationUrl = organizationUrl
                 )
-                val mentionNames = result?.items?.let { items ->
-                    openPullRequestService.pullRequestMentionNames(
-                        projectBasePath = project.basePath,
-                        organizationUrl = organizationUrl,
-                        comments = items
-                    )
-                }.orEmpty()
+                // Names that need no lookup are published with the comments; the rest arrive later through resolveCommentMentions.
+                val knownNames = result?.items?.let { items -> openPullRequestService.knownMentionNames(comments = items) } ?: MentionNames.NONE
                 withContext(Dispatchers.EDT) {
                     val isCurrentBinding = binding?.pullRequestId == pullRequestId
                     if (isCurrentBinding && result != null) {
@@ -220,10 +225,14 @@ class BbCloudWorktreePullRequestContext(private val project: Project, private va
                             comments = result.items,
                             avatarUrl = avatarUrl,
                             userUuid = userUuid,
-                            mentionNames = mentionNames
+                            mentionNames = knownNames.names,
+                            mentionsPending = !knownNames.isComplete
                         )
                         loadedCommentsPullRequestId = pullRequestId
                         EditorNotifications.getInstance(project).updateAllNotifications()
+                        if (!knownNames.isComplete) {
+                            resolveCommentMentions(pullRequestId = pullRequestId, comments = result.items, organizationUrl = organizationUrl)
+                        }
                     }
                     val reloadAgain = synchronized(commentLoadLock) {
                         commentLoadJob = null
@@ -239,20 +248,25 @@ class BbCloudWorktreePullRequestContext(private val project: Project, private va
         }
     }
 
-    /** Publishes comments loaded by the editor session into the worktree snapshot, together with the names of their mentions. */
+    /**
+     * Publishes comments loaded by the editor session into the worktree snapshot, together with the names of their mentions.
+     * [mentionsPending] is true when some mention in [mentionNames] still needs a lookup; [publishMentionNames] completes it.
+     */
     fun publishComments(
         pullRequestId: Long,
         comments: List<PullRequestComment>,
         avatarUrl: String? = null,
         userUuid: String? = null,
-        mentionNames: Map<String, String> = emptyMap()
+        mentionNames: Map<String, String> = emptyMap(),
+        mentionsPending: Boolean = false
     ) {
         if (binding?.pullRequestId != pullRequestId) {
             return
         }
-        val mentionNamesChanged = this.mentionNames != mentionNames
+        val mentionNamesChanged = this.mentionNames != mentionNames || this.mentionsPending != mentionsPending
         this.comments = comments
         this.mentionNames = mentionNames
+        this.mentionsPending = mentionsPending
         BbCloudPullRequestViewedThreads.getInstance().prune(
             workspaceSlug = configurationService.workspaceSlugOrNull().orEmpty(),
             pullRequestId = pullRequestId,
@@ -278,6 +292,40 @@ class BbCloudWorktreePullRequestContext(private val project: Project, private va
         if (inlineIndexChanged || mentionNamesChanged) {
             com.github.fnunezkanut.bbcloud.ui.diff.BbCloudPullRequestDiffCommentService.getInstance(project)
                 .refreshOpenEditors()
+        }
+    }
+
+    /**
+     * Applies mention names looked up after [comments] were published. Ignored when the binding moved to another pull
+     * request or a newer comment snapshot replaced [comments], so a slow lookup cannot clobber a newer one. Call on the EDT.
+     */
+    fun publishMentionNames(pullRequestId: Long, comments: List<PullRequestComment>, mentionNames: Map<String, String>) {
+        if (binding?.pullRequestId != pullRequestId || this.comments !== comments) {
+            LOG.debug("Ignoring mention names for pull request #$pullRequestId; the comment snapshot changed")
+            return
+        }
+        val merged = this.mentionNames + mentionNames
+        val changed = merged != this.mentionNames || mentionsPending
+        this.mentionNames = merged
+        mentionsPending = false
+        if (changed) {
+            commentsRevision.value++
+            BbCloudPullRequestDiffCommentService.getInstance(project).refreshOpenEditors()
+        }
+    }
+
+    /** Looks up the mentions that [comments] could not name from memory, then publishes the names on the EDT. */
+    private fun resolveCommentMentions(pullRequestId: Long, comments: List<PullRequestComment>, organizationUrl: String) {
+        mentionJob?.cancel()
+        mentionJob = coroutineScope.launch {
+            val names = openPullRequestService.pullRequestMentionNames(
+                projectBasePath = project.basePath,
+                organizationUrl = organizationUrl,
+                comments = comments
+            )
+            withContext(Dispatchers.EDT) {
+                publishMentionNames(pullRequestId = pullRequestId, comments = comments, mentionNames = names)
+            }
         }
     }
 
@@ -748,6 +796,7 @@ class BbCloudWorktreePullRequestContext(private val project: Project, private va
         if (newBinding == null || newBinding.pullRequestId != loadedCommentsPullRequestId) {
             comments = emptyList()
             mentionNames = emptyMap()
+            mentionsPending = false
             loadedCommentsPullRequestId = null
             commentsRevision.value++
         }

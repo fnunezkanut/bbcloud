@@ -247,6 +247,18 @@ class ConversationThreadRulesTest {
             // THEN
             result shouldBe "Thanks @{11111111-1111-1111-1111-111111111111}"
         }
+
+        @Test
+        fun `commentBodyMarkdown - should show the pending placeholder for an unnamed mention`() {
+            // GIVEN
+            val root = comment(author = reviewer, isResolved = false, raw = "Thanks @{22222222-2222-2222-2222-222222222222}")
+
+            // WHEN
+            val result = ConversationThreadRules.commentBodyMarkdown(comment = root, mentions = mentions, pendingMentionLabel = "loading…")
+
+            // THEN
+            result shouldBe "Thanks **@loading…**"
+        }
     }
 
     @Nested

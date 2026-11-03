@@ -14,7 +14,7 @@ Helps you review Bitbucket Cloud pull requests without leaving your Jetbrains ID
 * 🔐 **Secure authentication** signs you in to Bitbucket Cloud with OAuth so tokens are obtained and stored safely through the IDE.
 * 🪟 A **Bitbucket Cloud PR Review** tool window on the bottom strip keeps pull request triage inside IntelliJ instead of the browser.
 * 🌳 Opening a PR spins up a separate **PR Work Tree** project window with its own git [work tree](docs/worktrees.md) so reviews never clash with your main branch or other PRs.
-* 📂 The **Current Project** tab shows open and completed PRs for the repo in your IDE, with repo links, open-PR counts, reviewer avatars, refresh, and persistent **Exclude** filters.
+* 📂 The **Current Project** tab shows open and completed PRs for the repo in your IDE, with repo links, open-PR counts, reviewer avatars, refresh, and persistent **Exclude** filters and a **Created by** dropdown.
 * 🧭 The **Workspace** tab merges PRs you opened and review assignments from watched projects into one newest-first list across your Bitbucket workspace.
 * 👀 **Watched Projects** controls which repositories contribute to the workspace queue, with search by slug, folder, PR number, or branch and a master checkbox for matching rows.
 * 📋 Each PR gets a dedicated **`<prNum>.pr`** tab plus a blue header stripe with line-change stats, refresh, file changes, and merge, approve, draft, or decline actions.
@@ -39,18 +39,18 @@ One page which shows the open and the completed (merged or declined) PRs for the
 * Each open PR shows up to two reviewer avatars (a green check marks reviewers who approved, a warning badge marks reviewers who requested changes) and a `+N` circle for the remaining reviewers; hover an avatar or the circle to see names and review status
 * Refresh button checks bitbucket cloud for any new PRs in this project
 * You can also goto the PR view in bitbucket cloud from here
-* An `Exclude:` filter row lets you hide PRs you do not want to see; each checkbox is remembered across restarts:
-  * `Resolved` (on by default): hide merged and declined PRs (this checkbox is only shown on this tab)
-  * `Mine`: hide the PRs you created
-  * `Approved by me`: hide the PRs you have approved
-  * `Drafts` (on by default): hide draft PRs
+* A filter row lets you hide PRs you do not want to see; each control is remembered across restarts:
+  * `Exclude Resolved` (on by default): hide merged and declined PRs (this checkbox is only shown on this tab)
+  * `Exclude Approved by me`: hide the PRs you have approved
+  * `Exclude Drafts` (on by default): hide draft PRs
+  * `Created by any user` / `Created by me` dropdown: with `Created by me`, show only the PRs you created
 
 
 ### Workspace
 One page which merges the PRs you opened across your bitbucket workspace and the PRs assigned to you for review (from your "Watched Projects") into a single listing, newest first:
 * If the project exists in your Projects directory clicking the title of a PR would open that PR in a separate "PR Work Tree" IntelliJ window otherwise you are redirected to bitbucket cloud PR view
 * Each PR shows the same reviewer avatars as the Current Project tab
-* The same `Exclude:` filter row is offered, remembered independently of the Current Project tab; `Mine`, `Approved by me` and `Drafts` are shown here (there is no `Resolved` checkbox, because this listing only holds open PRs)
+* The same filter row is offered, remembered independently of the Current Project tab; `Exclude Approved by me`, `Exclude Drafts` and the `Created by` dropdown are shown here (there is no `Exclude Resolved` checkbox, because this listing only holds open PRs)
 
 ### Watched Projects
 Page which lets you opt into which projects you want to "Watch"; only watched projects contribute PRs to the "Workspace" tab's review queue. A search field above the table filters the projects by slug, local folder, PR number, or branch name; the master checkbox then watches or unwatches only the matching projects.

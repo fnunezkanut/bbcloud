@@ -2,7 +2,6 @@
 
 package com.github.fnunezkanut.bbcloud.ui.pullrequest.editor
 
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -20,11 +19,11 @@ import com.github.fnunezkanut.bbcloud.git.FileLineCount
 import com.github.fnunezkanut.bbcloud.ui.components.BbCloudOutlinedActionButton
 import com.github.fnunezkanut.bbcloud.ui.components.LinesChangedBadge
 import com.github.fnunezkanut.bbcloud.ui.components.RoundedBadge
+import com.github.fnunezkanut.bbcloud.ui.components.labelDisabledForeground
 import com.github.fnunezkanut.bbcloud.ui.components.reviewBarPurple
 import com.github.fnunezkanut.bbcloud.ui.main.ActionButtonOutlines
 import org.jetbrains.jewel.ui.component.Checkbox
 import org.jetbrains.jewel.ui.component.Text
-import org.jetbrains.jewel.ui.component.Tooltip
 import org.jetbrains.jewel.ui.icon.IconKey
 import org.jetbrains.jewel.ui.icons.AllIconsKeys
 
@@ -33,6 +32,9 @@ private val REVIEW_BAR_LINES_GAP = 8.dp
 
 /** The gap between the "Viewed" pill and the "Add Comment" button. */
 private val REVIEW_BAR_CONTROL_GAP = 8.dp
+
+/** The gap between the inline hint text and the Previous button. */
+private val REVIEW_BAR_HINT_GAP = 8.dp
 
 /** The padding around the content of the bar. */
 private val REVIEW_BAR_PADDING = 4.dp
@@ -52,8 +54,7 @@ internal fun PullRequestReviewBarContent(
     navigation: ReviewBarFileNavigationState?,
     onViewedToggled: (Boolean) -> Unit,
     onAddComment: () -> Unit,
-    modifier: Modifier = Modifier,
-    addCommentTooltip: String? = null
+    modifier: Modifier = Modifier
 ) {
     Column(
         modifier = modifier.fillMaxWidth().padding(REVIEW_BAR_PADDING)
@@ -93,31 +94,15 @@ internal fun PullRequestReviewBarContent(
             )
             AddCommentButton(
                 enabled = lineCount?.isBinary != true,
-                onAddComment = onAddComment,
-                tooltip = addCommentTooltip
+                onAddComment = onAddComment
             )
         }
     }
 }
 
-/**
- * The "Add Comment" button. When [tooltip] is given (for a deleted file, whose comment goes to the whole pull request)
- * the button is wrapped in a tooltip; otherwise it renders on its own.
- */
-@OptIn(ExperimentalFoundationApi::class)
+/** The "Add Comment" button. */
 @Composable
-private fun AddCommentButton(enabled: Boolean, onAddComment: () -> Unit, tooltip: String?) {
-    if (tooltip == null) {
-        AddCommentActionButton(enabled = enabled, onAddComment = onAddComment)
-        return
-    }
-    Tooltip(tooltip = { Text(text = tooltip) }) {
-        AddCommentActionButton(enabled = enabled, onAddComment = onAddComment)
-    }
-}
-
-@Composable
-private fun AddCommentActionButton(enabled: Boolean, onAddComment: () -> Unit) {
+private fun AddCommentButton(enabled: Boolean, onAddComment: () -> Unit) {
     BbCloudOutlinedActionButton(
         text = BbCloudBundle.message("editor.reviewBar.addComment"),
         icon = AllIconsKeys.General.Add,
@@ -132,16 +117,23 @@ private fun AddCommentActionButton(enabled: Boolean, onAddComment: () -> Unit) {
  * The Previous and Next buttons that move the diff to the closest unviewed file before or after the current one.
  *
  * Both buttons stay visible. They are enabled or disabled together, because the search wraps around the chain.
+ * When both are disabled, an inline hint says that every other file is marked as viewed.
  */
 @Composable
 private fun ReviewBarNavigationButtons(navigation: ReviewBarFileNavigationState) {
     val previousIndex = navigation.unviewedTargetIndex(direction = ReviewBarFileNavigationDirection.Previous)
     val nextIndex = navigation.unviewedTargetIndex(direction = ReviewBarFileNavigationDirection.Next)
     Row(verticalAlignment = Alignment.CenterVertically) {
+        if (previousIndex == null && nextIndex == null) {
+            Text(
+                text = BbCloudBundle.message("editor.reviewBar.noUnviewedFile"),
+                color = labelDisabledForeground(),
+                modifier = Modifier.padding(end = REVIEW_BAR_HINT_GAP)
+            )
+        }
         ReviewBarNavigationButton(
             text = BbCloudBundle.message("editor.reviewBar.previousUnviewed"),
             icon = AllIconsKeys.Actions.Back,
-            enabledTooltip = BbCloudBundle.message("editor.reviewBar.previousUnviewed.tooltip"),
             enabled = previousIndex != null,
             onClick = {
                 previousIndex?.let { index -> navigation.onNavigate(index, ReviewBarFileNavigationDirection.Previous) }
@@ -150,7 +142,6 @@ private fun ReviewBarNavigationButtons(navigation: ReviewBarFileNavigationState)
         ReviewBarNavigationButton(
             text = BbCloudBundle.message("editor.reviewBar.nextUnviewed"),
             icon = AllIconsKeys.Actions.Forward,
-            enabledTooltip = BbCloudBundle.message("editor.reviewBar.nextUnviewed.tooltip"),
             enabled = nextIndex != null,
             onClick = {
                 nextIndex?.let { index -> navigation.onNavigate(index, ReviewBarFileNavigationDirection.Next) }
@@ -160,30 +151,15 @@ private fun ReviewBarNavigationButtons(navigation: ReviewBarFileNavigationState)
     }
 }
 
-/** One navigation button. The tooltip explains the skip when the button is enabled, and why it is not when it is not. */
-@OptIn(ExperimentalFoundationApi::class)
+/** One navigation button. It has no hover tooltip, because the tooltip popup covered the buttons and did not close. */
 @Composable
-private fun ReviewBarNavigationButton(
-    text: String,
-    icon: IconKey,
-    enabledTooltip: String,
-    enabled: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val tooltip = if (enabled) {
-        enabledTooltip
-    } else {
-        BbCloudBundle.message("editor.reviewBar.noUnviewedFile.tooltip")
-    }
-    Tooltip(tooltip = { Text(text = tooltip) }) {
-        BbCloudOutlinedActionButton(
-            text = text,
-            icon = icon,
-            outlineColor = ActionButtonOutlines.blue(),
-            enabled = enabled,
-            onClick = onClick,
-            modifier = modifier
-        )
-    }
+private fun ReviewBarNavigationButton(text: String, icon: IconKey, enabled: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    BbCloudOutlinedActionButton(
+        text = text,
+        icon = icon,
+        outlineColor = ActionButtonOutlines.blue(),
+        enabled = enabled,
+        onClick = onClick,
+        modifier = modifier
+    )
 }

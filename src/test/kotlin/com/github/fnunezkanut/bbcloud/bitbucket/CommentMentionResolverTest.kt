@@ -93,6 +93,43 @@ class CommentMentionResolverTest {
             // THEN
             result shouldBe "**@Ana\\_\\*\\[x\\]**"
         }
+
+        @Test
+        fun `resolveMentions - should render a pending placeholder for a mention without a name`() {
+            // GIVEN
+            val body = "Hi @{$benKey}"
+
+            // WHEN
+            val result = CommentMentionResolver.resolveMentions(body = body, mentions = emptyMap(), pendingLabel = "loading…")
+
+            // THEN
+            result shouldBe "Hi **@loading…**"
+        }
+
+        @Test
+        fun `resolveMentions - should prefer a known name over the pending placeholder`() {
+            // GIVEN
+            val body = "@{$annaKey} and @{$benKey}"
+            val knownNames = mapOf(annaUuid to "Anna")
+
+            // WHEN
+            val result = CommentMentionResolver.resolveMentions(body = body, mentions = knownNames, pendingLabel = "loading…")
+
+            // THEN
+            result shouldBe "**@Anna** and **@loading…**"
+        }
+
+        @Test
+        fun `resolveMentions - should keep a mention in code literal even while names are pending`() {
+            // GIVEN
+            val body = "`@{$benKey}` and @{$benKey}"
+
+            // WHEN
+            val result = CommentMentionResolver.resolveMentions(body = body, mentions = emptyMap(), pendingLabel = "loading…")
+
+            // THEN
+            result shouldBe "`@{$benKey}` and **@loading…**"
+        }
     }
 
     @Nested

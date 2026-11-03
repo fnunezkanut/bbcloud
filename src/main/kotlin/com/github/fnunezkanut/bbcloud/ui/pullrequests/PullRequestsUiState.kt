@@ -27,8 +27,10 @@ data class PullRequestsUiState(
     val failedSources: Set<PullRequestListingSource> = emptySet(),
     val truncatedSources: Set<PullRequestListingSource> = emptySet(),
     val loadedSources: Set<PullRequestListingSource> = emptySet(),
-    // Mine or Approved checked while the current user uuid is unknown.
+    // Approved by me is checked while the current user uuid is unknown.
     val isUserFilterUnavailable: Boolean = false,
+    // False until a source reports the current user's uuid. Gates the Created by me option.
+    val isCurrentUserKnown: Boolean = false,
     val avatarRevision: Int = 0
 )
 

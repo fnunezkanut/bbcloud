@@ -56,6 +56,8 @@ class PullRequestConversationViewModel(
         get() = state.value.openComposer
     override val mentions: Map<String, String>
         get() = state.value.mentions
+    override val mentionsPending: Boolean
+        get() = state.value.mentionsPending
 
     private val viewedThreads by lazy { BbCloudPullRequestViewedThreads.getInstance() }
 
@@ -75,6 +77,9 @@ class PullRequestConversationViewModel(
     private var displayedPullRequestId: Long? = null
     private var scrollRequestId = 0
 
+    /** Counts every shown conversation, so a mention lookup started for an older one can tell it is stale. */
+    private var conversationRevision = 0
+
     fun bind(coroutineScope: CoroutineScope) {
         this.coroutineScope = coroutineScope
     }
@@ -86,6 +91,7 @@ class PullRequestConversationViewModel(
         forceScrollToTop: Boolean = false
     ) {
         bind(coroutineScope = coroutineScope)
+        conversationRevision++
         val currentPullRequestId = pullRequestId()
         val isSamePullRequest = displayedPullRequestId != null && displayedPullRequestId == currentPullRequestId
         displayedPullRequestId = currentPullRequestId
@@ -94,7 +100,9 @@ class PullRequestConversationViewModel(
             state.value = state.value.copy(
                 loadState = PullRequestConversationLoadState.Error,
                 isTruncated = false,
-                threads = emptyList()
+                threads = emptyList(),
+                mentions = emptyMap(),
+                mentionsPending = false
             )
             return
         }
@@ -105,6 +113,7 @@ class PullRequestConversationViewModel(
             currentUserUuid = conversation.currentUserUuid,
             currentUserAvatarUrl = conversation.currentUserAvatarUrl,
             mentions = conversation.mentions,
+            mentionsPending = conversation.mentionsPending,
             scrollRequest = newScrollRequest(force = forceScrollToTop || (!inPlaceRefresh && !isSamePullRequest))
         )
         LOG.debug("Rendered ${conversation.threads.size} conversation threads for pull request #$currentPullRequestId")
@@ -151,9 +160,29 @@ class PullRequestConversationViewModel(
     fun reset() {
         coroutineScope = null
         displayedPullRequestId = null
+        conversationRevision++
         fileExistenceRequestId++
         fileExistence.clear()
         state.value = initialState()
+    }
+
+    /** The revision of the conversation shown last; pass it back to [applyMentionNames]. */
+    fun conversationRevision(): Int {
+        return conversationRevision
+    }
+
+    /**
+     * Applies the mention names looked up after [revision] was shown. A result for an older conversation is dropped, so
+     * a slow lookup cannot overwrite a newer load. Only the mention state changes, so the scroll position, open composers
+     * and drafts are kept.
+     */
+    fun applyMentionNames(revision: Int, names: Map<String, String>) {
+        if (revision != conversationRevision) {
+            LOG.debug("Ignoring mention names for conversation revision $revision; showing revision $conversationRevision")
+            return
+        }
+        state.value = state.value.copy(mentions = state.value.mentions + names, mentionsPending = false)
+        LOG.debug("Applied ${names.size} mention name(s) to the conversation of pull request #${pullRequestId()}")
     }
 
     override val embeddedInEditor: Boolean

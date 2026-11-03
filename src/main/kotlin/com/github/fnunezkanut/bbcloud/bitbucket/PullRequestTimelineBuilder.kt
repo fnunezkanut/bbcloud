@@ -3,12 +3,16 @@ package com.github.fnunezkanut.bbcloud.bitbucket
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestCommentThreads.groupIntoThreads
 
 object PullRequestTimelineBuilder {
-    /** [mentions] is resolved by the service layer before the conversation is assembled; this builder only carries it through. */
+    /**
+     * [mentions] holds the names known without a network call. When [mentionsPending] is true, the caller still has to
+     * look up the unnamed accounts; this builder only carries both values through.
+     */
     fun buildConversation(
         comments: PagedItems<PullRequestComment>,
         currentUserUuid: String?,
         currentUserAvatarUrl: String?,
-        mentions: Map<String, String> = emptyMap()
+        mentions: Map<String, String> = emptyMap(),
+        mentionsPending: Boolean = false
     ): PullRequestConversation {
         val threads = PullRequestCommentThreads.sortedLikeConversation(groupIntoThreads(comments = comments.items))
         return PullRequestConversation(
@@ -16,7 +20,8 @@ object PullRequestTimelineBuilder {
             currentUserUuid = currentUserUuid,
             currentUserAvatarUrl = currentUserAvatarUrl,
             isTruncated = comments.isTruncated,
-            mentions = mentions
+            mentions = mentions,
+            mentionsPending = mentionsPending
         )
     }
 
