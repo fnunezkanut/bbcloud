@@ -17,6 +17,7 @@ import com.github.fnunezkanut.bbcloud.project.WatchedProjectsDiscoveryResult
 import com.github.fnunezkanut.bbcloud.settings.BbCloudSettings
 import com.github.fnunezkanut.bbcloud.settings.PullRequestListFilter
 import com.github.fnunezkanut.bbcloud.settings.PullRequestListScope
+import com.github.fnunezkanut.bbcloud.ui.otherprojects.WatchedProjectsViewModel
 import com.github.fnunezkanut.bbcloud.validation.BitbucketWorkspaceValidator
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.service
@@ -326,8 +327,8 @@ class BbCloudConfigurationService(
     fun savePullRequestListFilter(scope: PullRequestListScope, filter: PullRequestListFilter) {
         settings.savePullRequestListFilter(scope = scope, filter = filter)
         thisLogger().info(
-            "Saved $scope pull request list filter: resolved=${filter.excludeResolved}, mine=${filter.excludeMine}, " +
-                "approvedByMe=${filter.excludeApprovedByMe}, drafts=${filter.excludeDrafts}"
+            "Saved $scope pull request list filter: resolved=${filter.excludeResolved}, " +
+                "authorScope=${filter.authorScope}, approvedByMe=${filter.excludeApprovedByMe}, drafts=${filter.excludeDrafts}"
         )
     }
 
@@ -342,7 +343,37 @@ class BbCloudConfigurationService(
      */
     fun watchedProjectsForCurrentWorkspace(): List<WatchedProjectMapping> {
         val slug = workspaceSlugOrNull() ?: return emptyList()
-        return settings.watchedProjects.map { mapping -> mapping.copy(workspace = slug) }
+        return storedWatchedProjectsWithinLimit().map { mapping -> mapping.copy(workspace = slug) }
+    }
+
+    /**
+     * The stored watched projects with at most [WatchedProjectsViewModel.MAX_WATCHED_PROJECTS] flagged watched. Settings
+     * written before the limit existed can hold more, so the excess is trimmed here: the first entries in stored (slug)
+     * order keep their flag and the rest are set unwatched. A trim is persisted once, so later reads return the
+     * already-trimmed list.
+     */
+    private fun storedWatchedProjectsWithinLimit(): List<WatchedProjectMapping> {
+        val stored = settings.watchedProjects
+        val trimmed = clampWatchedProjects(stored)
+        if (trimmed != stored) {
+            replaceWatchedProjects(trimmed)
+            thisLogger().info("Trimmed watched projects to the first ${WatchedProjectsViewModel.MAX_WATCHED_PROJECTS}")
+        }
+        return trimmed
+    }
+
+    private fun clampWatchedProjects(mappings: List<WatchedProjectMapping>): List<WatchedProjectMapping> {
+        var watchedSoFar = 0
+        return mappings.map { mapping ->
+            if (!mapping.watched) {
+                mapping
+            } else if (watchedSoFar < WatchedProjectsViewModel.MAX_WATCHED_PROJECTS) {
+                watchedSoFar++
+                mapping
+            } else {
+                mapping.copy(watched = false)
+            }
+        }
     }
 
     /**
@@ -357,7 +388,7 @@ class BbCloudConfigurationService(
     fun watchedProjectsForCurrentWorkspaceWithLocalPaths(): List<WatchedProjectMapping> {
         val slug = workspaceSlugOrNull() ?: return emptyList()
         val projectsDirectory = projectsDirectoryOrNull()
-        return settings.watchedProjects
+        return storedWatchedProjectsWithinLimit()
             .map { mapping ->
                 val resolvedPath = if (projectsDirectory == null) {
                     ""

@@ -9,6 +9,7 @@ import io.mockk.mockk
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import kotlin.time.Instant
@@ -182,6 +183,93 @@ class PullRequestConversationViewModelTest {
 
         // THEN
         result shouldBe true
+    }
+
+    @Nested
+    inner class ApplyMentionNamesTests {
+        private val annaKey = "11111111-1111-1111-1111-111111111111"
+        private val benKey = "22222222-2222-2222-2222-222222222222"
+
+        @Test
+        fun `applyMentionNames - should merge the names and clear the pending flag`() {
+            // GIVEN
+            val scope = CoroutineScope(SupervisorJob())
+            val viewModel = PullRequestConversationViewModel(
+                pullRequestId = { 273L },
+                commentEditor = mockk(relaxed = true)
+            )
+            val conversation = emptyConversation().copy(mentions = mapOf(annaKey to "Anna"), mentionsPending = true)
+            try {
+                viewModel.showConversation(conversation = conversation, coroutineScope = scope)
+
+                // WHEN
+                viewModel.applyMentionNames(revision = viewModel.conversationRevision(), names = mapOf(benKey to "Ben"))
+
+                // THEN
+                assertSoftly(viewModel.state.value) {
+                    mentions shouldBe mapOf(annaKey to "Anna", benKey to "Ben")
+                    mentionsPending shouldBe false
+                }
+            } finally {
+                scope.cancel()
+            }
+        }
+
+        @Test
+        fun `applyMentionNames - should ignore names for an older conversation revision`() {
+            // GIVEN a conversation that is replaced before its lookup finishes
+            val scope = CoroutineScope(SupervisorJob())
+            val viewModel = PullRequestConversationViewModel(
+                pullRequestId = { 273L },
+                commentEditor = mockk(relaxed = true)
+            )
+            try {
+                viewModel.showConversation(
+                    conversation = emptyConversation().copy(mentionsPending = true),
+                    coroutineScope = scope
+                )
+                val staleRevision = viewModel.conversationRevision()
+                val newer = emptyConversation().copy(mentions = mapOf(annaKey to "Anna"), mentionsPending = true)
+                viewModel.showConversation(conversation = newer, coroutineScope = scope)
+
+                // WHEN the lookup of the older conversation completes
+                viewModel.applyMentionNames(revision = staleRevision, names = mapOf(benKey to "Ben"))
+
+                // THEN the newer conversation keeps its own names and its pending flag
+                assertSoftly(viewModel.state.value) {
+                    mentions shouldBe mapOf(annaKey to "Anna")
+                    mentionsPending shouldBe true
+                }
+            } finally {
+                scope.cancel()
+            }
+        }
+
+        @Test
+        fun `applyMentionNames - should keep the scroll request and threads`() {
+            // GIVEN
+            val scope = CoroutineScope(SupervisorJob())
+            val viewModel = PullRequestConversationViewModel(
+                pullRequestId = { 273L },
+                commentEditor = mockk(relaxed = true)
+            )
+            val conversation = emptyConversation().copy(mentionsPending = true)
+            try {
+                viewModel.showConversation(conversation = conversation, coroutineScope = scope)
+                val before = viewModel.state.value
+
+                // WHEN
+                viewModel.applyMentionNames(revision = viewModel.conversationRevision(), names = mapOf(annaKey to "Anna"))
+
+                // THEN
+                assertSoftly(viewModel.state.value) {
+                    scrollRequest shouldBe before.scrollRequest
+                    threads shouldBe before.threads
+                }
+            } finally {
+                scope.cancel()
+            }
+        }
     }
 
     private fun emptyConversation(): PullRequestConversation {

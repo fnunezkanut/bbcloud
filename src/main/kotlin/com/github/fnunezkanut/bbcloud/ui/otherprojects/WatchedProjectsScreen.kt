@@ -54,7 +54,6 @@ import org.jetbrains.jewel.ui.component.OutlinedButton
 import org.jetbrains.jewel.ui.component.Text
 import org.jetbrains.jewel.ui.component.TextField
 import org.jetbrains.jewel.ui.component.Tooltip
-import org.jetbrains.jewel.ui.component.TriStateCheckbox
 import org.jetbrains.jewel.ui.component.VerticallyScrollableContainer
 import org.jetbrains.jewel.ui.icons.AllIconsKeys
 
@@ -109,7 +108,8 @@ fun WatchedProjectsScreen(viewModel: WatchedProjectsViewModel) {
             state = state,
             onSync = viewModel::onSyncClicked,
             onPrune = viewModel::onPruneWorktreesClicked,
-            onWorktreesHelp = viewModel::onWorktreesHelpClicked
+            onWorktreesHelp = viewModel::onWorktreesHelpClicked,
+            onGoToWorkspace = viewModel::onGoToWorkspaceClicked
         )
     }
 }
@@ -225,9 +225,7 @@ private fun WatchedProjectsTable(viewModel: WatchedProjectsViewModel) {
                 val flexibleWidths = computeFlexibleColumnWidths(availableWidth = maxWidth)
                 val rows: List<List<@Composable () -> Unit>> = listOf(
                     watchedProjectsHeaderCells(
-                        state = state,
-                        flexibleWidths = flexibleWidths,
-                        onMasterToggle = viewModel::onMasterToggleClicked
+                        flexibleWidths = flexibleWidths
                     )
                 ) + visibleRows.mapIndexed { index, row ->
                     watchedProjectRowCells(
@@ -276,34 +274,12 @@ private fun computeFlexibleColumnWidths(availableWidth: androidx.compose.ui.unit
     )
 }
 
-private fun watchedProjectsHeaderCells(
-    state: WatchedProjectsUiState,
-    flexibleWidths: FlexibleColumnWidths,
-    onMasterToggle: () -> Unit
-): List<@Composable () -> Unit> {
+private fun watchedProjectsHeaderCells(flexibleWidths: FlexibleColumnWidths): List<@Composable () -> Unit> {
     return TABLE_COLUMNS.map { column ->
         when (column) {
             WatchedProjectsColumn.Watched -> {
                 {
-                    Box(
-                        modifier = Modifier.width(CHECKBOX_WIDTH).fillMaxHeight(),
-                        contentAlignment = Alignment.CenterStart
-                    ) {
-                        Tooltip(
-                            tooltip = {
-                                Text(
-                                    text = BbCloudBundle.message(
-                                        "workspace.watchedProjects.column.watchedAll.tooltip"
-                                    )
-                                )
-                            }
-                        ) {
-                            TriStateCheckbox(
-                                state = state.masterToggle,
-                                onClick = onMasterToggle
-                            )
-                        }
-                    }
+                    Box(modifier = Modifier.width(CHECKBOX_WIDTH).fillMaxHeight())
                 }
             }
 
@@ -538,7 +514,13 @@ private fun WorktreeEntry(mapping: WatchedProjectMapping, worktree: WatchedProje
 }
 
 @Composable
-private fun WatchedProjectsFooter(state: WatchedProjectsUiState, onSync: () -> Unit, onPrune: () -> Unit, onWorktreesHelp: () -> Unit) {
+private fun WatchedProjectsFooter(
+    state: WatchedProjectsUiState,
+    onSync: () -> Unit,
+    onPrune: () -> Unit,
+    onWorktreesHelp: () -> Unit,
+    onGoToWorkspace: () -> Unit
+) {
     Divider(
         orientation = Orientation.Horizontal,
         modifier = Modifier.fillMaxWidth()
@@ -548,7 +530,17 @@ private fun WatchedProjectsFooter(state: WatchedProjectsUiState, onSync: () -> U
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
-            text = BbCloudBundle.message("workspace.watchedProjects.footerNote"),
+            text = BbCloudBundle.message("workspace.watchedProjects.footerNote.prefix"),
+            color = JewelTheme.globalColors.text.info,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+        Link(
+            text = BbCloudBundle.message("workspace.watchedProjects.footerNote.workspaceLink"),
+            onClick = onGoToWorkspace
+        )
+        Text(
+            text = BbCloudBundle.message("workspace.watchedProjects.footerNote.suffix"),
             color = JewelTheme.globalColors.text.info,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis

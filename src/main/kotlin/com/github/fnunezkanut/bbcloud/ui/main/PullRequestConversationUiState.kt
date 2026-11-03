@@ -42,7 +42,9 @@ data class PullRequestConversationUiState(
     val openComposer: ConversationComposerTarget? = null,
     val scrollRequest: ConversationScrollRequest? = null,
     /** Display names of the `@{account-key}` mentions, from [PullRequestConversation.mentions]. */
-    val mentions: Map<String, String> = emptyMap()
+    val mentions: Map<String, String> = emptyMap(),
+    /** True while some mention in [mentions] is still being looked up. */
+    val mentionsPending: Boolean = false
 )
 
 /** True when the conversation holds no comment at all. */

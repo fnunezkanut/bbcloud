@@ -30,7 +30,7 @@ class PullRequestTimelineBuilderTest {
     @Nested
     inner class MentionTests {
         @Test
-        fun `buildConversation - should carry the resolved mentions onto the conversation unchanged`() {
+        fun `buildConversation - should carry the resolved mentions and the pending flag onto the conversation unchanged`() {
             // GIVEN
             val mentions = mapOf("11111111-1111-1111-1111-111111111111" to "Anna")
 
@@ -39,11 +39,15 @@ class PullRequestTimelineBuilderTest {
                 comments = PagedItems(items = emptyList(), isTruncated = false),
                 currentUserUuid = null,
                 currentUserAvatarUrl = null,
-                mentions = mentions
+                mentions = mentions,
+                mentionsPending = true
             )
 
             // THEN
-            conversation.mentions shouldBe mentions
+            assertSoftly(conversation) {
+                this.mentions shouldBe mentions
+                mentionsPending shouldBe true
+            }
         }
 
         @Test

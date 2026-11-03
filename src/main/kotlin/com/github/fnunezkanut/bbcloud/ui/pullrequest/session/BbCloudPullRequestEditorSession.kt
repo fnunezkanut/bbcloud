@@ -17,9 +17,11 @@ import com.github.fnunezkanut.bbcloud.BbCloudBundle
 import com.github.fnunezkanut.bbcloud.bitbucket.BbCloudOpenPullRequestService
 import com.github.fnunezkanut.bbcloud.bitbucket.BitbucketRepositoryUrls
 import com.github.fnunezkanut.bbcloud.bitbucket.CommentChange
+import com.github.fnunezkanut.bbcloud.bitbucket.MentionNames
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestAction
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestActionResult
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestComment
+import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestConversation
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestDeclineDecision
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestDetails
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestInlineCommentIndex
@@ -97,6 +99,7 @@ import org.jetbrains.jewel.ui.icons.AllIconsKeys
 import java.awt.BorderLayout
 import javax.swing.JComponent
 import javax.swing.JPanel
+import kotlin.time.TimeSource
 
 /** Owns the pull-request detail state and requests for one editor tab. */
 class BbCloudPullRequestEditorSession(
@@ -147,6 +150,12 @@ class BbCloudPullRequestEditorSession(
     private var pollerJob: Job? = null
     private var isLocalBranchUpdateInProgress = false
     private var localBehindRemoteJob: Job? = null
+
+    /** Looks up the Activity card mentions that the shown conversation could not name yet. */
+    private var conversationMentionJob: Job? = null
+
+    /** Looks up the inline comment mentions that the diff and file cards could not name yet. */
+    private var inlineMentionJob: Job? = null
     private var lastObservedHead: WorktreeHead? = null
     private var gitChangeSubscribed = false
 
@@ -336,6 +345,7 @@ class BbCloudPullRequestEditorSession(
         displayedSummary = summary
         displayedPullRequestId = summary.id
         if (previousPullRequestId != summary.id && !project.isDisposed) {
+            conversationMentionJob?.cancel()
             // Clear the banner's stale whole-PR line totals immediately on a PR switch (decision 3a).
             WorktreeTodoBannerViewModel.getInstance(project).clearLineTotals()
         }
@@ -537,6 +547,8 @@ class BbCloudPullRequestEditorSession(
         // cancel any in-flight check so it does not try to touch a detached view model (decision 4.3).
         localBehindRemoteJob?.cancel()
         localBehindRemoteJob = null
+        conversationMentionJob?.cancel()
+        conversationMentionJob = null
     }
 
     /**
@@ -690,6 +702,49 @@ class BbCloudPullRequestEditorSession(
                     inPlaceRefresh = inPlaceRefresh,
                     revealNewestActivity = revealNewestActivity
                 )
+                val conversation = overview.conversation
+                if (conversation != null && conversation.mentionsPending) {
+                    resolveConversationMentions(
+                        pullRequestId = summary.id,
+                        conversation = conversation,
+                        revision = checkedOutBranchPanel.conversationRevision(),
+                        basePath = basePath,
+                        organizationUrl = url
+                    )
+                } else {
+                    conversationMentionJob?.cancel()
+                }
+            }
+        }
+    }
+
+    /**
+     * Looks up the mentions that the shown conversation could not name yet, then applies the names to the comments already
+     * on screen. The conversation view model drops the result when another conversation was shown in the meantime.
+     */
+    private fun resolveConversationMentions(
+        pullRequestId: Long,
+        conversation: PullRequestConversation,
+        revision: Int,
+        basePath: String,
+        organizationUrl: String
+    ) {
+        conversationMentionJob?.cancel()
+        conversationMentionJob = coroutineScope.launch {
+            val started = TimeSource.Monotonic.markNow()
+            val comments = conversation.threads.flatMap { thread -> listOf(thread.root) + thread.replies }
+            val names = openPullRequestService.pullRequestMentionNames(
+                projectBasePath = basePath,
+                organizationUrl = organizationUrl,
+                comments = comments
+            )
+            LOG.debug("Resolved ${names.size} mention name(s) for pull request #$pullRequestId in ${started.elapsedNow().inWholeMilliseconds} ms")
+            invokeOnEdt {
+                if (pullRequestId != displayedPullRequestId) {
+                    LOG.debug("Ignoring mention names for pull request #$pullRequestId; this editor shows #$displayedPullRequestId")
+                    return@invokeOnEdt
+                }
+                checkedOutBranchPanel.applyMentionNames(revision = revision, names = names)
             }
         }
     }
@@ -722,13 +777,8 @@ class BbCloudPullRequestEditorSession(
                 organizationUrl = url
             )
             val commentItems = comments?.items
-            val mentionNames = commentItems?.let { items ->
-                openPullRequestService.pullRequestMentionNames(
-                    projectBasePath = basePath,
-                    organizationUrl = url,
-                    comments = items
-                )
-            }.orEmpty()
+            // Names that need no lookup are published now; the rest follow in resolveInlineCommentMentions.
+            val knownNames = commentItems?.let { items -> openPullRequestService.knownMentionNames(comments = items) } ?: MentionNames.NONE
             invokeOnEdt {
                 val completion = fileCommentCountsLoadState.complete(
                     pullRequestId = pullRequestId,
@@ -747,8 +797,12 @@ class BbCloudPullRequestEditorSession(
                         pullRequestId = pullRequestId,
                         comments = items,
                         userUuid = userUuid,
-                        mentionNames = mentionNames
+                        mentionNames = knownNames.names,
+                        mentionsPending = !knownNames.isComplete
                     )
+                    if (!knownNames.isComplete) {
+                        resolveInlineCommentMentions(pullRequestId = pullRequestId, comments = items, basePath = basePath, organizationUrl = url)
+                    }
                 }
                 val reviewState = BbCloudPullRequestReviewState.getInstance(project)
                 if (reviewState.updateInlineComments(pullRequestId = pullRequestId, index = index)) {
@@ -757,6 +811,30 @@ class BbCloudPullRequestEditorSession(
                 if (completion.shouldReload) {
                     loadPullRequestInlineComments(force = true)
                 }
+            }
+        }
+    }
+
+    /** Looks up the inline comment mentions that were not named from memory, then publishes them to the diff and file cards. */
+    private fun resolveInlineCommentMentions(pullRequestId: Long, comments: List<PullRequestComment>, basePath: String, organizationUrl: String) {
+        inlineMentionJob?.cancel()
+        inlineMentionJob = coroutineScope.launch {
+            val started = TimeSource.Monotonic.markNow()
+            val names = openPullRequestService.pullRequestMentionNames(
+                projectBasePath = basePath,
+                organizationUrl = organizationUrl,
+                comments = comments
+            )
+            LOG.debug("Resolved ${names.size} inline mention name(s) for pull request #$pullRequestId in ${started.elapsedNow().inWholeMilliseconds} ms")
+            invokeOnEdt {
+                if (project.isDisposed) {
+                    return@invokeOnEdt
+                }
+                BbCloudWorktreePullRequestContext.getInstance(project).publishMentionNames(
+                    pullRequestId = pullRequestId,
+                    comments = comments,
+                    mentionNames = names
+                )
             }
         }
     }

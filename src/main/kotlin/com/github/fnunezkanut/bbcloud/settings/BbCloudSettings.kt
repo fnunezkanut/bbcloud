@@ -50,18 +50,15 @@ class BbCloudSettings : SimplePersistentStateComponent<BbCloudSettings.State>(St
         var repoAvatarUrls by map<String, String>()
 
         /**
-         * The Exclude: checkbox states of the Current Project tab. Each is a view preference, persisted across
-         * restarts and independent of the Workspace tab's states (see [workspaceExcludeMinePullRequests] etc.).
-         * The option names are part of the persisted XML; do not rename them without a migration (see [watchedRepos]
-         * for the earlier corruption incident). `BaseState` omits values equal to the default, so existing installs
-         * get these defaults automatically with no migration.
+         * The Exclude checkbox states and the Created by dropdown of the Current Project tab. Each is a view preference,
+         * persisted across restarts and independent of the Workspace tab's states (see
+         * [workspaceExcludeApprovedByMePullRequests] etc.). The option names are part of the persisted XML; do not
+         * rename them without a migration (see [watchedRepos] for the earlier corruption incident). `BaseState` omits
+         * values equal to the default, so existing installs get these defaults automatically with no migration.
          *
          * Default true: hide pull requests that are not Open (Merged, Declined).
          */
         var projectExcludeResolvedPullRequests by property(true)
-
-        /** Default false: when true, hide the PRs the current user authored. */
-        var projectExcludeMinePullRequests by property(false)
 
         /** Default false: when true, hide the PRs the current user has approved. */
         var projectExcludeApprovedByMePullRequests by property(false)
@@ -70,20 +67,28 @@ class BbCloudSettings : SimplePersistentStateComponent<BbCloudSettings.State>(St
         var projectExcludeDraftPullRequests by property(true)
 
         /**
-         * The Exclude: checkbox states of the Workspace tab. There is no workspace Resolved property: the two
-         * workspace sources request open pull requests only, so that option is neither shown nor persisted. Each is a
-         * view preference, persisted across restarts and independent of the Current Project states. The option
-         * names are part of the persisted XML; do not rename them without a migration.
-         *
-         * Default false: when true, hide the PRs the current user authored.
+         * The Created by dropdown of the Current Project tab, persisted as the [PullRequestAuthorScope] name. Default
+         * [PullRequestAuthorScope.AnyUser]. The name is new, so the removed boolean `projectExcludeMinePullRequests`
+         * option is never read as this value.
          */
-        var workspaceExcludeMinePullRequests by property(false)
+        var projectPullRequestAuthorScope by string(PullRequestAuthorScope.AnyUser.name)
 
-        /** Default false: when true, hide the PRs the current user has approved. */
+        /**
+         * The Exclude checkbox states and the Created by dropdown of the Workspace tab. There is no workspace Resolved
+         * property: the two workspace sources request open pull requests only, so that option is neither shown nor
+         * persisted. Each is a view preference, persisted across restarts and independent of the Current Project
+         * states. The option names are part of the persisted XML; do not rename them without a migration.
+         */
         var workspaceExcludeApprovedByMePullRequests by property(false)
 
         /** Default true: hide draft pull requests. */
         var workspaceExcludeDraftPullRequests by property(true)
+
+        /**
+         * The Created by dropdown of the Workspace tab, persisted as the [PullRequestAuthorScope] name. Default
+         * [PullRequestAuthorScope.AnyUser]. See [projectPullRequestAuthorScope] for why the name is new.
+         */
+        var workspacePullRequestAuthorScope by string(PullRequestAuthorScope.AnyUser.name)
 
         /**
          * The divider position of the pull-request page split layout, as the fraction of the width given to the left
@@ -209,15 +214,15 @@ class BbCloudSettings : SimplePersistentStateComponent<BbCloudSettings.State>(St
         return when (scope) {
             PullRequestListScope.CurrentProject -> PullRequestListFilter(
                 excludeResolved = state.projectExcludeResolvedPullRequests,
-                excludeMine = state.projectExcludeMinePullRequests,
                 excludeApprovedByMe = state.projectExcludeApprovedByMePullRequests,
-                excludeDrafts = state.projectExcludeDraftPullRequests
+                excludeDrafts = state.projectExcludeDraftPullRequests,
+                authorScope = parseAuthorScope(stored = state.projectPullRequestAuthorScope)
             )
             PullRequestListScope.Workspace -> PullRequestListFilter(
                 excludeResolved = false,
-                excludeMine = state.workspaceExcludeMinePullRequests,
                 excludeApprovedByMe = state.workspaceExcludeApprovedByMePullRequests,
-                excludeDrafts = state.workspaceExcludeDraftPullRequests
+                excludeDrafts = state.workspaceExcludeDraftPullRequests,
+                authorScope = parseAuthorScope(stored = state.workspacePullRequestAuthorScope)
             )
         }
     }
@@ -230,14 +235,14 @@ class BbCloudSettings : SimplePersistentStateComponent<BbCloudSettings.State>(St
         when (scope) {
             PullRequestListScope.CurrentProject -> {
                 state.projectExcludeResolvedPullRequests = filter.excludeResolved
-                state.projectExcludeMinePullRequests = filter.excludeMine
                 state.projectExcludeApprovedByMePullRequests = filter.excludeApprovedByMe
                 state.projectExcludeDraftPullRequests = filter.excludeDrafts
+                state.projectPullRequestAuthorScope = filter.authorScope.name
             }
             PullRequestListScope.Workspace -> {
-                state.workspaceExcludeMinePullRequests = filter.excludeMine
                 state.workspaceExcludeApprovedByMePullRequests = filter.excludeApprovedByMe
                 state.workspaceExcludeDraftPullRequests = filter.excludeDrafts
+                state.workspacePullRequestAuthorScope = filter.authorScope.name
             }
         }
     }
@@ -249,6 +254,11 @@ class BbCloudSettings : SimplePersistentStateComponent<BbCloudSettings.State>(St
 
         fun getInstance(): BbCloudSettings {
             return ApplicationManager.getApplication().service()
+        }
+
+        /** Maps a stored [PullRequestAuthorScope] name back to the enum. Unset or unknown values fall back to AnyUser. */
+        private fun parseAuthorScope(stored: String?): PullRequestAuthorScope {
+            return PullRequestAuthorScope.entries.firstOrNull { scope -> scope.name == stored } ?: PullRequestAuthorScope.AnyUser
         }
     }
 }

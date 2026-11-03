@@ -56,7 +56,6 @@ internal fun PullRequestsListingBody(
                 PullRequestsCard.Listing -> PullRequestCardListing(
                     rows = state.rows,
                     avatarRevision = state.avatarRevision,
-                    showRepositoryColumn = true,
                     // Merged and declined rows now appear next to open rows; the badge is None for open rows.
                     showStateBadge = true,
                     avatarIconFor = viewModel::avatarIconFor,

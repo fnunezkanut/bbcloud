@@ -75,6 +75,8 @@ class BbCloudToolWindowPanel(private val project: Project) {
         reviewQueueService = createDefaultReviewQueueService(),
         coroutineScope = coroutineScope,
         onGoToSettings = { selectTab(tab = BbCloudToolWindowTab.Settings) },
+        onGoToWatchedProjects = { showWatchedProjectsTab() },
+        onGoToWorkspace = { showWorkspacePrsTab() },
         onRefreshRequested = { refreshWorkspace() }
     )
 
@@ -137,6 +139,22 @@ class BbCloudToolWindowPanel(private val project: Project) {
         contentByTab[BbCloudToolWindowTab.Settings] ?: return false
         LOG.info("User opened Bitbucket Cloud PR Review settings from the Tools settings page")
         selectTab(tab = BbCloudToolWindowTab.Settings)
+        return true
+    }
+
+    /** Selects the Workspace - Watched Projects tab. Returns false if the tab or its content is unavailable. */
+    fun showWatchedProjectsTab(): Boolean {
+        contentManager ?: return false
+        contentByTab[BbCloudToolWindowTab.WorkspaceWatchedProjects] ?: return false
+        selectTab(tab = BbCloudToolWindowTab.WorkspaceWatchedProjects)
+        return true
+    }
+
+    /** Selects the Workspace PRs tab. Returns false if the tab or its content is unavailable. */
+    fun showWorkspacePrsTab(): Boolean {
+        contentManager ?: return false
+        contentByTab[BbCloudToolWindowTab.WorkspacePrs] ?: return false
+        selectTab(tab = BbCloudToolWindowTab.WorkspacePrs)
         return true
     }
 

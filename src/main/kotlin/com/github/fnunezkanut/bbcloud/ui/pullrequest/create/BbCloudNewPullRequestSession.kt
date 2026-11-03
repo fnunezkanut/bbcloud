@@ -7,6 +7,9 @@ import com.github.fnunezkanut.bbcloud.bitbucket.BbCloudOpenPullRequestService
 import com.github.fnunezkanut.bbcloud.bitbucket.CreatePullRequestResult
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestSummary
 import com.github.fnunezkanut.bbcloud.git.BbCloudBranchCheckoutService
+import com.github.fnunezkanut.bbcloud.git.CommitMessageParser
+import com.github.fnunezkanut.bbcloud.git.LastCommitMessageReader
+import com.github.fnunezkanut.bbcloud.git.ParsedCommitMessage
 import com.github.fnunezkanut.bbcloud.ui.BbCloudToolWindowPanel
 import com.github.fnunezkanut.bbcloud.ui.main.ReviewerSearchPopup
 import com.github.fnunezkanut.bbcloud.ui.main.ReviewerSearchRequest
@@ -27,8 +30,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.withContext
 import org.jetbrains.jewel.bridge.compose
 import java.awt.BorderLayout
+import java.nio.file.Path
 import javax.swing.JComponent
 import javax.swing.JPanel
 import javax.swing.SwingUtilities
@@ -87,6 +92,9 @@ class BbCloudNewPullRequestSession(
             )
         },
         currentLocalBranch = file.context.currentLocalBranch,
+        initialTitle = file.context.prefilledTitle,
+        initialDescription = file.context.prefilledDescription,
+        loadLastCommitMessageForBranch = { branchName -> loadLastCommitMessageForBranch(branchName = branchName) },
         openReviewerSearch = { request -> openReviewerSearch(request) },
         loadWorkingTreeStatus = { branchCheckoutService.workingTreeStatus(project) },
         confirmExistingCheckRetry = { confirmExistingCheckRetry() },
@@ -131,6 +139,18 @@ class BbCloudNewPullRequestSession(
     /** Called from the file editor when its tab is (re)selected, so a commit made elsewhere clears the warning. */
     fun onEditorSelected() {
         viewModel.onEditorSelected()
+    }
+
+    /** Reads the last commit of [branchName] in the project checkout and parses it; null when it cannot be read. */
+    private suspend fun loadLastCommitMessageForBranch(branchName: String): ParsedCommitMessage? {
+        val basePath = file.context.worktreePath ?: return null
+        val rawMessage = withContext(Dispatchers.IO) {
+            LastCommitMessageReader.readLastCommitMessageForBranch(
+                worktreePath = Path.of(basePath),
+                branchName = branchName
+            )
+        }
+        return rawMessage?.let { raw -> CommitMessageParser.parse(rawMessage = raw) }
     }
 
     private fun openReviewerSearch(request: ReviewerSearchRequest) {

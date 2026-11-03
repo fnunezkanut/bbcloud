@@ -30,6 +30,7 @@ import com.github.fnunezkanut.bbcloud.BbCloudBundle
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestReviewer
 import com.github.fnunezkanut.bbcloud.bitbucket.ReviewerStatus
 import com.github.fnunezkanut.bbcloud.ui.otherprojects.toComposeImageBitmap
+import com.github.fnunezkanut.bbcloud.ui.pullrequests.LISTING_AUTHOR_AVATAR_SIZE_DP
 import com.github.fnunezkanut.bbcloud.ui.pullrequests.ReviewerStack
 import com.github.fnunezkanut.bbcloud.ui.pullrequests.reviewerOverflowLabel
 import org.jetbrains.jewel.foundation.theme.JewelTheme
@@ -39,13 +40,18 @@ import org.jetbrains.jewel.ui.component.Tooltip
 import org.jetbrains.jewel.ui.icon.IconKey
 import org.jetbrains.jewel.ui.icons.AllIconsKeys
 
-private val REVIEWER_STACK_AVATAR_SIZE = REVIEWER_IDENTITY_AVATAR_SIZE
+/**
+ * The reviewer avatar size in the listing stack. It tracks [LISTING_AUTHOR_AVATAR_SIZE_DP] so reviewers always match the
+ * author on a listing row. It is separate from the shared [REVIEWER_IDENTITY_AVATAR_SIZE], which the Overview tab and the
+ * new pull request form keep.
+ */
+private val REVIEWER_STACK_AVATAR_SIZE = LISTING_AUTHOR_AVATAR_SIZE_DP.dp
 private val REVIEWER_STACK_OVERLAP = 6.dp
 private val REVIEWER_STACK_RING_WIDTH = 1.5.dp
 private val APPROVED_BADGE_SIZE = 10.dp
 
-/** The reduction, in sp, of the "+N" overflow text relative to the default body text, so it fits a 20dp circle. */
-private const val OVERFLOW_FONT_SIZE_REDUCTION = 3f
+/** The reduction, in sp, of the "+N" overflow text relative to the default body text, so it fits the listing circle. */
+private const val OVERFLOW_FONT_SIZE_REDUCTION = 1f
 
 /**
  * A compact overlapping stack of at most two reviewer avatars plus an optional "+N" circle

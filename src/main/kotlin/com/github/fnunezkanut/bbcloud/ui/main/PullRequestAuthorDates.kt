@@ -26,10 +26,14 @@ internal fun pullRequestAuthorDates(summary: PullRequestSummary, updatedRelative
     } else {
         BbCloudBundle.message("main.pullRequests.updatedCreated", updatedRelative, createdRelative)
     }
-    val tooltipText = BbCloudBundle.message(
+    return PullRequestAuthorDates(visibleText = visibleText, tooltipText = pullRequestAbsoluteDatesTooltip(summary = summary))
+}
+
+/** The absolute created and updated timestamps of [summary], used as the tooltip of the relative date text. */
+internal fun pullRequestAbsoluteDatesTooltip(summary: PullRequestSummary): String {
+    return BbCloudBundle.message(
         "main.pullRequests.updatedCreated.tooltip",
         PullRequestRelativeTime.format(summary.createdOn),
         PullRequestRelativeTime.format(summary.updatedOn)
     )
-    return PullRequestAuthorDates(visibleText = visibleText, tooltipText = tooltipText)
 }

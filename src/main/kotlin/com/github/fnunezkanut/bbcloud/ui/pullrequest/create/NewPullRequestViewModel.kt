@@ -9,6 +9,7 @@ import com.github.fnunezkanut.bbcloud.bitbucket.NewPullRequestBranchData
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestSummary
 import com.github.fnunezkanut.bbcloud.bitbucket.ReviewerCandidate
 import com.github.fnunezkanut.bbcloud.bitbucket.ReviewerCandidates
+import com.github.fnunezkanut.bbcloud.git.ParsedCommitMessage
 import com.github.fnunezkanut.bbcloud.git.WorkingTreeStatus
 import com.github.fnunezkanut.bbcloud.ui.main.AuthorAvatarCache
 import com.github.fnunezkanut.bbcloud.ui.main.CommentComposerViewModel
@@ -33,6 +34,11 @@ class NewPullRequestViewModel(
     private val findOpenPullRequest: suspend (source: String, destination: String) -> ExistingPullRequestLookupResult,
     private val createPullRequest: suspend (NewPullRequest) -> CreatePullRequestResult,
     private val currentLocalBranch: String?,
+    // The title and description the current checkout's last commit prefilled the form with.
+    private val initialTitle: String = "",
+    private val initialDescription: String = "",
+    // Reads and parses the last commit of a selected source branch, or null when it cannot be read.
+    private val loadLastCommitMessageForBranch: suspend (branchName: String) -> ParsedCommitMessage? = { null },
     private val openReviewerSearch: (ReviewerSearchRequest) -> Unit,
     private val loadWorkingTreeStatus: suspend () -> WorkingTreeStatus?,
     private val confirmExistingCheckRetry: () -> Boolean,
@@ -52,7 +58,7 @@ class NewPullRequestViewModel(
     // Injectable so tests can remove the debounce; the UI keeps the default.
     private val existingCheckDebounceMs: Long = EXISTING_CHECK_DEBOUNCE_MS
 ) {
-    val state: MutableState<NewPullRequestUiState> = mutableStateOf(NewPullRequestUiState())
+    val state: MutableState<NewPullRequestUiState> = mutableStateOf(NewPullRequestUiState(title = initialTitle))
 
     /** The Markdown description editor, reused from the comment composer, expanded with no submit button. */
     val descriptionComposer: CommentComposerViewModel = CommentComposerViewModel(
@@ -62,12 +68,17 @@ class NewPullRequestViewModel(
             submitLabel = descriptionSubmitLabel,
             submitHint = descriptionSubmitHint,
             failureMessage = descriptionFailureMessage,
-            initialText = "",
+            initialText = initialDescription,
             // The form has no composer submit button, so this is never invoked.
             submit = { _, onResult -> onResult(false) }
         ),
         startsExpanded = true
     )
+
+    // The value the last prefill wrote into the title and description. A field that still holds it has not been
+    // edited by the user, so a source change may replace it.
+    private var prefilledTitle: String = initialTitle
+    private var prefilledDescription: String = initialDescription
 
     private var branchNames: List<String> = emptyList()
     private var mainBranchName: String? = null
@@ -166,20 +177,25 @@ class NewPullRequestViewModel(
     fun onSourceSelected(index: Int) {
         LOG.info("User selected a source branch in the new pull request form")
         val source = state.value.sourceOptions.getOrNull(index) ?: return
+        val previousSource = state.value.selectedSource
         state.value = state.value.copy(selectedSource = source)
+        if (source != previousSource) {
+            applyBranchPrefill(source = source)
+        }
         scheduleExistingCheck()
     }
 
     fun onDestinationSelected(index: Int) {
         LOG.info("User selected a destination branch in the new pull request form")
         val destination = state.value.destinationOptions.getOrNull(index) ?: return
+        val previousSource = state.value.selectedSource
         val sourceOptions = NewPullRequestBranchOptions.sourceOptions(
             branches = branchNames,
             mainBranchName = mainBranchName,
             destinationBranch = destination
         )
         val reconciledSource = NewPullRequestBranchOptions.reconcileSource(
-            selectedSource = state.value.selectedSource,
+            selectedSource = previousSource,
             options = sourceOptions,
             currentLocalBranch = currentLocalBranch
         )
@@ -188,7 +204,42 @@ class NewPullRequestViewModel(
             sourceOptions = sourceOptions,
             selectedSource = reconciledSource
         )
+        if (reconciledSource != null && reconciledSource != previousSource) {
+            applyBranchPrefill(source = reconciledSource)
+        }
         scheduleExistingCheck()
+    }
+
+    /** Re-reads the last commit of [source] and prefills the title and description the user has not edited. */
+    private fun applyBranchPrefill(source: String) {
+        coroutineScope.launch {
+            val prefill = loadLastCommitMessageForBranch(source)
+            onEdtDispatcher {
+                // Ignore a stale result: the source selection moved on while the commit was read.
+                if (state.value.selectedSource != source) {
+                    LOG.debug("Ignoring the commit prefill of a source branch that is no longer selected")
+                    return@onEdtDispatcher
+                }
+                if (prefill == null) {
+                    LOG.debug("No commit prefill for the selected source branch; keeping the current fields")
+                    return@onEdtDispatcher
+                }
+                applyPrefill(prefill = prefill)
+            }
+        }
+    }
+
+    /** Writes [prefill] into each field the user has not edited since the last prefill. */
+    private fun applyPrefill(prefill: ParsedCommitMessage) {
+        if (state.value.title == prefilledTitle) {
+            state.value = state.value.copy(title = prefill.title)
+            prefilledTitle = prefill.title
+        }
+        if (descriptionComposer.currentDraft() == prefilledDescription) {
+            descriptionComposer.replaceDraft(prefill.description)
+            prefilledDescription = prefill.description
+        }
+        LOG.debug("Applied the commit prefill to the new pull request form")
     }
 
     private fun scheduleExistingCheck() {

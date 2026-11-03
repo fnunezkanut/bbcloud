@@ -248,7 +248,7 @@ class CheckedOutBranchPanel(
         LOG.debug("Overview reports mergeChecksState=$mergeChecksState for pull request #$pullRequestId")
         detailViewModel.setMergeChecksState(pullRequestId = pullRequestId, state = mergeChecksState)
         // The conversation goes first, so its host state (current user, mentions, file existence) is in place when the
-        // timeline recomposes with the threads.
+        // timeline recomposes with the threads. Mentions still pending show a placeholder until the editor session applies them.
         conversationViewModel.bind(coroutineScope = coroutineScope)
         conversationViewModel.showConversation(
             conversation = overview.conversation,
@@ -268,6 +268,15 @@ class CheckedOutBranchPanel(
         } else {
             headerViewModel.clearCommitsBehind()
         }
+    }
+
+    /** The revision of the conversation shown last; pass it back to [applyMentionNames]. */
+    fun conversationRevision(): Int {
+        return conversationViewModel.conversationRevision()
+    }
+
+    fun applyMentionNames(revision: Int, names: Map<String, String>) {
+        conversationViewModel.applyMentionNames(revision = revision, names = names)
     }
 
     fun showReviewers(details: PullRequestDetails, coroutineScope: CoroutineScope) {

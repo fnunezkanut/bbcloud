@@ -1,6 +1,5 @@
 package com.github.fnunezkanut.bbcloud.ui.pullrequest.editor
 
-import com.github.fnunezkanut.bbcloud.BbCloudBundle
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestPathMatcher
 import com.github.fnunezkanut.bbcloud.git.FileLineCount
 import com.github.fnunezkanut.bbcloud.review.BbCloudWorktreePullRequestContext
@@ -122,11 +121,6 @@ class PullRequestDiffBarsDiffExtension : DiffExtension() {
             changeType = changeType,
             onesideSide = ReviewBarDiffEditors.onesideSideOf(viewer = viewer)
         )
-        val addCommentTooltip = if (commentScope == ReviewBarCommentScope.PullRequestLevel) {
-            BbCloudBundle.message("editor.reviewBar.addComment.deletedFile.tooltip")
-        } else {
-            null
-        }
         val bar = PullRequestReviewBar.create(
             relativePath = relativePath,
             pullRequestId = pullRequestId,
@@ -142,8 +136,7 @@ class PullRequestDiffBarsDiffExtension : DiffExtension() {
                 commentScope = commentScope
             ),
             project = project,
-            navigator = ReviewBarDiffChainNavigator(project = project, diffContext = diffContext, viewer = viewer),
-            addCommentTooltip = addCommentTooltip
+            navigator = ReviewBarDiffChainNavigator(project = project, diffContext = diffContext, viewer = viewer)
         )
         if (viewer == null || !Disposer.tryRegister(viewer, bar)) {
             bar.dispose()

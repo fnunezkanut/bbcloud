@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## *1.6.0* - 2026-11-03
+* Fixed: the Previous, Next, and Add Comment buttons in the diff review bar no longer show a hover tooltip that covered the buttons and did not close
+* Changed: when every other file is marked as viewed, the diff review bar shows this as text next to the disabled Previous and Next buttons
+* Added: the Create Pull Request form prefills the title and description from the selected source branch's last commit, and updates them when you switch branches unless you have edited the fields
+* Changed: the "Mine" exclude checkbox on both PR tabs is replaced by a "Created by any user" / "Created by me" dropdown, and the remaining checkboxes are relabeled "Exclude Resolved", "Exclude Approved by me", and "Exclude Drafts"; each tab remembers its choice
+* Changed: Watched Projects now caps how many projects you can watch to help avoid Bitbucket rate limits, and the footer and workspace scope notes link to the related tab
+* Changed: `@mentions` in the Activity timeline show a "loading…" placeholder until the account name resolves
+
 ## *1.5.0* - 2026-11-02
 * Bugfix: Unable to leave multiple comments on same line, thanks Olszewski-Jakub!
 

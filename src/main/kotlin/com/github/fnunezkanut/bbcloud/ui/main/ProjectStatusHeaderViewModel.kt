@@ -2,7 +2,6 @@ package com.github.fnunezkanut.bbcloud.ui.main
 
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
-import com.github.fnunezkanut.bbcloud.BbCloudBundle
 import com.intellij.ide.BrowserUtil
 import com.intellij.openapi.diagnostic.logger
 import org.jetbrains.jewel.ui.icon.IconKey
@@ -43,23 +42,6 @@ class ProjectStatusHeaderViewModel(private val onRefreshRequested: () -> Unit, p
     /** Clears the status row so the next status starts from a blank row. */
     fun reset() {
         state.value = ProjectStatusHeaderState(statusMessage = "")
-    }
-
-    /**
-     * Sets the status icon and message in the header, hiding the "Project:" prefix and the repository link. Used by
-     * statuses that leave the listing in place, so the header shows what went wrong.
-     */
-    fun showStatus(icon: IconKey?, message: String) {
-        state.value = state.value.copy(
-            statusIcon = icon,
-            statusMessage = message,
-            repositoryWebUrl = null
-        )
-    }
-
-    /** Shows the "Checking..." message while the project repository is being resolved. */
-    fun showChecking() {
-        showStatus(icon = null, message = BbCloudBundle.message("main.checking"))
     }
 
     /** Shows the resolved repository (green tick, slug link) instead of a status message. */
