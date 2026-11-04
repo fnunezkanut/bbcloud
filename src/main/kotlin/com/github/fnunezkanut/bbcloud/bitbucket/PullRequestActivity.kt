@@ -2,7 +2,8 @@ package com.github.fnunezkanut.bbcloud.bitbucket
 
 import kotlin.time.Instant
 
-data class ActivityUser(val uuid: String?, val displayName: String, val avatarUrl: String?)
+/** [accountId] is the Atlassian account id used in `@{...}` mention tokens; null when Bitbucket did not report it. */
+data class ActivityUser(val uuid: String?, val displayName: String, val avatarUrl: String?, val accountId: String? = null)
 
 /** Activity log entries; only the documented `update` and `approval` shapes are kept. */
 sealed interface PullRequestActivityItem {

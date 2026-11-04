@@ -23,12 +23,9 @@
 
     <change-notes><![CDATA[
         <ul>
-            <li>Fixed: the Previous, Next, and Add Comment buttons in the diff review bar no longer show a hover tooltip that covered the buttons and did not close</li>
-            <li>Changed: when every other file is marked as viewed, the diff review bar shows this as text next to the disabled Previous and Next buttons</li>
-            <li>Added: the Create Pull Request form prefills the title and description from the selected source branch's last commit, and updates them when you switch branches unless you have edited the fields</li>
-            <li>Changed: the "Mine" exclude checkbox on both PR tabs is replaced by a "Created by any user" / "Created by me" dropdown, and the remaining checkboxes are relabeled "Exclude Resolved", "Exclude Approved by me", and "Exclude Drafts"; each tab remembers its choice</li>
-            <li>Changed: Watched Projects now caps how many projects you can watch to help avoid Bitbucket rate limits, and the footer and workspace scope notes link to the related tab</li>
-            <li>Changed: <code>@mentions</code> in the Activity timeline show a "loading…" placeholder until the account name resolves</li>
+            <li>Added: a red delete button beside each PR work tree on Watched Projects removes that work tree after confirmation, and closes its IDE window first if one is open; the progress dialog closes after 5 seconds while the removal keeps running in the background</li>
+            <li>Added: @mention users in comments and replies</li>
+            <li>Added: PRs assigned to me option on Current Project and Workspace tabs in the dropdown</li>
         </ul>
     ]]></change-notes>
 
@@ -49,6 +46,8 @@
                 serviceImplementation="com.github.fnunezkanut.bbcloud.ui.pullrequest.decline.BbCloudPullRequestDeclineCoordinator"/>
         <applicationService
                 serviceImplementation="com.github.fnunezkanut.bbcloud.settings.BbCloudSettings"/>
+        <applicationService
+                serviceImplementation="com.github.fnunezkanut.bbcloud.review.BbCloudKnownUsersState"/>
         <applicationService
                 serviceInterface="com.github.fnunezkanut.bbcloud.credentials.BbCloudCredentialStore"
                 serviceImplementation="com.github.fnunezkanut.bbcloud.credentials.PasswordSafeBbCloudCredentialStore"/>

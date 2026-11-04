@@ -5,7 +5,10 @@ import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestState
 import com.github.fnunezkanut.bbcloud.bitbucket.ReviewerStatus
 import com.github.fnunezkanut.bbcloud.settings.PullRequestListFilter
 import com.github.fnunezkanut.bbcloud.settings.PullRequestListScope
+import com.github.fnunezkanut.bbcloud.settings.PullRequestUserScope
+import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContainExactly
+import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
 import io.kotest.matchers.shouldBe
 import io.mockk.mockk
 import io.mockk.verify
@@ -261,6 +264,49 @@ class PullRequestsViewModelTest {
         }
     }
 
+    @Test
+    fun `applySource - should show every row for Assigned to me until the user uuid is known, then only assigned rows`() {
+        // GIVEN a project view model saved with Assigned to me and no current user uuid yet
+        val viewModel = projectViewModel(
+            initialFilter = PullRequestListFilter(excludeResolved = false, excludeDrafts = false, userScope = PullRequestUserScope.AssignedToMe)
+        )
+        val scope = CoroutineScope(SupervisorJob())
+        try {
+            val generation = viewModel.beginRefresh()
+            val entries = listOf(
+                listEntry(id = 1, source = PullRequestListingSource.ProjectOpen, reviewers = listOf(reviewer(uuid = CURRENT_USER))),
+                listEntry(id = 2, source = PullRequestListingSource.ProjectOpen, reviewers = listOf(reviewer(uuid = "{other}")))
+            )
+            viewModel.applySource(
+                generation = generation,
+                source = PullRequestListingSource.ProjectOpen,
+                entries = entries,
+                isTruncated = false,
+                currentUserUuid = null,
+                coroutineScope = scope
+            )
+
+            // THEN the saved choice is treated as Created by any user, so both rows show
+            viewModel.state.value.rows.map { it.pullRequest.summary.id } shouldContainExactlyInAnyOrder listOf(1L, 2L)
+
+            // WHEN the current user uuid arrives with the next response
+            viewModel.applySource(
+                generation = generation,
+                source = PullRequestListingSource.ProjectOpen,
+                entries = entries,
+                isTruncated = false,
+                currentUserUuid = CURRENT_USER,
+                coroutineScope = scope
+            )
+
+            // THEN only the row where the user is a reviewer shows, and the saved choice is kept
+            viewModel.state.value.rows.map { it.pullRequest.summary.id } shouldContainExactly listOf(1L)
+            viewModel.state.value.filter.userScope shouldBe PullRequestUserScope.AssignedToMe
+        } finally {
+            scope.cancel()
+        }
+    }
+
     private fun reviewer(uuid: String): PullRequestReviewer {
         return PullRequestReviewer(
             uuid = uuid,
@@ -268,6 +314,60 @@ class PullRequestsViewModelTest {
             avatarUrl = null,
             status = ReviewerStatus.None
         )
+    }
+
+    @Test
+    fun `applySource - should seed known users with the loaded entries`() {
+        // GIVEN a project view model with a capturing seed lambda
+        val seeded = mutableListOf<List<PullRequestListEntry>>()
+        val viewModel = projectViewModel(seedKnownUsers = { entries -> seeded.add(entries) })
+        val scope = CoroutineScope(SupervisorJob())
+        try {
+            val generation = viewModel.beginRefresh()
+            val entries = listOf(listEntry(id = 1, source = PullRequestListingSource.ProjectOpen))
+
+            // WHEN a source loads
+            viewModel.applySource(
+                generation = generation,
+                source = PullRequestListingSource.ProjectOpen,
+                entries = entries,
+                isTruncated = false,
+                currentUserUuid = CURRENT_USER,
+                coroutineScope = scope
+            )
+
+            // THEN the loaded entries are forwarded to the seed lambda
+            seeded shouldContainExactly listOf(entries)
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun `applySource - should not seed known users for a stale generation`() {
+        // GIVEN a project view model with a capturing seed lambda
+        val seeded = mutableListOf<List<PullRequestListEntry>>()
+        val viewModel = projectViewModel(seedKnownUsers = { entries -> seeded.add(entries) })
+        val scope = CoroutineScope(SupervisorJob())
+        try {
+            val generation = viewModel.beginRefresh()
+            val staleGeneration = generation - 1
+
+            // WHEN a source arrives for a stale generation
+            viewModel.applySource(
+                generation = staleGeneration,
+                source = PullRequestListingSource.ProjectOpen,
+                entries = listOf(listEntry(id = 99, source = PullRequestListingSource.ProjectOpen)),
+                isTruncated = false,
+                currentUserUuid = CURRENT_USER,
+                coroutineScope = scope
+            )
+
+            // THEN nothing is seeded
+            seeded.shouldBeEmpty()
+        } finally {
+            scope.cancel()
+        }
     }
 
     private fun loadBothProjectSources(
@@ -299,6 +399,7 @@ class PullRequestsViewModelTest {
         onFilterChanged: (PullRequestListFilter) -> Unit = {},
         onOpenTitle: (PullRequestListEntry) -> Unit = {},
         onCountsChanged: (Int, PullRequestsCard) -> Unit = { _, _ -> },
+        seedKnownUsers: (List<PullRequestListEntry>) -> Unit = {},
         initialFilter: PullRequestListFilter = PullRequestListFilter()
     ): PullRequestsViewModel {
         return PullRequestsViewModel(
@@ -311,7 +412,8 @@ class PullRequestsViewModelTest {
             onOpenTitleCallback = onOpenTitle,
             onOpenPrOnWebCallback = {},
             onOpenRepositoryCallback = {},
-            onCountsChanged = onCountsChanged
+            onCountsChanged = onCountsChanged,
+            seedKnownUsers = seedKnownUsers
         )
     }
 

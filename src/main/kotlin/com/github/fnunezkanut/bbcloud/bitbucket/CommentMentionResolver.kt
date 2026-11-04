@@ -34,12 +34,40 @@ internal object CommentMentionResolver {
     }
 
     /**
+     * Returns the character range of every `@{...}` mention token outside code, paired with its raw account key. The
+     * ranges index into [body]; code spans and fenced blocks are skipped, matching how [resolveMentions] renders.
+     */
+    fun mentionTokenRanges(body: String): List<Pair<IntRange, String>> {
+        val ranges = mutableListOf<Pair<IntRange, String>>()
+        var offset = 0
+        for (segment in MarkdownCodeRegions.splitCodeRegions(body = body)) {
+            if (!segment.isCode) {
+                for (match in MENTION_TOKEN.findAll(segment.text)) {
+                    val start = offset + match.range.first
+                    val end = offset + match.range.last
+                    ranges.add((start..end) to match.groupValues[1])
+                }
+            }
+            offset += segment.text.length
+        }
+        return ranges
+    }
+
+    /**
      * Trims the key, strips one leading `{` and one trailing `}`, and lowercases it. A token `@{ABC}` then matches a stored
      * `{abc}` uuid, because the two sides only differ in braces and case.
      */
     fun normalizeKey(rawKey: String): String {
         val trimmed = rawKey.trim()
         return trimmed.removePrefix("{").removeSuffix("}").lowercase()
+    }
+
+    /**
+     * Builds the raw token Bitbucket stores for a mention; [accountKey] is an Atlassian account id, or a uuid without
+     * braces when the account id is unknown.
+     */
+    fun mentionToken(accountKey: String): String {
+        return "@{$accountKey}"
     }
 
     /**

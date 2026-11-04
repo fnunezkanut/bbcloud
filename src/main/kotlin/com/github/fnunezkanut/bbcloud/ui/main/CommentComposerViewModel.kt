@@ -6,9 +6,13 @@ import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.text.input.placeCursorAtEnd
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.text.TextRange
 import com.github.fnunezkanut.bbcloud.BbCloudBundle
+import com.github.fnunezkanut.bbcloud.bitbucket.CommentMentionResolver
+import com.github.fnunezkanut.bbcloud.bitbucket.MentionCandidate
 import com.intellij.openapi.application.EDT
 import com.intellij.openapi.diagnostic.logger
 import kotlinx.coroutines.CompletableDeferred
@@ -212,7 +216,14 @@ internal fun emptyPreviewMessage(draft: String): String? {
  * Holds the state of one comment composer. The same composer serves the top level comment of the conversation and, with
  * the collapsed field turned off, the reply and the edit editor of a single thread.
  */
-class CommentComposerViewModel(private val input: CommentInput, private val startsExpanded: Boolean = false) {
+class CommentComposerViewModel(
+    private val input: CommentInput,
+    private val startsExpanded: Boolean = false,
+    // null turns @mention suggestions off; the PR description editors leave it null because description rendering does
+    // not resolve mention tokens yet.
+    private val mentionSource: CommentMentionSource? = null,
+    initialMentionNames: Map<String, String> = emptyMap()
+) {
     val state: MutableState<CommentComposerUiState> = mutableStateOf(initialState())
 
     /**
@@ -225,6 +236,17 @@ class CommentComposerViewModel(private val input: CommentInput, private val star
         initialText = input.initialText,
         initialSelection = TextRange(index = input.initialText.length)
     )
+
+    /** The @mention suggestion list of this composer; null when the composer has no mention source. */
+    internal val mentionSuggestions: CommentMentionSuggestions? =
+        mentionSource?.let { source -> CommentMentionSuggestions(source = source, label = input.label) }
+
+    /** The initial token names, normalized, so a reopened edit composer can re-seed them after a collapse. */
+    private val initialNormalizedNames: Map<String, String> =
+        initialMentionNames.entries.associate { (key, name) -> CommentMentionResolver.normalizeKey(rawKey = key) to name }
+
+    /** Maps a normalized account key to the display name shown for its `@{key}` token, in the editor and the preview. */
+    val mentionNames: SnapshotStateMap<String, String> = mutableStateMapOf<String, String>().apply { putAll(initialNormalizedNames) }
 
     /** The current draft, read straight from the editor state. */
     fun currentDraft(): String {
@@ -266,6 +288,9 @@ class CommentComposerViewModel(private val input: CommentInput, private val star
     /** Closes the editor and drops the draft, the way the Swing composer did when it collapsed. */
     fun collapse() {
         editorState.setTextAndPlaceCursorAtEnd("")
+        mentionSuggestions?.close()
+        mentionNames.clear()
+        mentionNames.putAll(initialNormalizedNames)
         state.value = state.value.copy(
             isExpanded = false,
             isPreview = false,
@@ -277,6 +302,7 @@ class CommentComposerViewModel(private val input: CommentInput, private val star
     fun togglePreview() {
         val isPreview = !state.value.isPreview
         LOG.info("User switched the ${input.label} editor to ${if (isPreview) "preview" else "write"} mode")
+        mentionSuggestions?.close()
         state.value = state.value.copy(isPreview = isPreview)
     }
 
@@ -312,6 +338,29 @@ class CommentComposerViewModel(private val input: CommentInput, private val star
     }
 
     /**
+     * Inserts the mention token for [candidate] in place of the active `@query`, records its display name, and leaves
+     * the caret after the inserted text. The query is recomputed from the live editor state, so a stale query cannot
+     * insert into the wrong place; nothing happens when there is no active query or the candidate has no mention key.
+     */
+    internal fun insertMention(candidate: MentionCandidate) {
+        val text = editorState.text.toString()
+        val selection = editorState.selection
+        val query = MentionQueryDetector.find(text = text, selectionStart = selection.start, selectionEnd = selection.end) ?: return
+        val mentionKey = candidate.mentionKey() ?: return
+        val transform = insertMention(text = text, query = query, mentionKey = mentionKey)
+        editorState.edit {
+            replace(0, length, transform.text)
+            val caret = transform.selectionEnd.coerceIn(0, length)
+            if (caret >= length) {
+                placeCursorAtEnd()
+            } else {
+                placeCursorBeforeCharAt(caret)
+            }
+        }
+        mentionNames[CommentMentionResolver.normalizeKey(rawKey = mentionKey)] = candidate.displayName
+    }
+
+    /**
      * Hands the draft to Bitbucket. The draft is kept when the submission is rejected, so the author does not lose what
      * they wrote; the failure message of the input is shown instead.
      */
@@ -323,6 +372,7 @@ class CommentComposerViewModel(private val input: CommentInput, private val star
         if (content.isBlank()) {
             return false
         }
+        mentionSuggestions?.close()
         state.value = state.value.copy(isSubmitting = true, failureMessage = null)
         val isAccepted = submitToBitbucket(content = content)
         state.value = state.value.copy(isSubmitting = false)

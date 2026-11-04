@@ -174,6 +174,30 @@ class BitbucketPullRequestActivityParserTest {
         }
 
         @Test
+        fun `parseCommentsPage - should read the account id of a comment author`() {
+            // GIVEN
+            val json =
+                """
+                {
+                  "values": [
+                    {
+                      "id": 2,
+                      "created_on": "2026-09-30T10:00:00+00:00",
+                      "content": { "html": "<p>Looks good</p>" },
+                      "user": { "uuid": "{user}", "account_id": "712020:aaaa-bbbb", "display_name": "Name Lastname" }
+                    }
+                  ]
+                }
+                """.trimIndent()
+
+            // WHEN
+            val comment = BitbucketPullRequestResponseParser.parseCommentsPage(json).comments.single()
+
+            // THEN
+            comment.author?.accountId shouldBe "712020:aaaa-bbbb"
+        }
+
+        @Test
         fun `parseCommentsPage - should parse Bitbucket multi-line to range`() {
             // GIVEN
             val json =

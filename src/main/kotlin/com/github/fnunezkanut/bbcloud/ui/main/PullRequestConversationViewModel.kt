@@ -34,6 +34,7 @@ import javax.swing.Icon
 class PullRequestConversationViewModel(
     private val pullRequestId: () -> Long?,
     private val commentEditor: CommentEditor,
+    override val mentionSource: CommentMentionSource? = null,
     private val avatarCache: AuthorAvatarCache = AuthorAvatarCache(avatarSize = CONVERSATION_AVATAR_SIZE),
     private val isLocalFile: (Project, String) -> Boolean = { project, path ->
         PullRequestCommentFileOpener.resolve(project = project, inlinePath = path) != null
@@ -70,7 +71,12 @@ class PullRequestConversationViewModel(
             ConversationComposerKind.Reply -> replyInput(commentId = target.commentId)
             ConversationComposerKind.Edit -> editInput(comment = comment)
         }
-        CommentComposerViewModel(input = input, startsExpanded = true)
+        CommentComposerViewModel(input = input, startsExpanded = true, mentionSource = mentionSource, initialMentionNames = mentions)
+    }
+
+    /** Builds the top-level Activity comment composer, wired with the mention source and the known token names. */
+    fun newTopLevelComposer(): CommentComposerViewModel {
+        return CommentComposerViewModel(input = topLevelCommentInput(), mentionSource = mentionSource, initialMentionNames = mentions)
     }
 
     private var coroutineScope: CoroutineScope? = null

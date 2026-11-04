@@ -32,6 +32,7 @@ class CheckedOutBranchPanel(
     taskEditor: TaskEditor,
     descriptionEditor: DescriptionEditor,
     commentEditor: CommentEditor,
+    private val mentionSource: CommentMentionSource? = null,
     private val onUpdateLocalBranchRequested: () -> Unit = {}
 ) {
     private var attachedProject: Project? = null
@@ -61,7 +62,8 @@ class CheckedOutBranchPanel(
     // The comment composer and the comment threads of the Activity timeline are Compose content.
     private val conversationViewModel = PullRequestConversationViewModel(
         pullRequestId = { displayedPullRequestId },
-        commentEditor = commentEditor
+        commentEditor = commentEditor,
+        mentionSource = mentionSource
     )
 
     /**
@@ -268,6 +270,16 @@ class CheckedOutBranchPanel(
         } else {
             headerViewModel.clearCommitsBehind()
         }
+    }
+
+    /** The current user's uuid, as carried by the shown Activity conversation; null until it has loaded. */
+    fun currentUserUuid(): String? {
+        return conversationViewModel.currentUserUuid
+    }
+
+    /** Builds the top-level Activity comment composer, wired with the mention source. */
+    fun newTopLevelComposer(): CommentComposerViewModel {
+        return conversationViewModel.newTopLevelComposer()
     }
 
     /** The revision of the conversation shown last; pass it back to [applyMentionNames]. */

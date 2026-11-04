@@ -1,6 +1,7 @@
 package com.github.fnunezkanut.bbcloud.ui.diff
 
 import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
@@ -19,6 +20,7 @@ import com.github.fnunezkanut.bbcloud.ui.main.CommentComposerScreen
 import com.github.fnunezkanut.bbcloud.ui.main.CommentComposerViewModel
 import com.github.fnunezkanut.bbcloud.ui.main.CommentInput
 import com.github.fnunezkanut.bbcloud.ui.main.ComposerDraftCache
+import com.github.fnunezkanut.bbcloud.ui.main.LocalCommentPopupOwner
 import com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.BbCloudPullRequestPageRevealer
 import com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.BbCloudPullRequestVirtualFile
 import com.intellij.collaboration.ui.codereview.comment.CommentInputActionsComponentFactory
@@ -213,25 +215,32 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
         val composerSession = ComposerSession(disposable = session, host = host, editor = editor)
         composerSessions[composerKey] = composerSession
         Disposer.register(session) { composerSessions.remove(composerKey, composerSession) }
-        val composerViewModel = CommentComposerViewModel(input = input(session), startsExpanded = true)
+        val composerViewModel = CommentComposerViewModel(
+            input = input(session),
+            startsExpanded = true,
+            mentionSource = context.mentionSource,
+            initialMentionNames = context.mentionNames
+        )
         var composePanel: ComposePanel? = null
         val content = compose(config = { composePanel = this }) {
             val density = LocalDensity.current.density
-            CommentComposerScreen(
-                viewModel = composerViewModel,
-                avatarIcon = avatarCache.iconFor(context.binding?.currentUserAvatarUrl ?: context.currentUserAvatarUrl),
-                showsCollapsedField = false,
-                showsDottedBorder = true,
-                requestEditorFocus = true,
-                focusRequestKey = composerSession.focusGeneration.value,
-                onEditorFocusRequested = { host.requestComposeFocus() },
-                onCollapsed = { Disposer.dispose(session) },
-                modifier = Modifier
-                    .wrapContentHeight(align = Alignment.Top, unbounded = true)
-                    .onSizeChanged { size ->
-                        host.syncComposeContentHeight(contentHeightPx = size.height, density = density)
-                    }
-            )
+            CompositionLocalProvider(LocalCommentPopupOwner provides { composePanel }) {
+                CommentComposerScreen(
+                    viewModel = composerViewModel,
+                    avatarIcon = avatarCache.iconFor(context.binding?.currentUserAvatarUrl ?: context.currentUserAvatarUrl),
+                    showsCollapsedField = false,
+                    showsDottedBorder = true,
+                    requestEditorFocus = true,
+                    focusRequestKey = composerSession.focusGeneration.value,
+                    onEditorFocusRequested = { host.requestComposeFocus() },
+                    onCollapsed = { Disposer.dispose(session) },
+                    modifier = Modifier
+                        .wrapContentHeight(align = Alignment.Top, unbounded = true)
+                        .onSizeChanged { size ->
+                            host.syncComposeContentHeight(contentHeightPx = size.height, density = density)
+                        }
+                )
+            }
         }
         // The host measures the Compose content at the full editor viewport text width and relays the inlay on
         // viewport and content resizes; it owns the preferred-size math, so no fixed width is set here.
@@ -296,25 +305,32 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
                 )
             }
         )
-        val composerViewModel = CommentComposerViewModel(input = input, startsExpanded = true)
+        val composerViewModel = CommentComposerViewModel(
+            input = input,
+            startsExpanded = true,
+            mentionSource = context.mentionSource,
+            initialMentionNames = context.mentionNames
+        )
         var composePanel: ComposePanel? = null
         val content = compose(config = { composePanel = this }) {
             val density = LocalDensity.current.density
-            CommentComposerScreen(
-                viewModel = composerViewModel,
-                avatarIcon = avatarCache.iconFor(context.binding?.currentUserAvatarUrl ?: context.currentUserAvatarUrl),
-                showsCollapsedField = false,
-                showsDottedBorder = true,
-                requestEditorFocus = true,
-                focusRequestKey = composerSession.focusGeneration.value,
-                onEditorFocusRequested = { host.requestComposeFocus() },
-                onCollapsed = { Disposer.dispose(session) },
-                modifier = Modifier
-                    .wrapContentHeight(align = Alignment.Top, unbounded = true)
-                    .onSizeChanged { size ->
-                        host.syncComposeContentHeight(contentHeightPx = size.height, density = density)
-                    }
-            )
+            CompositionLocalProvider(LocalCommentPopupOwner provides { composePanel }) {
+                CommentComposerScreen(
+                    viewModel = composerViewModel,
+                    avatarIcon = avatarCache.iconFor(context.binding?.currentUserAvatarUrl ?: context.currentUserAvatarUrl),
+                    showsCollapsedField = false,
+                    showsDottedBorder = true,
+                    requestEditorFocus = true,
+                    focusRequestKey = composerSession.focusGeneration.value,
+                    onEditorFocusRequested = { host.requestComposeFocus() },
+                    onCollapsed = { Disposer.dispose(session) },
+                    modifier = Modifier
+                        .wrapContentHeight(align = Alignment.Top, unbounded = true)
+                        .onSizeChanged { size ->
+                            host.syncComposeContentHeight(contentHeightPx = size.height, density = density)
+                        }
+                )
+            }
         }
         composePanel?.let { panel -> host.attachComposePanel(panel = panel) }
         host.notifyEmbeddedHeightChanged()
@@ -930,13 +946,15 @@ class BbCloudPullRequestDiffCommentService(private val project: Project) : Dispo
         // rebuilt card takes keyboard focus once.
         val restoreFocus = controller.consumeFocusRestore(editor = editor, threadCommentIds = threadCommentIds)
         val content = compose(config = { composePanel = this }) {
-            DiffInlineCommentThreadCard(
-                thread = anchor.thread,
-                host = host,
-                controller = controller,
-                composerScope = editor,
-                requestComposerFocus = restoreFocus
-            )
+            CompositionLocalProvider(LocalCommentPopupOwner provides { composePanel }) {
+                DiffInlineCommentThreadCard(
+                    thread = anchor.thread,
+                    host = host,
+                    controller = controller,
+                    composerScope = editor,
+                    requestComposerFocus = restoreFocus
+                )
+            }
         }
         // The inlay takes its height from the preferred size of the host, and the host measures the Compose content at
         // the full editor viewport text width, relaying the inlay on viewport and content resizes. Otherwise the

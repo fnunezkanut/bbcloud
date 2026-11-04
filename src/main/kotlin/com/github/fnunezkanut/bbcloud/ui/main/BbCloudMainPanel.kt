@@ -39,6 +39,7 @@ import com.github.fnunezkanut.bbcloud.project.PullRequestWorktreeResolution
 import com.github.fnunezkanut.bbcloud.project.PullRequestWorktreeResolver
 import com.github.fnunezkanut.bbcloud.project.ResolvedProjectRepository
 import com.github.fnunezkanut.bbcloud.project.StaleWorktreePruneSelection
+import com.github.fnunezkanut.bbcloud.review.BbCloudKnownUsersCache
 import com.github.fnunezkanut.bbcloud.settings.PullRequestListScope
 import com.github.fnunezkanut.bbcloud.ui.components.CenteredContent
 import com.github.fnunezkanut.bbcloud.ui.components.NotConfiguredContent
@@ -51,6 +52,7 @@ import com.github.fnunezkanut.bbcloud.ui.pullrequests.PullRequestListingSource
 import com.github.fnunezkanut.bbcloud.ui.pullrequests.PullRequestsCard
 import com.github.fnunezkanut.bbcloud.ui.pullrequests.PullRequestsListingBody
 import com.github.fnunezkanut.bbcloud.ui.pullrequests.PullRequestsViewModel
+import com.github.fnunezkanut.bbcloud.ui.pullrequests.mentionPeopleByWorkspace
 import com.github.fnunezkanut.bbcloud.ui.worktree.PullRequestWorktreeOpener
 import com.github.fnunezkanut.bbcloud.ui.worktree.WorktreeBranchCollisionDialog
 import com.github.fnunezkanut.bbcloud.ui.worktree.WorktreeBranchCollisionResolver
@@ -220,7 +222,12 @@ class BbCloudMainPanel(
         onOpenTitleCallback = ::openProjectPullRequestTitle,
         onOpenPrOnWebCallback = { entry -> openPullRequestOnWeb(entry.pullRequest.summary) },
         onOpenRepositoryCallback = { entry -> openRepositoryInOwnWindow(entry.pullRequest.summary) },
-        onCountsChanged = ::updateOpenCount
+        onCountsChanged = ::updateOpenCount,
+        seedKnownUsers = { entries ->
+            mentionPeopleByWorkspace(entries = entries).forEach { (workspace, people) ->
+                BbCloudKnownUsersCache.getInstance().record(workspace = workspace, candidates = people)
+            }
+        }
     )
     private val projectHeaderViewModel = ProjectStatusHeaderViewModel(
         onRefreshRequested = { triggerLoadPullRequests(source = "refresh button") },

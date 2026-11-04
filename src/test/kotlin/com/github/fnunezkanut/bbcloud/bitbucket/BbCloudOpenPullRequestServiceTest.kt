@@ -1452,6 +1452,80 @@ class BbCloudOpenPullRequestServiceTest {
     }
 
     @Nested
+    inner class MentionWorkspaceMembersTests {
+        private val basePath = "/Users/me/Projects/examplerepo"
+        private val member = ReviewerCandidate(uuid = "{c}", displayName = "Carla", nickname = "carla", avatarUrl = null, accountId = "712020:aaaa-bbbb")
+
+        @Test
+        fun `mentionWorkspaceMembers - should return the members`(): Unit =
+            runBlocking {
+                // GIVEN
+                val client = mockk<BitbucketPullRequestClient>()
+                coEvery { client.listWorkspaceMembers(workspace = "my-workspace", apiToken = "token") } returns
+                    WorkspaceMembers(members = listOf(member), isTruncated = false)
+                val service = BbCloudOpenPullRequestService(storeWithToken("token"), client)
+
+                // WHEN
+                val members = service.mentionWorkspaceMembers(projectBasePath = basePath, organizationUrl = organizationUrl)
+
+                // THEN
+                members shouldBe WorkspaceMembers(members = listOf(member), isTruncated = false)
+            }
+
+        @Test
+        fun `mentionWorkspaceMembers - should use the member cache on the second call`(): Unit =
+            runBlocking {
+                // GIVEN
+                val client = mockk<BitbucketPullRequestClient>()
+                coEvery { client.listWorkspaceMembers(any(), any()) } returns WorkspaceMembers(members = listOf(member), isTruncated = false)
+                val service = BbCloudOpenPullRequestService(storeWithToken("token"), client)
+
+                // WHEN
+                service.mentionWorkspaceMembers(projectBasePath = basePath, organizationUrl = organizationUrl)
+                service.mentionWorkspaceMembers(projectBasePath = basePath, organizationUrl = organizationUrl)
+
+                // THEN
+                coVerify(exactly = 1) { client.listWorkspaceMembers(any(), any()) }
+            }
+
+        @Test
+        fun `mentionWorkspaceMembers - should return null without a token`(): Unit =
+            runBlocking {
+                // GIVEN
+                val client = mockk<BitbucketPullRequestClient>()
+                val service = BbCloudOpenPullRequestService(storeWithToken(null), client)
+
+                // WHEN
+                val members = service.mentionWorkspaceMembers(projectBasePath = basePath, organizationUrl = organizationUrl)
+
+                // THEN
+                members.shouldBeNull()
+                coVerify(exactly = 0) { client.listWorkspaceMembers(any(), any()) }
+            }
+
+        @Test
+        fun `mentionWorkspaceMembers - should return null when the client returns null`(): Unit =
+            runBlocking {
+                // GIVEN
+                val client = mockk<BitbucketPullRequestClient>()
+                coEvery { client.listWorkspaceMembers(any(), any()) } returns null
+                val service = BbCloudOpenPullRequestService(storeWithToken("token"), client)
+
+                // WHEN
+                val members = service.mentionWorkspaceMembers(projectBasePath = basePath, organizationUrl = organizationUrl)
+
+                // THEN
+                members.shouldBeNull()
+            }
+
+        private fun storeWithToken(token: String?): BbCloudAccessTokenProvider {
+            val store = mockk<BbCloudAccessTokenProvider>()
+            coEvery { store.bearerTokenOrNull() } returns token
+            return store
+        }
+    }
+
+    @Nested
     inner class TaskChangeTests {
         private val basePath = "/Users/me/Projects/examplerepo"
 

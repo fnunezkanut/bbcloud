@@ -7,11 +7,13 @@ import com.github.fnunezkanut.bbcloud.auth.BbCloudAccessTokenProvider
 import com.github.fnunezkanut.bbcloud.bitbucket.BbCloudOpenPullRequestService
 import com.github.fnunezkanut.bbcloud.bitbucket.CommentChange
 import com.github.fnunezkanut.bbcloud.bitbucket.InlineCommentSide
+import com.github.fnunezkanut.bbcloud.bitbucket.MentionCandidate
 import com.github.fnunezkanut.bbcloud.bitbucket.MentionNames
 import com.github.fnunezkanut.bbcloud.bitbucket.OkHttpBitbucketPullRequestClient
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestActionResult
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestComment
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestCommentThreads
+import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestDetails
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestInlineCommentIndex
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestPathMatcher
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestState
@@ -22,6 +24,9 @@ import com.github.fnunezkanut.bbcloud.git.FileLineCount
 import com.github.fnunezkanut.bbcloud.git.WorktreeHead
 import com.github.fnunezkanut.bbcloud.project.PullRequestWorktreeLayout
 import com.github.fnunezkanut.bbcloud.ui.diff.BbCloudPullRequestDiffCommentService
+import com.github.fnunezkanut.bbcloud.ui.main.CommentMentionSource
+import com.github.fnunezkanut.bbcloud.ui.main.DefaultCommentMentionSource
+import com.github.fnunezkanut.bbcloud.ui.main.PullRequestMentionPeople
 import com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.BbCloudPullRequestReviewBarRefresh
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
@@ -135,6 +140,28 @@ class BbCloudWorktreePullRequestContext(private val project: Project, private va
     @Volatile
     var currentUserUuid: String? = null
         private set
+
+    /** The author, reviewers, and participants of the bound pull request, offered as the top mention tier. */
+    @Volatile
+    var pullRequestPeople: List<MentionCandidate> = emptyList()
+        private set
+
+    /** The @mention suggestion source for the diff and editor inline comment composers. */
+    val mentionSource: CommentMentionSource by lazy {
+        DefaultCommentMentionSource(
+            pullRequestPeople = {
+                val commentPeople = PullRequestMentionPeople().apply { updateComments(comments = comments) }.candidates()
+                pullRequestPeople + commentPeople
+            },
+            recentlySeen = { BbCloudKnownUsersCache.getInstance().candidates(workspace = configurationService.workspaceSlugOrNull()) },
+            loadWorkspaceMembers = {
+                configurationService.organizationUrlOrNull()?.let { url ->
+                    openPullRequestService.mentionWorkspaceMembers(projectBasePath = project.basePath, organizationUrl = url)
+                }
+            },
+            currentUser = { binding?.currentUserUuid ?: currentUserUuid }
+        )
+    }
 
     /** Changes whenever the shared comment snapshot is replaced, so Compose bars can re-read it. */
     val commentsRevision: MutableState<Int> = mutableStateOf(0)
@@ -534,6 +561,8 @@ class BbCloudWorktreePullRequestContext(private val project: Project, private va
     }
 
     private suspend fun resolve(reason: String) {
+        // Forget the previous PR's people; updatePullRequestPeople refills them once a fresh details load succeeds.
+        pullRequestPeople = emptyList()
         try {
             val basePath = project.basePath
             if (basePath == null) {
@@ -567,6 +596,7 @@ class BbCloudWorktreePullRequestContext(private val project: Project, private va
                 applyBinding(newBinding = null)
                 return
             }
+            updatePullRequestPeople(details = details)
             val summary = details.summary
             if (summary.state != PullRequestState.Open) {
                 LOG.info("Blue bar and review bar hidden: pull request #$pullRequestId is not open")
@@ -766,6 +796,19 @@ class BbCloudWorktreePullRequestContext(private val project: Project, private va
         pullRequestKnownClosed = newClosed
         withContext(Dispatchers.EDT) {
             pullRequestStatusRevision.value++
+        }
+    }
+
+    /**
+     * Stores the people of [details] as the pull-request mention tier and also records them in the recently-seen
+     * cache for the configured workspace, so they are offered on other pull requests too.
+     */
+    private fun updatePullRequestPeople(details: PullRequestDetails) {
+        val people = PullRequestMentionPeople().apply { updateDetails(details = details) }.candidates()
+        pullRequestPeople = people
+        val workspace = configurationService.workspaceSlugOrNull()
+        if (workspace != null) {
+            BbCloudKnownUsersCache.getInstance().record(workspace = workspace, candidates = people)
         }
     }
 

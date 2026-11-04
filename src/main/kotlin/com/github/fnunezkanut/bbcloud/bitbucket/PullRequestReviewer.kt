@@ -17,10 +17,13 @@ data class PullRequestReviewer(
      * When the reviewer last acted on the pull request (Bitbucket `participated_on`); null when unknown. Used to
      * order approvals by recency.
      */
-    val participatedOn: Instant? = null
+    val participatedOn: Instant? = null,
+    /** The Atlassian account id used in `@{...}` mention tokens; null when Bitbucket did not report it. */
+    val accountId: String? = null
 )
 
-data class ReviewerCandidate(val uuid: String, val displayName: String, val nickname: String?, val avatarUrl: String?)
+/** [accountId] is the Atlassian account id used in `@{...}` mention tokens; null when Bitbucket did not report it. */
+data class ReviewerCandidate(val uuid: String, val displayName: String, val nickname: String?, val avatarUrl: String?, val accountId: String? = null)
 
 /**
  * Users that can be added as reviewers; [isTruncated] is true when the workspace member listing stopped at the page limit.

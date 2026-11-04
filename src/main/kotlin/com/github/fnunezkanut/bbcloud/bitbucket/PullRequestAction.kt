@@ -21,7 +21,9 @@ data class PullRequestDetails(
     /** True when the current user's participant entry is in the `changes_requested` state. */
     val isChangesRequestedByCurrentUser: Boolean = false,
     /** True when the current user authored the pull request; Bitbucket rejects review actions on one's own pull request. */
-    val isAuthoredByCurrentUser: Boolean = false
+    val isAuthoredByCurrentUser: Boolean = false,
+    /** Everyone Bitbucket lists as a participant (reviewers and commenters), used for mention suggestions. */
+    val participants: List<ActivityUser> = emptyList()
 )
 
 sealed class PullRequestActionResult {

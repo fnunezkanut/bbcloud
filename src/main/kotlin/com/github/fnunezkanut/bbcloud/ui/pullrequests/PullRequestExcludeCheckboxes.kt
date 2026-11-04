@@ -16,17 +16,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.github.fnunezkanut.bbcloud.BbCloudBundle
-import com.github.fnunezkanut.bbcloud.settings.PullRequestAuthorScope
 import com.github.fnunezkanut.bbcloud.settings.PullRequestListFilter
+import com.github.fnunezkanut.bbcloud.settings.PullRequestUserScope
 import org.jetbrains.jewel.ui.component.CheckboxRow
 import org.jetbrains.jewel.ui.component.ListComboBox
 
 /**
- * The Exclude checkboxes and the "Created by" dropdown, emitted inline into the header row of a merged tab.
+ * The Exclude checkboxes and the user scope dropdown, emitted inline into the header row of a merged tab.
  *
  * Layout, left to right: Exclude Resolved (Current Project only, because [PullRequestsViewModel.scope] offers it),
- * Exclude Approved by me, Exclude Drafts, then the Created by dropdown. The dropdown offers Created by me only once
- * the current user is known ([isCurrentUserKnown]); until then it lists just Created by any user.
+ * Exclude Approved by me, Exclude Drafts, then the user scope dropdown. The dropdown offers Created by me and Assigned
+ * to me only once the current user is known ([isCurrentUserKnown]); until then it lists just Created by any user.
  */
 @Composable
 internal fun RowScope.PullRequestExcludeCheckboxes(filter: PullRequestListFilter, viewModel: PullRequestsViewModel, isCurrentUserKnown: Boolean) {
@@ -53,35 +53,41 @@ internal fun RowScope.PullRequestExcludeCheckboxes(filter: PullRequestListFilter
             checked = filter.excludeDrafts,
             onCheckedChange = viewModel::onExcludeDraftsChanged
         )
-        CreatedByComboBox(
-            authorScope = filter.authorScope,
+        UserScopeComboBox(
+            userScope = filter.userScope,
             isCurrentUserKnown = isCurrentUserKnown,
-            onAuthorScopeChanged = viewModel::onAuthorScopeChanged
+            onUserScopeChanged = viewModel::onUserScopeChanged
         )
     }
 }
 
 /**
- * The "Created by" dropdown. Its items are Created by any user, plus Created by me when [isCurrentUserKnown] is true.
- * The Jewel combo box cannot disable a single item, so the Created by me item is left out while the current user is
- * unknown. A saved [PullRequestAuthorScope.Me] therefore shows as Created by any user until the uuid arrives; the
- * saved value itself is not changed.
+ * The user scope dropdown. Its items are Created by any user, plus Created by me and Assigned to me when
+ * [isCurrentUserKnown] is true, in [PullRequestUserScope] declaration order. The Jewel combo box cannot disable a single
+ * item, so the two user-dependent items are left out while the current user is unknown. A saved
+ * [PullRequestUserScope.Me] or [PullRequestUserScope.AssignedToMe] therefore shows as Created by any user until the uuid
+ * arrives; the saved value itself is not changed.
  */
 @Composable
-private fun CreatedByComboBox(authorScope: PullRequestAuthorScope, isCurrentUserKnown: Boolean, onAuthorScopeChanged: (PullRequestAuthorScope) -> Unit) {
-    val anyUserText = BbCloudBundle.message("pullRequests.createdBy.anyUser")
-    val options = if (isCurrentUserKnown) {
-        listOf(anyUserText, BbCloudBundle.message("pullRequests.createdBy.me"))
-    } else {
-        listOf(anyUserText)
-    }
-    val selectedIndex = if (isCurrentUserKnown && authorScope == PullRequestAuthorScope.Me) 1 else 0
+private fun UserScopeComboBox(userScope: PullRequestUserScope, isCurrentUserKnown: Boolean, onUserScopeChanged: (PullRequestUserScope) -> Unit) {
+    val choices = if (isCurrentUserKnown) PullRequestUserScope.entries.toList() else listOf(PullRequestUserScope.AnyUser)
+    val options = choices.map { choice -> BbCloudBundle.message(labelKeyOf(userScope = choice)) }
+    val selectedIndex = choices.indexOf(userScope).coerceAtLeast(0)
     ListComboBox(
         items = options,
         selectedIndex = selectedIndex,
         onSelectedItemChange = { index ->
-            onAuthorScopeChanged(if (index == 1) PullRequestAuthorScope.Me else PullRequestAuthorScope.AnyUser)
+            onUserScopeChanged(choices.getOrElse(index) { PullRequestUserScope.AnyUser })
         },
         modifier = Modifier.width(200.dp)
     )
+}
+
+/** The message key of the label shown for [userScope] in the user scope dropdown. */
+private fun labelKeyOf(userScope: PullRequestUserScope): String {
+    return when (userScope) {
+        PullRequestUserScope.AnyUser -> "pullRequests.userScope.anyUser"
+        PullRequestUserScope.Me -> "pullRequests.userScope.me"
+        PullRequestUserScope.AssignedToMe -> "pullRequests.userScope.assignedToMe"
+    }
 }

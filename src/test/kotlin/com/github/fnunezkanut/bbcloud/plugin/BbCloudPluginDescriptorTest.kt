@@ -32,6 +32,7 @@ class BbCloudPluginDescriptorTest {
             duplicates shouldBe emptySet()
             implementations shouldContainExactlyInAnyOrder listOf(
                 "com.github.fnunezkanut.bbcloud.settings.BbCloudSettings",
+                "com.github.fnunezkanut.bbcloud.review.BbCloudKnownUsersState",
                 "com.github.fnunezkanut.bbcloud.git.BbCloudWorktreeService",
                 "com.github.fnunezkanut.bbcloud.ui.pullrequest.decline.BbCloudPullRequestDeclineCoordinator",
                 "com.github.fnunezkanut.bbcloud.credentials.PasswordSafeBbCloudCredentialStore",
@@ -72,6 +73,7 @@ class BbCloudPluginDescriptorTest {
                 "com.github.fnunezkanut.bbcloud.git.BbCloudWorktreeService",
                 "com.github.fnunezkanut.bbcloud.ui.pullrequest.decline.BbCloudPullRequestDeclineCoordinator",
                 "com.github.fnunezkanut.bbcloud.settings.BbCloudSettings",
+                "com.github.fnunezkanut.bbcloud.review.BbCloudKnownUsersState",
                 "com.github.fnunezkanut.bbcloud.auth.BbCloudOAuthLoginService",
                 "com.github.fnunezkanut.bbcloud.review.BbCloudPullRequestReviewState",
                 "com.github.fnunezkanut.bbcloud.review.BbCloudPullRequestViewedFiles",

@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## *1.7.0* - 2026-11-04
+* Added: a red delete button beside each PR work tree on Watched Projects removes that work tree after confirmation, and closes its IDE window first if one is open; the progress dialog closes after 5 seconds while the removal keeps running in the background
+* Added: @mention users in comments and replies
+* Added: PRs assigned to me option on Current Project and Workspace tabs in the dropdown
+
 ## *1.6.0* - 2026-11-03
 * Fixed: the Previous, Next, and Add Comment buttons in the diff review bar no longer show a hover tooltip that covered the buttons and did not close
 * Changed: when every other file is marked as viewed, the diff review bar shows this as text next to the disabled Previous and Next buttons
