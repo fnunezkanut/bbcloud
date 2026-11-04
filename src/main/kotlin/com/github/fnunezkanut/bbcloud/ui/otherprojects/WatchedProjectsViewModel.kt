@@ -28,6 +28,11 @@ import kotlinx.coroutines.coroutineScope as coroutineScopeBlock
 interface WatchedProjectsDataSource {
     fun organizationUrlOrNull(): String?
 
+    /** The persisted "Show only watched" checkbox. */
+    fun showOnlyWatched(): Boolean
+
+    fun setShowOnlyWatched(showOnlyWatched: Boolean)
+
     fun isProjectsDirectorySet(): Boolean
 
     fun watchedProjectsWithLocalPaths(): List<WatchedProjectMapping>
@@ -62,12 +67,15 @@ class WatchedProjectsViewModel(
     private val onWatchedLimitReachedCallback: () -> Unit,
     private val onOpenLocalProjectCallback: (WatchedProjectMapping) -> Unit,
     private val onOpenWorktreeCallback: (WatchedProjectMapping, WatchedProjectWorktreeRow) -> Unit,
+    private val onRemoveWorktreeCallback: (WatchedProjectMapping, WatchedProjectWorktreeRow) -> Unit,
     private val onPruneWorktreesCallback: () -> Unit,
     private val onOpenWorktreesHelpCallback: () -> Unit,
     private val onGoToWorkspaceCallback: () -> Unit,
     private val runOnEdt: (() -> Unit) -> Unit = { block -> ApplicationManager.getApplication().invokeLater(block) }
 ) {
-    val state: MutableState<WatchedProjectsUiState> = mutableStateOf(WatchedProjectsUiState())
+    val state: MutableState<WatchedProjectsUiState> = mutableStateOf(
+        WatchedProjectsUiState(showOnlyWatched = dataSource.showOnlyWatched())
+    )
 
     /** In-memory decoded-icon cache for repository avatars (32px); images re-download over the public CDN, no token. */
     private val avatarCache = AuthorAvatarCache(avatarSize = 32)
@@ -407,6 +415,16 @@ class WatchedProjectsViewModel(
         )
     }
 
+    /** Persists and applies the "Show only watched" checkbox. */
+    fun onShowOnlyWatchedChanged(showOnlyWatched: Boolean) {
+        if (showOnlyWatched == state.value.showOnlyWatched) {
+            return
+        }
+        LOG.info("User set Watched Projects 'Show only watched' to $showOnlyWatched")
+        dataSource.setShowOnlyWatched(showOnlyWatched = showOnlyWatched)
+        state.value = state.value.copy(showOnlyWatched = showOnlyWatched)
+    }
+
     fun onSearchCleared() {
         LOG.info("User cleared the Watched Projects search filter")
         onSearchQueryChanged(query = "")
@@ -425,6 +443,19 @@ class WatchedProjectsViewModel(
     fun onOpenWorktree(mapping: WatchedProjectMapping, worktree: WatchedProjectWorktreeRow) {
         LOG.info("User requested to open PR #${worktree.prNumber} worktree for ${mapping.remoteRepoSlug}")
         onOpenWorktreeCallback(mapping, worktree)
+    }
+
+    fun onRemoveWorktree(mapping: WatchedProjectMapping, worktree: WatchedProjectWorktreeRow) {
+        LOG.info("User requested to remove PR #${worktree.prNumber} worktree for ${mapping.remoteRepoSlug}")
+        onRemoveWorktreeCallback(mapping, worktree)
+    }
+
+    /**
+     * Re-reads the PR work trees of every row from disk without a rescan. The search query, the "Show only watched"
+     * choice and the card stay as they are, so the table does not flash the loading state after a removal.
+     */
+    fun reloadWorktrees() {
+        refreshWatchedRows()
     }
 
     fun onPruneWorktreesClicked() {

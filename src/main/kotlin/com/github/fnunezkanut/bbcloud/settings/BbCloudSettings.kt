@@ -67,11 +67,12 @@ class BbCloudSettings : SimplePersistentStateComponent<BbCloudSettings.State>(St
         var projectExcludeDraftPullRequests by property(true)
 
         /**
-         * The Created by dropdown of the Current Project tab, persisted as the [PullRequestAuthorScope] name. Default
-         * [PullRequestAuthorScope.AnyUser]. The name is new, so the removed boolean `projectExcludeMinePullRequests`
-         * option is never read as this value.
+         * The user scope dropdown of the Current Project tab, persisted as the [PullRequestUserScope] name. Default
+         * [PullRequestUserScope.AnyUser]. The name is new, so the removed boolean `projectExcludeMinePullRequests`
+         * option is never read as this value. The property keeps its persisted name, so saved choices survive the
+         * rename of the type.
          */
-        var projectPullRequestAuthorScope by string(PullRequestAuthorScope.AnyUser.name)
+        var projectPullRequestAuthorScope by string(PullRequestUserScope.AnyUser.name)
 
         /**
          * The Exclude checkbox states and the Created by dropdown of the Workspace tab. There is no workspace Resolved
@@ -85,10 +86,11 @@ class BbCloudSettings : SimplePersistentStateComponent<BbCloudSettings.State>(St
         var workspaceExcludeDraftPullRequests by property(true)
 
         /**
-         * The Created by dropdown of the Workspace tab, persisted as the [PullRequestAuthorScope] name. Default
-         * [PullRequestAuthorScope.AnyUser]. See [projectPullRequestAuthorScope] for why the name is new.
+         * The user scope dropdown of the Workspace tab, persisted as the [PullRequestUserScope] name. Default
+         * [PullRequestUserScope.AnyUser]. See [projectPullRequestAuthorScope] for why the name is new and why the
+         * property keeps its persisted name.
          */
-        var workspacePullRequestAuthorScope by string(PullRequestAuthorScope.AnyUser.name)
+        var workspacePullRequestAuthorScope by string(PullRequestUserScope.AnyUser.name)
 
         /**
          * The divider position of the pull-request page split layout, as the fraction of the width given to the left
@@ -100,7 +102,21 @@ class BbCloudSettings : SimplePersistentStateComponent<BbCloudSettings.State>(St
          * Default [DEFAULT_PR_PAGE_SPLIT_FRACTION]: the left pane takes three quarters of the width.
          */
         var prPageSplitFraction by property(DEFAULT_PR_PAGE_SPLIT_FRACTION)
+
+        /**
+         * Default false: when true, the Watched Projects table lists only watched projects. It is a view preference,
+         * so it is kept across a settings reset. The option name is part of the persisted XML; do not rename it
+         * without a migration.
+         */
+        var watchedProjectsShowOnlyWatched by property(false)
     }
+
+    /** Whether the Watched Projects table lists only watched projects. See [State.watchedProjectsShowOnlyWatched]. */
+    var watchedProjectsShowOnlyWatched: Boolean
+        get() = state.watchedProjectsShowOnlyWatched
+        set(value) {
+            state.watchedProjectsShowOnlyWatched = value
+        }
 
     /** Legacy value kept only so existing installs can migrate the URL to a slug; see [organizationUrl]. */
     var organizationUrl: String
@@ -216,13 +232,13 @@ class BbCloudSettings : SimplePersistentStateComponent<BbCloudSettings.State>(St
                 excludeResolved = state.projectExcludeResolvedPullRequests,
                 excludeApprovedByMe = state.projectExcludeApprovedByMePullRequests,
                 excludeDrafts = state.projectExcludeDraftPullRequests,
-                authorScope = parseAuthorScope(stored = state.projectPullRequestAuthorScope)
+                userScope = parseUserScope(stored = state.projectPullRequestAuthorScope)
             )
             PullRequestListScope.Workspace -> PullRequestListFilter(
                 excludeResolved = false,
                 excludeApprovedByMe = state.workspaceExcludeApprovedByMePullRequests,
                 excludeDrafts = state.workspaceExcludeDraftPullRequests,
-                authorScope = parseAuthorScope(stored = state.workspacePullRequestAuthorScope)
+                userScope = parseUserScope(stored = state.workspacePullRequestAuthorScope)
             )
         }
     }
@@ -237,12 +253,12 @@ class BbCloudSettings : SimplePersistentStateComponent<BbCloudSettings.State>(St
                 state.projectExcludeResolvedPullRequests = filter.excludeResolved
                 state.projectExcludeApprovedByMePullRequests = filter.excludeApprovedByMe
                 state.projectExcludeDraftPullRequests = filter.excludeDrafts
-                state.projectPullRequestAuthorScope = filter.authorScope.name
+                state.projectPullRequestAuthorScope = filter.userScope.name
             }
             PullRequestListScope.Workspace -> {
                 state.workspaceExcludeApprovedByMePullRequests = filter.excludeApprovedByMe
                 state.workspaceExcludeDraftPullRequests = filter.excludeDrafts
-                state.workspacePullRequestAuthorScope = filter.authorScope.name
+                state.workspacePullRequestAuthorScope = filter.userScope.name
             }
         }
     }
@@ -256,9 +272,9 @@ class BbCloudSettings : SimplePersistentStateComponent<BbCloudSettings.State>(St
             return ApplicationManager.getApplication().service()
         }
 
-        /** Maps a stored [PullRequestAuthorScope] name back to the enum. Unset or unknown values fall back to AnyUser. */
-        private fun parseAuthorScope(stored: String?): PullRequestAuthorScope {
-            return PullRequestAuthorScope.entries.firstOrNull { scope -> scope.name == stored } ?: PullRequestAuthorScope.AnyUser
+        /** Maps a stored [PullRequestUserScope] name back to the enum. Unset or unknown values fall back to AnyUser. */
+        private fun parseUserScope(stored: String?): PullRequestUserScope {
+            return PullRequestUserScope.entries.firstOrNull { scope -> scope.name == stored } ?: PullRequestUserScope.AnyUser
         }
     }
 }

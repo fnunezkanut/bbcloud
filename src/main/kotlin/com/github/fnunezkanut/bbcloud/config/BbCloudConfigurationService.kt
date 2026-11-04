@@ -328,8 +328,19 @@ class BbCloudConfigurationService(
         settings.savePullRequestListFilter(scope = scope, filter = filter)
         thisLogger().info(
             "Saved $scope pull request list filter: resolved=${filter.excludeResolved}, " +
-                "authorScope=${filter.authorScope}, approvedByMe=${filter.excludeApprovedByMe}, drafts=${filter.excludeDrafts}"
+                "userScope=${filter.userScope}, approvedByMe=${filter.excludeApprovedByMe}, drafts=${filter.excludeDrafts}"
         )
+    }
+
+    /** Reads the persisted "Show only watched" checkbox of the Watched Projects tab. */
+    fun watchedProjectsShowOnlyWatched(): Boolean {
+        return settings.watchedProjectsShowOnlyWatched
+    }
+
+    /** Persists the "Show only watched" checkbox of the Watched Projects tab. */
+    fun saveWatchedProjectsShowOnlyWatched(showOnlyWatched: Boolean) {
+        settings.watchedProjectsShowOnlyWatched = showOnlyWatched
+        thisLogger().info("Saved Watched Projects show-only-watched=$showOnlyWatched")
     }
 
     /**

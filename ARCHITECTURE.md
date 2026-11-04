@@ -34,11 +34,11 @@ Credentials (PasswordSafe) and persisted settings (BbCloudSettings)
 | `credentials` | `BbCloudCredentialStore` and its `PasswordSafe` implementation. Holds the API token and, as a separate entry, the OAuth token bundle (access token, refresh token, expiry); both may exist at once. |
 | `git` | Git command execution, worktree creation and removal, branch checkout, and parsers for git output. |
 | `project` | Mapping local checkouts and PR worktrees to Bitbucket repositories: watched-project discovery, worktree layout and resolution, prune decisions, opening local projects. |
-| `review` | Per-project review state kept while a PR worktree is open: viewed files and threads, the worktree PR context, banners, and page reloads. |
+| `review` | Per-project review state kept while a PR worktree is open: viewed files and threads, the worktree PR context, banners, page reloads, and the persisted recently-seen mention users cache (`BbCloudKnownUsersCache` / `BbCloudKnownUsersState`). |
 | `settings` | Persisted plugin settings (`BbCloudSettings`) and the Settings > Tools configurable. |
 | `toolwindow` | `BbCloudToolWindowFactory` and the tool window tab ids. |
 | `ui` | `BbCloudToolWindowPanel` (the project service that owns the tool window tabs) and the sub-packages below. |
-| `ui/main` | Current Project tab: the pull request detail views (overview, conversation, changes, history), comment and description editors, and reviewer search. |
+| `ui/main` | Current Project tab: the pull request detail views (overview, conversation, changes, history), comment and description editors, reviewer search, and @mention suggestions (`CommentMentionSuggestions`, `CommentMentionSource`). |
 | `ui/pullrequests` | The shared pull request listing (`PullRequestsViewModel`, filtering, merging of listing sources) used by both PR tabs. |
 | `ui/otherprojects` | Workspace and Workspace - Watched Projects tabs. |
 | `ui/pullrequest/*` | PR-specific editors and IDE integration: `editor` (PR virtual file system, file editor, review bar, banners), `create` (new PR editor), `help` (Work Trees help tab), `decline`, `projectView`, `session`, `changes` (worktree changes tool window). |
@@ -70,7 +70,11 @@ parent (dialogs, notifications). For example, on the Workspace tabs:
   against a `WorkspacePullRequestsDataSource`.
 
 `BbCloudOtherProjectsPanel` still runs the worktree open, prune, and remove flows itself. They are candidates for the
-same extraction.
+same extraction. The Watched Projects remove button is the exception that delegates the work: the panel asks for
+confirmation, then `BbCloudPullRequestDeclineCoordinator` runs `WatchedWorktreeRemover` on its application scope. The
+remover closes an open IDE window on the work tree and then removes it, so the removal survives the project closing.
+`WatchedWorktreeRemovalOrchestrator` bounds the progress modal to 5 seconds. The removal continues on the application
+scope after the modal closes.
 
 ## Threading
 

@@ -5,6 +5,8 @@ package com.github.fnunezkanut.bbcloud.ui.main
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.compose.foundation.text.input.setTextAndSelectAll
 import androidx.compose.ui.text.TextRange
+import com.github.fnunezkanut.bbcloud.bitbucket.MentionCandidate
+import com.github.fnunezkanut.bbcloud.bitbucket.MentionCandidateTier
 import io.kotest.assertions.assertSoftly
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Nested
@@ -483,7 +485,109 @@ class CommentComposerViewModelTest {
         }
     }
 
-    private fun composerViewModel(): CommentComposerViewModel {
+    @Nested
+    inner class MentionTests {
+        @Test
+        fun `insertMention - should replace the active query record the name and place the caret after it`() {
+            // GIVEN a composer with a source and an active @query
+            val viewModel = composerViewModel(mentionSource = fakeSource())
+            viewModel.editorState.setTextAndPlaceCursorAtEnd("hi @an")
+
+            // WHEN a candidate is inserted
+            viewModel.insertMention(candidate = candidate(accountId = "712020:aaaa", name = "Anna"))
+
+            // THEN the token replaces the query, the name is recorded, and the caret sits after the inserted text
+            assertSoftly {
+                viewModel.currentDraft() shouldBe "hi @{712020:aaaa} "
+                viewModel.mentionNames["712020:aaaa"] shouldBe "Anna"
+                viewModel.editorState.selection shouldBe TextRange("hi @{712020:aaaa} ".length)
+            }
+        }
+
+        @Test
+        fun `insertMention - should do nothing without an active query`() {
+            // GIVEN plain text with no @ under the caret
+            val viewModel = composerViewModel(mentionSource = fakeSource())
+            viewModel.editorState.setTextAndPlaceCursorAtEnd("plain text")
+
+            // WHEN
+            viewModel.insertMention(candidate = candidate(accountId = "712020:aaaa", name = "Anna"))
+
+            // THEN nothing changes
+            assertSoftly {
+                viewModel.currentDraft() shouldBe "plain text"
+                viewModel.mentionNames.isEmpty() shouldBe true
+            }
+        }
+
+        @Test
+        fun `collapse - should clear the names and keep the initial names`() {
+            // GIVEN a composer seeded with one initial name and one inserted during editing
+            val viewModel = composerViewModel(mentionSource = fakeSource(), initialMentionNames = mapOf("712020:seed" to "Seed"))
+            viewModel.editorState.setTextAndPlaceCursorAtEnd("hi @an")
+            viewModel.insertMention(candidate = candidate(accountId = "712020:aaaa", name = "Anna"))
+
+            // WHEN the composer collapses
+            viewModel.collapse()
+
+            // THEN only the initial name survives
+            assertSoftly {
+                viewModel.mentionNames["712020:seed"] shouldBe "Seed"
+                viewModel.mentionNames.containsKey("712020:aaaa") shouldBe false
+            }
+        }
+
+        @Test
+        fun `initialMentionNames - should be normalized`() {
+            // GIVEN a composer seeded with a braced, upper-case uuid key
+            val viewModel = composerViewModel(
+                mentionSource = fakeSource(),
+                initialMentionNames = mapOf("{AAAAAAAA-1111-1111-1111-111111111111}" to "Anna")
+            )
+
+            // THEN the key is normalized
+            viewModel.mentionNames["aaaaaaaa-1111-1111-1111-111111111111"] shouldBe "Anna"
+        }
+
+        @Test
+        fun `mentionSuggestions - should be null without a source`() {
+            // GIVEN a composer with no source
+            val viewModel = composerViewModel()
+
+            // THEN it has no suggestion list
+            viewModel.mentionSuggestions shouldBe null
+        }
+
+        private fun candidate(accountId: String, name: String): MentionCandidate {
+            return MentionCandidate(
+                uuid = null,
+                accountId = accountId,
+                displayName = name,
+                nickname = null,
+                avatarUrl = null,
+                tier = MentionCandidateTier.PullRequest
+            )
+        }
+
+        private fun fakeSource(): CommentMentionSource {
+            return object : CommentMentionSource {
+                override val currentUserUuid: String? = null
+
+                override fun localCandidates(): List<MentionCandidate> {
+                    return emptyList()
+                }
+
+                override suspend fun workspaceCandidates(): WorkspaceMentionCandidates? {
+                    return null
+                }
+            }
+        }
+    }
+
+    private fun composerViewModel(
+        mentionSource: CommentMentionSource? = null,
+        initialMentionNames: Map<String, String> = emptyMap()
+    ): CommentComposerViewModel {
         return CommentComposerViewModel(
             input = CommentInput(
                 label = "comment",
@@ -492,7 +596,9 @@ class CommentComposerViewModelTest {
                 submitHint = "Ctrl+Enter to add the comment",
                 failureMessage = "Could not add the comment.",
                 submit = { _, _ -> }
-            )
+            ),
+            mentionSource = mentionSource,
+            initialMentionNames = initialMentionNames
         )
     }
 }

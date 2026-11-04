@@ -2,6 +2,7 @@ package com.github.fnunezkanut.bbcloud.ui.otherprojects
 
 import androidx.compose.ui.state.ToggleableState
 import com.github.fnunezkanut.bbcloud.project.WatchedProjectMapping
+import com.github.fnunezkanut.bbcloud.project.WatchedProjectWorktreeRow
 import com.github.fnunezkanut.bbcloud.project.WatchedProjectsDiscoveryResult
 import io.kotest.assertions.assertSoftly
 import io.kotest.matchers.shouldBe
@@ -11,6 +12,7 @@ import kotlinx.coroutines.Dispatchers
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
 
 @Tag("unit")
@@ -79,6 +81,49 @@ class WatchedProjectsViewModelTest {
 
         // THEN
         workspaceCalls shouldBe 1
+    }
+
+    @Test
+    fun `onRemoveWorktree - invokes the remove callback with the mapping and worktree`() {
+        // GIVEN
+        val calls = mutableListOf<Pair<WatchedProjectMapping, WatchedProjectWorktreeRow>>()
+        val viewModel = viewModel(onRemoveWorktree = { mapping, worktree -> calls.add(mapping to worktree) })
+        val mapping = mapping("alpha-api")
+        val worktree = WatchedProjectWorktreeRow(
+            prNumber = 7,
+            branchName = "feature/x",
+            worktreePath = Path.of("/worktrees/alpha-api--pr-7")
+        )
+
+        // WHEN
+        viewModel.onRemoveWorktree(mapping = mapping, worktree = worktree)
+
+        // THEN
+        calls shouldBe listOf(mapping to worktree)
+    }
+
+    @Test
+    fun `reloadWorktrees - keeps the search query, the card and the visible rows`(
+        @TempDir workTreeDirectory: Path
+    ) {
+        // GIVEN
+        val dataSource = FakeWatchedProjectsDataSource(
+            mappings = listOf(mapping("alpha-api"), mapping("beta-web")),
+            workTreeDirectory = workTreeDirectory
+        )
+        val viewModel = viewModel(dataSource = dataSource)
+        viewModel.bindWatchedProjects()
+        viewModel.onSearchQueryChanged(query = "beta")
+
+        // WHEN
+        viewModel.reloadWorktrees()
+
+        // THEN
+        assertSoftly {
+            viewModel.state.value.searchQuery shouldBe "beta"
+            viewModel.state.value.card shouldBe WatchedProjectsCard.Listing
+            viewModel.state.value.visibleRows.map { row -> row.mapping.remoteRepoSlug } shouldBe listOf("beta-web")
+        }
     }
 
     @Test
@@ -262,6 +307,55 @@ class WatchedProjectsViewModelTest {
 
             // THEN
             viewModel.state.value.searchQuery shouldBe "beta"
+        }
+
+        @Test
+        fun `show only watched - starts from the persisted value`() {
+            // GIVEN
+            val dataSource = FakeWatchedProjectsDataSource(showOnlyWatched = true)
+
+            // WHEN
+            val viewModel = viewModel(dataSource = dataSource)
+
+            // THEN
+            viewModel.state.value.showOnlyWatched shouldBe true
+        }
+
+        @Test
+        fun `onShowOnlyWatchedChanged - persists once and narrows visibleRows`() {
+            // GIVEN
+            val dataSource = FakeWatchedProjectsDataSource(
+                mappings = listOf(mapping("alpha", watched = true), mapping("beta"))
+            )
+            val viewModel = viewModel(dataSource = dataSource)
+            viewModel.bindWatchedProjects()
+
+            // WHEN
+            viewModel.onShowOnlyWatchedChanged(showOnlyWatched = true)
+            viewModel.onShowOnlyWatchedChanged(showOnlyWatched = true)
+
+            // THEN
+            assertSoftly {
+                dataSource.setShowOnlyWatchedCalls shouldBe listOf(true)
+                viewModel.state.value.visibleRows.map { row -> row.mapping.remoteRepoSlug } shouldBe listOf("alpha")
+                viewModel.state.value.rows.size shouldBe 2
+            }
+        }
+
+        @Test
+        fun `show only watched - survives a rescan result and a loading state`() {
+            // GIVEN
+            val dataSource = FakeWatchedProjectsDataSource(mappings = listOf(mapping("alpha"), mapping("beta")))
+            val viewModel = viewModel(dataSource = dataSource)
+            viewModel.bindWatchedProjects()
+            viewModel.onShowOnlyWatchedChanged(showOnlyWatched = true)
+
+            // WHEN
+            viewModel.showResult(mappings = dataSource.mappings, organizationUrl = "https://bitbucket.org/acme/")
+            viewModel.showLoading()
+
+            // THEN
+            viewModel.state.value.showOnlyWatched shouldBe true
         }
 
         @Test
@@ -544,6 +638,7 @@ class WatchedProjectsViewModelTest {
         onPruneWorktrees: () -> Unit = {},
         onOpenWorktreesHelp: () -> Unit = {},
         onGoToWorkspace: () -> Unit = {},
+        onRemoveWorktree: (WatchedProjectMapping, WatchedProjectWorktreeRow) -> Unit = { _, _ -> },
         dataSource: WatchedProjectsDataSource = FakeWatchedProjectsDataSource(),
         host: HostCalls = HostCalls()
     ): WatchedProjectsViewModel {
@@ -556,6 +651,7 @@ class WatchedProjectsViewModelTest {
             onWatchedLimitReachedCallback = { host.limitReached++ },
             onOpenLocalProjectCallback = { _ -> },
             onOpenWorktreeCallback = { _, _ -> },
+            onRemoveWorktreeCallback = onRemoveWorktree,
             onPruneWorktreesCallback = onPruneWorktrees,
             onOpenWorktreesHelpCallback = onOpenWorktreesHelp,
             onGoToWorkspaceCallback = onGoToWorkspace,
@@ -583,9 +679,12 @@ class WatchedProjectsViewModelTest {
         private val organizationUrl: String? = "https://bitbucket.org/acme/",
         private val projectsDirectorySet: Boolean = true,
         var mappings: List<WatchedProjectMapping> = emptyList(),
+        var workTreeDirectory: Path? = null,
+        private var showOnlyWatched: Boolean = false,
         private val rescanResult: CompletableDeferred<WatchedProjectsDiscoveryResult> =
             CompletableDeferred(WatchedProjectsDiscoveryResult.Success(mappings = emptyList()))
     ) : WatchedProjectsDataSource {
+        val setShowOnlyWatchedCalls = mutableListOf<Boolean>()
         var rescanCalls = 0
         val setWatchedCalls = mutableListOf<Pair<String, Boolean>>()
         var setAllWatchedCalls = 0
@@ -598,6 +697,15 @@ class WatchedProjectsViewModelTest {
             return projectsDirectorySet
         }
 
+        override fun showOnlyWatched(): Boolean {
+            return showOnlyWatched
+        }
+
+        override fun setShowOnlyWatched(showOnlyWatched: Boolean) {
+            setShowOnlyWatchedCalls.add(showOnlyWatched)
+            this.showOnlyWatched = showOnlyWatched
+        }
+
         override fun watchedProjectsWithLocalPaths(): List<WatchedProjectMapping> {
             return mappings
         }
@@ -607,7 +715,7 @@ class WatchedProjectsViewModelTest {
         }
 
         override fun workTreeDirectoryOrNull(): Path? {
-            return null
+            return workTreeDirectory
         }
 
         override fun setWatched(mapping: WatchedProjectMapping, watched: Boolean) {

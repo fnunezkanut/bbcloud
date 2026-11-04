@@ -41,6 +41,10 @@ import androidx.compose.ui.unit.dp
 import com.github.fnunezkanut.bbcloud.BbCloudBundle
 import com.github.fnunezkanut.bbcloud.project.WatchedProjectMapping
 import com.github.fnunezkanut.bbcloud.project.WatchedProjectWorktreeRow
+import com.github.fnunezkanut.bbcloud.ui.components.BbCloudCompactOutlinedIconButton
+import com.github.fnunezkanut.bbcloud.ui.main.ActionButtonOutlines
+import com.github.fnunezkanut.bbcloud.ui.main.CommentThreadAction
+import com.github.fnunezkanut.bbcloud.ui.main.CommentThreadActionVisibility
 import com.github.fnunezkanut.bbcloud.ui.main.MainPanelStatusSupport
 import com.intellij.ide.BrowserUtil
 import org.jetbrains.jewel.foundation.layout.BasicTableLayout
@@ -81,8 +85,10 @@ fun WatchedProjectsScreen(viewModel: WatchedProjectsViewModel) {
             }
         }
         if (state.card == WatchedProjectsCard.Listing) {
-            WatchedProjectsSearchField(
+            WatchedProjectsFilterBar(
+                showOnlyWatched = state.showOnlyWatched,
                 query = state.searchQuery,
+                onShowOnlyWatchedChange = viewModel::onShowOnlyWatchedChanged,
                 onQueryChange = viewModel::onSearchQueryChanged,
                 onClear = viewModel::onSearchCleared
             )
@@ -127,6 +133,9 @@ private val CHECKBOX_WIDTH = 36.dp
 private val AVATAR_SIZE = 32.dp
 private val CELL_BORDER_WIDTH = 8.dp
 
+// Below this width the "Show only watched" checkbox stacks above the search field instead of sharing the row.
+private val FILTER_BAR_STACK_THRESHOLD = 480.dp
+
 // Floors for the three flexible columns (Remote, Local, Worktrees). BasicTableLayout sizes columns to their intrinsic
 // width and only scales down when the content overflows the available width, so without a floor a narrow tool window
 // would collapse these columns to their content width. The floors keep the columns legible before the proportional
@@ -149,28 +158,100 @@ private data class FlexibleColumnWidths(
     val worktrees: androidx.compose.ui.unit.Dp
 )
 
-/** The filter field above the table. Its text is the session-only [WatchedProjectsUiState.searchQuery]. */
+/**
+ * The row above the table: the "Show only watched" checkbox and the search field. At [FILTER_BAR_STACK_THRESHOLD] or
+ * wider they share the row as two equal halves, checkbox left and search right; narrower, the checkbox stacks above
+ * the search field.
+ */
 @Composable
-private fun WatchedProjectsSearchField(query: String, onQueryChange: (String) -> Unit, onClear: () -> Unit) {
-    // Hold the TextFieldValue locally so the caret advances with typing; resync from the incoming query only when the
-    // backing text differs (for example after the clear button), so an external update never snaps the caret.
+private fun WatchedProjectsFilterBar(
+    showOnlyWatched: Boolean,
+    query: String,
+    onShowOnlyWatchedChange: (Boolean) -> Unit,
+    onQueryChange: (String) -> Unit,
+    onClear: () -> Unit
+) {
+    // Hold the TextFieldValue here, above the layout branch, so the caret survives switching between the two layouts;
+    // resync from the incoming query only when the backing text differs (for example after the clear icon).
     var fieldValue by remember { mutableStateOf(TextFieldValue(text = query)) }
     LaunchedEffect(query) {
         if (fieldValue.text != query) {
             fieldValue = TextFieldValue(text = query)
         }
     }
+    val onFieldValueChange: (TextFieldValue) -> Unit = { updated ->
+        fieldValue = updated
+        onQueryChange(updated.text)
+    }
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+        if (maxWidth >= FILTER_BAR_STACK_THRESHOLD) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                ShowOnlyWatchedCheckbox(
+                    checked = showOnlyWatched,
+                    onCheckedChange = onShowOnlyWatchedChange,
+                    modifier = Modifier.weight(1f)
+                )
+                WatchedProjectsSearchField(
+                    fieldValue = fieldValue,
+                    onFieldValueChange = onFieldValueChange,
+                    onClear = onClear,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        } else {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                ShowOnlyWatchedCheckbox(
+                    checked = showOnlyWatched,
+                    onCheckedChange = onShowOnlyWatchedChange,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                WatchedProjectsSearchField(
+                    fieldValue = fieldValue,
+                    onFieldValueChange = onFieldValueChange,
+                    onClear = onClear,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+    }
+}
+
+/** The "Show only watched" checkbox with a clickable label. */
+@Composable
+private fun ShowOnlyWatchedCheckbox(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modifier: Modifier) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Checkbox(checked = checked, onCheckedChange = onCheckedChange)
+        Text(
+            text = BbCloudBundle.message("workspace.watchedProjects.showOnlyWatched.label"),
+            modifier = Modifier.clickable { onCheckedChange(!checked) }.pointerHoverIcon(PointerIcon.Hand),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+/** The filter field. Its text is the session-only [WatchedProjectsUiState.searchQuery]. */
+@Composable
+private fun WatchedProjectsSearchField(fieldValue: TextFieldValue, onFieldValueChange: (TextFieldValue) -> Unit, onClear: () -> Unit, modifier: Modifier) {
+    Row(
+        modifier = modifier,
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         TextField(
             value = fieldValue,
-            onValueChange = { updated ->
-                fieldValue = updated
-                onQueryChange(updated.text)
-            },
+            onValueChange = onFieldValueChange,
             modifier = Modifier.weight(1f),
             placeholder = { Text(text = BbCloudBundle.message("workspace.watchedProjects.search.placeholder")) },
             leadingIcon = {
@@ -180,7 +261,7 @@ private fun WatchedProjectsSearchField(query: String, onQueryChange: (String) ->
                 )
             }
         )
-        if (query.isNotEmpty()) {
+        if (fieldValue.text.isNotEmpty()) {
             Tooltip(
                 tooltip = {
                     Text(text = BbCloudBundle.message("workspace.watchedProjects.search.clear.tooltip"))
@@ -204,7 +285,11 @@ private fun WatchedProjectsNoMatches(query: String) {
         contentAlignment = Alignment.Center
     ) {
         Text(
-            text = BbCloudBundle.message("workspace.watchedProjects.search.noResults", query),
+            text = if (query.isBlank()) {
+                BbCloudBundle.message("workspace.watchedProjects.showOnlyWatched.noResults")
+            } else {
+                BbCloudBundle.message("workspace.watchedProjects.search.noResults", query)
+            },
             textAlign = TextAlign.Center,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis
@@ -509,6 +594,19 @@ private fun WorktreeEntry(mapping: WatchedProjectMapping, worktree: WatchedProje
                 modifier = Modifier.weight(1f),
                 overflow = TextOverflow.Ellipsis
             )
+            val removeTooltip = BbCloudBundle.message("workspace.watchedProjects.worktree.remove.tooltip")
+            Tooltip(tooltip = { Text(text = removeTooltip) }) {
+                BbCloudCompactOutlinedIconButton(
+                    icon = CommentThreadActionVisibility.iconKey(action = CommentThreadAction.Delete),
+                    contentDescription = BbCloudBundle.message(
+                        "workspace.watchedProjects.worktree.remove.contentDescription",
+                        worktree.prNumber
+                    ),
+                    outlineColor = ActionButtonOutlines.red(),
+                    enabled = true,
+                    onClick = { viewModel.onRemoveWorktree(mapping = mapping, worktree = worktree) }
+                )
+            }
         }
     }
 }

@@ -205,7 +205,7 @@ class BbCloudSettingsTest {
             excludeResolved = true,
             excludeApprovedByMe = false,
             excludeDrafts = true,
-            authorScope = PullRequestAuthorScope.AnyUser
+            userScope = PullRequestUserScope.AnyUser
         )
     }
 
@@ -222,7 +222,7 @@ class BbCloudSettingsTest {
             excludeResolved = false,
             excludeApprovedByMe = false,
             excludeDrafts = true,
-            authorScope = PullRequestAuthorScope.AnyUser
+            userScope = PullRequestUserScope.AnyUser
         )
     }
 
@@ -238,7 +238,7 @@ class BbCloudSettingsTest {
                 excludeResolved = true,
                 excludeApprovedByMe = true,
                 excludeDrafts = false,
-                authorScope = PullRequestAuthorScope.Me
+                userScope = PullRequestUserScope.Me
             )
         )
         val reread = settings.pullRequestListFilter(scope = PullRequestListScope.Workspace)
@@ -248,7 +248,7 @@ class BbCloudSettingsTest {
             excludeResolved = false,
             excludeApprovedByMe = true,
             excludeDrafts = false,
-            authorScope = PullRequestAuthorScope.Me
+            userScope = PullRequestUserScope.Me
         )
     }
 
@@ -264,7 +264,7 @@ class BbCloudSettingsTest {
                 excludeResolved = false,
                 excludeApprovedByMe = false,
                 excludeDrafts = false,
-                authorScope = PullRequestAuthorScope.Me
+                userScope = PullRequestUserScope.Me
             )
         )
         settings.savePullRequestListFilter(
@@ -273,7 +273,7 @@ class BbCloudSettingsTest {
                 excludeResolved = false,
                 excludeApprovedByMe = true,
                 excludeDrafts = true,
-                authorScope = PullRequestAuthorScope.AnyUser
+                userScope = PullRequestUserScope.AnyUser
             )
         )
 
@@ -283,14 +283,55 @@ class BbCloudSettingsTest {
                 excludeResolved = false,
                 excludeApprovedByMe = false,
                 excludeDrafts = false,
-                authorScope = PullRequestAuthorScope.Me
+                userScope = PullRequestUserScope.Me
             )
             settings.pullRequestListFilter(scope = PullRequestListScope.Workspace) shouldBe PullRequestListFilter(
                 excludeResolved = false,
                 excludeApprovedByMe = true,
                 excludeDrafts = true,
-                authorScope = PullRequestAuthorScope.AnyUser
+                userScope = PullRequestUserScope.AnyUser
             )
+        }
+    }
+
+    @Test
+    fun `pullRequestListFilter - should persist and reload the Assigned to me scope for both tabs`() {
+        // GIVEN Assigned to me saved on both tabs
+        val settings = BbCloudSettings()
+        settings.savePullRequestListFilter(
+            scope = PullRequestListScope.CurrentProject,
+            filter = PullRequestListFilter(userScope = PullRequestUserScope.AssignedToMe)
+        )
+        settings.savePullRequestListFilter(
+            scope = PullRequestListScope.Workspace,
+            filter = PullRequestListFilter(userScope = PullRequestUserScope.AssignedToMe)
+        )
+
+        // WHEN the state is serialized to XML and deserialized back
+        val serialized = XmlSerializer.serialize(settings.state)
+        val roundTripped = XmlSerializer.deserialize(serialized, BbCloudSettings.State::class.java)
+        val reloaded = BbCloudSettings()
+        reloaded.loadState(roundTripped)
+
+        // THEN both tabs read back Assigned to me
+        assertSoftly {
+            reloaded.pullRequestListFilter(scope = PullRequestListScope.CurrentProject).userScope shouldBe PullRequestUserScope.AssignedToMe
+            reloaded.pullRequestListFilter(scope = PullRequestListScope.Workspace).userScope shouldBe PullRequestUserScope.AssignedToMe
+        }
+    }
+
+    @Test
+    fun `pullRequestListFilter - should fall back to AnyUser when the stored scope name is unknown`() {
+        // GIVEN a stored scope name that this build does not know, as a newer or hand-edited settings file might hold
+        val settings = BbCloudSettings()
+        settings.state.projectPullRequestAuthorScope = "SomethingNew"
+        settings.state.workspacePullRequestAuthorScope = "SomethingNew"
+
+        // WHEN both tabs read their filter
+        // THEN the unknown name falls back to AnyUser on both tabs
+        assertSoftly {
+            settings.pullRequestListFilter(scope = PullRequestListScope.CurrentProject).userScope shouldBe PullRequestUserScope.AnyUser
+            settings.pullRequestListFilter(scope = PullRequestListScope.Workspace).userScope shouldBe PullRequestUserScope.AnyUser
         }
     }
 
@@ -304,7 +345,7 @@ class BbCloudSettingsTest {
                 excludeResolved = false,
                 excludeApprovedByMe = true,
                 excludeDrafts = false,
-                authorScope = PullRequestAuthorScope.Me
+                userScope = PullRequestUserScope.Me
             )
         )
         settings.savePullRequestListFilter(
@@ -313,7 +354,7 @@ class BbCloudSettingsTest {
                 excludeResolved = false,
                 excludeApprovedByMe = false,
                 excludeDrafts = false,
-                authorScope = PullRequestAuthorScope.Me
+                userScope = PullRequestUserScope.Me
             )
         )
 
@@ -329,13 +370,13 @@ class BbCloudSettingsTest {
                 excludeResolved = false,
                 excludeApprovedByMe = true,
                 excludeDrafts = false,
-                authorScope = PullRequestAuthorScope.Me
+                userScope = PullRequestUserScope.Me
             )
             reloaded.pullRequestListFilter(scope = PullRequestListScope.Workspace) shouldBe PullRequestListFilter(
                 excludeResolved = false,
                 excludeApprovedByMe = false,
                 excludeDrafts = false,
-                authorScope = PullRequestAuthorScope.Me
+                userScope = PullRequestUserScope.Me
             )
         }
     }

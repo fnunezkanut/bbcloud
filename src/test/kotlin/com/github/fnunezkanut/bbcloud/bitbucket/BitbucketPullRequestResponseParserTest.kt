@@ -463,6 +463,40 @@ class BitbucketPullRequestResponseParserTest {
             }
         }
 
+        @Test
+        fun `parsePullRequestsPage - should read the author and reviewer account ids`() {
+            // GIVEN an author and a REVIEWER participant, both carrying account_id
+            val json =
+                """
+                {
+                  "values": [
+                    {
+                      "id": 1,
+                      "title": "PR 1",
+                      "state": "OPEN",
+                      "updated_on": "2026-09-28T10:00:00+00:00",
+                      "author": { "uuid": "{author}", "account_id": "712020:aaaa-bbbb", "display_name": "John Smith" },
+                      "source": { "branch": { "name": "feature" } },
+                      "destination": { "branch": { "name": "main" } },
+                      "links": { "html": { "href": "https://bitbucket.org/my-workspace/examplerepo/pull-requests/1" } },
+                      "participants": [
+                        { "role": "REVIEWER", "user": { "uuid": "{a}", "account_id": "712020:cccc-dddd", "display_name": "Alice" } }
+                      ]
+                    }
+                  ]
+                }
+                """.trimIndent()
+
+            // WHEN
+            val summary = BitbucketPullRequestResponseParser.parsePullRequests(json).single()
+
+            // THEN
+            assertSoftly(summary) {
+                authorAccountId shouldBe "712020:aaaa-bbbb"
+                reviewers.single().accountId shouldBe "712020:cccc-dddd"
+            }
+        }
+
         private fun reviewersJson(vararg participants: String): String {
             return """
                 {
@@ -1191,7 +1225,8 @@ class BitbucketPullRequestResponseParserTest {
             user shouldBe ActivityUser(
                 uuid = "{11111111-1111-1111-1111-111111111111}",
                 displayName = "Anna",
-                avatarUrl = "https://avatars.example/anna.png"
+                avatarUrl = "https://avatars.example/anna.png",
+                accountId = "712020:00000000-0000-0000-0000-000000000000"
             )
         }
 

@@ -23,7 +23,9 @@ data class PullRequestSummary(
      * The pull request's reviewers, read from the listing's participants (role `REVIEWER`); empty when the listing
      * omitted participants or the pull request has no reviewers.
      */
-    val reviewers: List<PullRequestReviewer> = emptyList()
+    val reviewers: List<PullRequestReviewer> = emptyList(),
+    /** The author's Atlassian account id used in `@{...}` mention tokens; null when the listing omitted it. */
+    val authorAccountId: String? = null
 )
 
 sealed class PullRequestListResult {

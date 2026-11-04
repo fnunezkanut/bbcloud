@@ -310,4 +310,35 @@ class CommentMentionResolverTest {
             selector shouldBe "{abcdefab-cdef-abcd-efab-cdefabcdefab}"
         }
     }
+
+    @Nested
+    inner class MentionTokenTests {
+        @Test
+        fun `mentionToken - should wrap the account key in braces`() {
+            // GIVEN
+            val accountKey = "712020:aaaa-bbbb"
+
+            // WHEN
+            val token = CommentMentionResolver.mentionToken(accountKey = accountKey)
+
+            // THEN
+            token shouldBe "@{712020:aaaa-bbbb}"
+        }
+
+        @Test
+        fun `mentionToken - should round-trip through the token scan and resolver`() {
+            // GIVEN
+            val accountKey = "712020:aaaa-bbbb"
+            val token = CommentMentionResolver.mentionToken(accountKey = accountKey)
+            val body = "Hi $token "
+
+            // WHEN the token is scanned and then resolved with a name map keyed by the same key
+            val scanned = CommentMentionResolver.mentionTokensIn(body = body)
+            val resolved = CommentMentionResolver.resolveMentions(body = body, mentions = mapOf(accountKey to "Anna"))
+
+            // THEN
+            scanned shouldBe setOf(accountKey)
+            resolved shouldBe "Hi **@Anna** "
+        }
+    }
 }

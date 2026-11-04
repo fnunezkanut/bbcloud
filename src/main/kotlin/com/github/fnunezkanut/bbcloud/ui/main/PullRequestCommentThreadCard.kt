@@ -86,6 +86,10 @@ interface CommentThreadCardHost {
     /** Persists whether the current user marked this thread viewed. */
     fun setThreadViewed(thread: TimelineEntry.CommentThread, viewed: Boolean)
 
+    /** The @mention suggestion source for the reply and edit composers; null turns @mention suggestions off. */
+    val mentionSource: CommentMentionSource?
+        get() = null
+
     /** Display names of the `@{account-key}` mentions in the comments, keyed by normalized account key; see `CommentMentionResolver`. */
     val mentions: Map<String, String>
 

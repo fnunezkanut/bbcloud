@@ -4,9 +4,9 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestState
 import com.github.fnunezkanut.bbcloud.bitbucket.ReviewingPullRequest
-import com.github.fnunezkanut.bbcloud.settings.PullRequestAuthorScope
 import com.github.fnunezkanut.bbcloud.settings.PullRequestListFilter
 import com.github.fnunezkanut.bbcloud.settings.PullRequestListScope
+import com.github.fnunezkanut.bbcloud.settings.PullRequestUserScope
 import com.github.fnunezkanut.bbcloud.ui.main.AuthorAvatarCache
 import com.github.fnunezkanut.bbcloud.ui.otherprojects.buildWorkspacePullRequestRow
 import com.intellij.openapi.diagnostic.logger
@@ -35,7 +35,9 @@ class PullRequestsViewModel(
     private val onOpenPrOnWebCallback: (PullRequestListEntry) -> Unit,
     private val onOpenRepositoryCallback: (PullRequestListEntry) -> Unit,
     // openCount is the number of visible open rows (after the Exclude filters); card is the derived card (decision 4c).
-    private val onCountsChanged: (openCount: Int, card: PullRequestsCard) -> Unit = { _, _ -> }
+    private val onCountsChanged: (openCount: Int, card: PullRequestsCard) -> Unit = { _, _ -> },
+    // Seeds the recently-seen mention cache from the loaded entries; a no-op default so plain unit tests need no application.
+    private val seedKnownUsers: (List<PullRequestListEntry>) -> Unit = {}
 ) {
     val state: MutableState<PullRequestsUiState> = mutableStateOf(
         PullRequestsUiState(filter = normalizeFilter(filter = initialFilter))
@@ -94,6 +96,8 @@ class PullRequestsViewModel(
             return
         }
         sources[source] = PullRequestSourceState.Loaded(entries = entries, isTruncated = isTruncated)
+        LOG.debug("$logName: seeded known users from ${entries.size} listing entries")
+        runCatching { seedKnownUsers(entries) }.onFailure { failure -> LOG.debug("$logName: seeding known users failed", failure) }
         if (currentUserUuid != null) {
             this.currentUserUuid = currentUserUuid
         }
@@ -136,9 +140,9 @@ class PullRequestsViewModel(
         updateFilter(filter = state.value.filter.copy(excludeResolved = checked))
     }
 
-    fun onAuthorScopeChanged(authorScope: PullRequestAuthorScope) {
-        LOG.info("User changed the Created by dropdown on the $logName tab: authorScope=$authorScope")
-        updateFilter(filter = state.value.filter.copy(authorScope = authorScope))
+    fun onUserScopeChanged(userScope: PullRequestUserScope) {
+        LOG.info("User changed the user scope dropdown on the $logName tab: userScope=$userScope")
+        updateFilter(filter = state.value.filter.copy(userScope = userScope))
     }
 
     fun onExcludeApprovedByMeChanged(checked: Boolean) {
@@ -201,10 +205,11 @@ class PullRequestsViewModel(
     private fun recompute() {
         val filter = state.value.filter
         val isCurrentUserKnown = !currentUserUuid.isNullOrBlank()
-        // Created by me needs the current user's uuid. Until it is known, the dropdown offers only Created by any user,
-        // so the rows are filtered as AnyUser. The saved Me choice stays in the filter and applies once the uuid arrives.
-        val effectiveFilter = if (!isCurrentUserKnown && filter.authorScope == PullRequestAuthorScope.Me) {
-            filter.copy(authorScope = PullRequestAuthorScope.AnyUser)
+        // Created by me and Assigned to me need the current user's uuid. Until it is known, the dropdown offers only
+        // Created by any user, so the rows are filtered as AnyUser. The saved choice stays in the filter and applies
+        // once the uuid arrives.
+        val effectiveFilter = if (!isCurrentUserKnown && filter.userScope != PullRequestUserScope.AnyUser) {
+            filter.copy(userScope = PullRequestUserScope.AnyUser)
         } else {
             filter
         }

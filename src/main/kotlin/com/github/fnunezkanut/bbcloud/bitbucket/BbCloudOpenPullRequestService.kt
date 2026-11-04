@@ -331,6 +331,30 @@ class BbCloudOpenPullRequestService(
         }
     }
 
+    /**
+     * Loads the workspace members offered as mention suggestions; null when they could not be loaded. Uses the member
+     * cache of this service, so the members are fetched once per service instance and shared with the reviewer search
+     * and the mention-name lookup.
+     */
+    suspend fun mentionWorkspaceMembers(projectBasePath: String?, organizationUrl: String): WorkspaceMembers? {
+        val target = resolveTarget(
+            operation = "load mention suggestions",
+            projectBasePath = projectBasePath,
+            organizationUrl = organizationUrl
+        ) ?: return null
+
+        return try {
+            val members = workspaceMembers(workspace = target.workspace, apiToken = target.apiToken)
+            LOG.debug("Loaded ${members?.members?.size ?: 0} mention workspace members for ${target.workspace}")
+            members
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            LOG.debug("Could not load mention workspace members for ${target.workspace}", exception)
+            null
+        }
+    }
+
     /** Loads the repository branches and its Bitbucket `mainbranch` for the new pull request form; null when branches fail. */
     suspend fun repositoryBranches(projectBasePath: String?, organizationUrl: String): NewPullRequestBranchData? {
         val target = resolveTarget(

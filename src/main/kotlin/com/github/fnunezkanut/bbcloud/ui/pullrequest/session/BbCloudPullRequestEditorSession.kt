@@ -42,6 +42,7 @@ import com.github.fnunezkanut.bbcloud.git.LocalBehindRemoteDecision
 import com.github.fnunezkanut.bbcloud.git.PrBranchUpdateResult
 import com.github.fnunezkanut.bbcloud.git.WorktreeHead
 import com.github.fnunezkanut.bbcloud.project.PullRequestWorktreeMatch
+import com.github.fnunezkanut.bbcloud.review.BbCloudKnownUsersCache
 import com.github.fnunezkanut.bbcloud.review.BbCloudPullRequestReviewState
 import com.github.fnunezkanut.bbcloud.review.BbCloudWorktreePullRequestContext
 import com.github.fnunezkanut.bbcloud.review.WorktreePullRequestPageReloader
@@ -49,8 +50,11 @@ import com.github.fnunezkanut.bbcloud.review.WorktreeTodoBannerViewModel
 import com.github.fnunezkanut.bbcloud.ui.diff.BbCloudPullRequestDiffCommentService
 import com.github.fnunezkanut.bbcloud.ui.main.CheckedOutBranchPanel
 import com.github.fnunezkanut.bbcloud.ui.main.CommentEditor
+import com.github.fnunezkanut.bbcloud.ui.main.CommentMentionSource
+import com.github.fnunezkanut.bbcloud.ui.main.DefaultCommentMentionSource
 import com.github.fnunezkanut.bbcloud.ui.main.DescriptionEditor
 import com.github.fnunezkanut.bbcloud.ui.main.PullRequestActionVisibility
+import com.github.fnunezkanut.bbcloud.ui.main.PullRequestMentionPeople
 import com.github.fnunezkanut.bbcloud.ui.main.ReviewerEditor
 import com.github.fnunezkanut.bbcloud.ui.main.TaskEditor
 import com.github.fnunezkanut.bbcloud.ui.pullrequest.decline.BbCloudDeclineReasonDialog
@@ -159,6 +163,25 @@ class BbCloudPullRequestEditorSession(
     private var lastObservedHead: WorktreeHead? = null
     private var gitChangeSubscribed = false
 
+    /** The people on this pull request offered as the top mention tier. */
+    private val mentionPeople = PullRequestMentionPeople()
+
+    /** The @mention suggestion source for this PR page's comment composers. */
+    private val mentionSource: CommentMentionSource = DefaultCommentMentionSource(
+        pullRequestPeople = { mentionPeople.candidates() },
+        recentlySeen = { BbCloudKnownUsersCache.getInstance().candidates(workspace = currentMentionWorkspace()) },
+        loadWorkspaceMembers = {
+            val basePath = project.basePath
+            val url = organizationUrl ?: configurationService.organizationUrlOrNull()
+            if (basePath == null || url == null) {
+                null
+            } else {
+                openPullRequestService.mentionWorkspaceMembers(projectBasePath = basePath, organizationUrl = url)
+            }
+        },
+        currentUser = { checkedOutBranchPanel.currentUserUuid() }
+    )
+
     private val checkedOutBranchPanel = CheckedOutBranchPanel(
         configurationService = configurationService,
         coroutineScope = coroutineScope,
@@ -208,6 +231,7 @@ class BbCloudPullRequestEditorSession(
                 submitDescriptionUpdate(content = content, onResult = onResult)
             }
         },
+        mentionSource = mentionSource,
         onUpdateLocalBranchRequested = { updateLocalBranch() }
     )
 
@@ -346,6 +370,7 @@ class BbCloudPullRequestEditorSession(
         displayedPullRequestId = summary.id
         if (previousPullRequestId != summary.id && !project.isDisposed) {
             conversationMentionJob?.cancel()
+            mentionPeople.clear()
             // Clear the banner's stale whole-PR line totals immediately on a PR switch (decision 3a).
             WorktreeTodoBannerViewModel.getInstance(project).clearLineTotals()
         }
@@ -703,6 +728,11 @@ class BbCloudPullRequestEditorSession(
                     revealNewestActivity = revealNewestActivity
                 )
                 val conversation = overview.conversation
+                if (conversation != null) {
+                    mentionPeople.updateComments(
+                        comments = conversation.threads.flatMap { thread -> listOf(thread.root) + thread.replies }
+                    )
+                }
                 if (conversation != null && conversation.mentionsPending) {
                     resolveConversationMentions(
                         pullRequestId = summary.id,
@@ -1033,6 +1063,20 @@ class BbCloudPullRequestEditorSession(
         if (refresh != DetailsRefresh.BackgroundPoll) {
             checkedOutBranchPanel.showReviewers(details = details, coroutineScope = coroutineScope)
         }
+        mentionPeople.updateDetails(details = details)
+        recordPullRequestPeopleInKnownUsers()
+    }
+
+    /** The workspace used for the recently-seen mention tier, derived from the effective organization URL. */
+    private fun currentMentionWorkspace(): String? {
+        val url = organizationUrl ?: configurationService.organizationUrlOrNull() ?: return null
+        return BitbucketRepositoryUrls.workspaceFromOrganizationUrl(url)
+    }
+
+    /** Remembers this PR's people as recently seen, so they are offered on other pull requests too. */
+    private fun recordPullRequestPeopleInKnownUsers() {
+        val workspace = currentMentionWorkspace() ?: return
+        BbCloudKnownUsersCache.getInstance().record(workspace = workspace, candidates = mentionPeople.candidates())
     }
 
     private fun finishDetailUpdate(refresh: DetailsRefresh) {

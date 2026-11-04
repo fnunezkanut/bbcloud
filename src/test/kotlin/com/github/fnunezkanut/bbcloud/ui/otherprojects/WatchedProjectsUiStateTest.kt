@@ -162,6 +162,56 @@ class WatchedProjectsUiStateTest {
                 state.rows.size shouldBe 2
             }
         }
+
+        @Test
+        fun `visibleRows - show only watched keeps watched rows and leaves rows complete`() {
+            // GIVEN
+            val state = WatchedProjectsUiState(
+                rows = listOf(row(remoteRepoSlug = "alpha", watched = true), row(remoteRepoSlug = "beta")),
+                showOnlyWatched = true
+            )
+
+            // WHEN
+            val visible = state.visibleRows
+
+            // THEN
+            assertSoftly {
+                visible.map { row -> row.mapping.remoteRepoSlug } shouldBe listOf("alpha")
+                state.rows.size shouldBe 2
+            }
+        }
+
+        @Test
+        fun `visibleRows - show only watched combines with the search query`() {
+            // GIVEN
+            val state = WatchedProjectsUiState(
+                rows = listOf(
+                    row(remoteRepoSlug = "alpha-api", watched = true),
+                    row(remoteRepoSlug = "alpha-web"),
+                    row(remoteRepoSlug = "beta-api", watched = true)
+                ),
+                searchQuery = "api",
+                showOnlyWatched = true
+            )
+
+            // WHEN
+            val visible = state.visibleRows
+
+            // THEN
+            visible.map { row -> row.mapping.remoteRepoSlug } shouldBe listOf("alpha-api", "beta-api")
+        }
+
+        @Test
+        fun `visibleRows - show only watched is off by default`() {
+            // GIVEN
+            val state = WatchedProjectsUiState(rows = listOf(row(remoteRepoSlug = "alpha"), row(remoteRepoSlug = "beta")))
+
+            // WHEN
+            val visible = state.visibleRows
+
+            // THEN
+            visible.size shouldBe 2
+        }
     }
 
     private fun row(

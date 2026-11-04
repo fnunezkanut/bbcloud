@@ -1,8 +1,10 @@
 package com.github.fnunezkanut.bbcloud.ui.pullrequests
 
+import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestReviewer
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestState
-import com.github.fnunezkanut.bbcloud.settings.PullRequestAuthorScope
+import com.github.fnunezkanut.bbcloud.bitbucket.ReviewerStatus
 import com.github.fnunezkanut.bbcloud.settings.PullRequestListFilter
+import com.github.fnunezkanut.bbcloud.settings.PullRequestUserScope
 import io.kotest.assertions.assertSoftly
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContainExactly
@@ -12,6 +14,10 @@ import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 
 private const val CURRENT_USER = "{5b10ac8d}"
+
+private fun reviewerOf(uuid: String): PullRequestReviewer {
+    return PullRequestReviewer(uuid = uuid, displayName = "Reviewer", avatarUrl = null, status = ReviewerStatus.None)
+}
 
 @Tag("unit")
 class PullRequestListFilteringTest {
@@ -80,7 +86,7 @@ class PullRequestListFilteringTest {
     }
 
     @Nested
-    inner class CreatedBy {
+    inner class UserScope {
         @Test
         fun `apply - should keep only own entries including a brace and case mismatch when Created by me is selected`() {
             // GIVEN one mine (case and brace differ), one by someone else, one with no author uuid
@@ -96,7 +102,7 @@ class PullRequestListFilteringTest {
                 filter = PullRequestListFilter(
                     excludeResolved = false,
                     excludeDrafts = false,
-                    authorScope = PullRequestAuthorScope.Me
+                    userScope = PullRequestUserScope.Me
                 ),
                 currentUserUuid = CURRENT_USER
             )
@@ -119,7 +125,7 @@ class PullRequestListFilteringTest {
                 filter = PullRequestListFilter(
                     excludeResolved = false,
                     excludeDrafts = false,
-                    authorScope = PullRequestAuthorScope.Me
+                    userScope = PullRequestUserScope.Me
                 ),
                 currentUserUuid = null
             )
@@ -142,7 +148,7 @@ class PullRequestListFilteringTest {
                 filter = PullRequestListFilter(
                     excludeResolved = false,
                     excludeDrafts = false,
-                    authorScope = PullRequestAuthorScope.Me
+                    userScope = PullRequestUserScope.Me
                 ),
                 currentUserUuid = null
             )
@@ -165,7 +171,7 @@ class PullRequestListFilteringTest {
                 filter = PullRequestListFilter(
                     excludeResolved = false,
                     excludeDrafts = false,
-                    authorScope = PullRequestAuthorScope.AnyUser
+                    userScope = PullRequestUserScope.AnyUser
                 ),
                 currentUserUuid = CURRENT_USER
             )
@@ -235,7 +241,7 @@ class PullRequestListFilteringTest {
                     excludeResolved = true,
                     excludeApprovedByMe = true,
                     excludeDrafts = true,
-                    authorScope = PullRequestAuthorScope.Me
+                    userScope = PullRequestUserScope.Me
                 ),
                 currentUserUuid = CURRENT_USER
             )
@@ -261,6 +267,135 @@ class PullRequestListFilteringTest {
 
             // THEN both open rows stay
             kept.map { it.pullRequest.summary.id } shouldContainExactly listOf(1L, 2L)
+        }
+    }
+
+    @Nested
+    inner class AssignedToMe {
+        @Test
+        fun `apply - should keep only entries where the current user is a reviewer including a brace and case mismatch`() {
+            // GIVEN one where I am a reviewer (case and brace differ), one where someone else is, one with no reviewers
+            val entries = listOf(
+                listEntry(id = 1, source = PullRequestListingSource.ProjectOpen, reviewers = listOf(reviewerOf(uuid = "5B10AC8D"))),
+                listEntry(id = 2, source = PullRequestListingSource.ProjectOpen, reviewers = listOf(reviewerOf(uuid = "{other}"))),
+                listEntry(id = 3, source = PullRequestListingSource.ProjectOpen, reviewers = emptyList())
+            )
+
+            // WHEN
+            val kept = PullRequestListFiltering.apply(
+                entries = entries,
+                filter = PullRequestListFilter(
+                    excludeResolved = false,
+                    excludeDrafts = false,
+                    userScope = PullRequestUserScope.AssignedToMe
+                ),
+                currentUserUuid = CURRENT_USER
+            )
+
+            // THEN only the row where I am a reviewer stays
+            kept.map { it.pullRequest.summary.id } shouldContainExactly listOf(1L)
+        }
+
+        @Test
+        fun `apply - should drop a pull request the current user authored but did not review`() {
+            // GIVEN a pull request authored by me, reviewed only by someone else
+            val entries = listOf(
+                listEntry(
+                    id = 1,
+                    source = PullRequestListingSource.ProjectOpen,
+                    authorUuid = CURRENT_USER,
+                    reviewers = listOf(reviewerOf(uuid = "{other}"))
+                )
+            )
+
+            // WHEN
+            val kept = PullRequestListFiltering.apply(
+                entries = entries,
+                filter = PullRequestListFilter(
+                    excludeResolved = false,
+                    excludeDrafts = false,
+                    userScope = PullRequestUserScope.AssignedToMe
+                ),
+                currentUserUuid = CURRENT_USER
+            )
+
+            // THEN the authored-only pull request is hidden
+            kept.shouldBeEmpty()
+        }
+
+        @Test
+        fun `apply - should drop every pull request that has no reviewers`() {
+            // GIVEN pull requests with no reviewers at all
+            val entries = listOf(
+                listEntry(id = 1, source = PullRequestListingSource.ProjectOpen, reviewers = emptyList()),
+                listEntry(id = 2, source = PullRequestListingSource.WorkspaceAssigned, reviewers = emptyList())
+            )
+
+            // WHEN
+            val kept = PullRequestListFiltering.apply(
+                entries = entries,
+                filter = PullRequestListFilter(
+                    excludeResolved = false,
+                    excludeDrafts = false,
+                    userScope = PullRequestUserScope.AssignedToMe
+                ),
+                currentUserUuid = CURRENT_USER
+            )
+
+            // THEN nothing is kept
+            kept.shouldBeEmpty()
+        }
+
+        @Test
+        fun `apply - should keep no rows when the current user uuid is null`() {
+            // GIVEN a pull request where the current user is a reviewer
+            val entries = listOf(
+                listEntry(id = 1, source = PullRequestListingSource.ProjectOpen, reviewers = listOf(reviewerOf(uuid = CURRENT_USER)))
+            )
+
+            // WHEN the current user is unknown
+            val kept = PullRequestListFiltering.apply(
+                entries = entries,
+                filter = PullRequestListFilter(
+                    excludeResolved = false,
+                    excludeDrafts = false,
+                    userScope = PullRequestUserScope.AssignedToMe
+                ),
+                currentUserUuid = null
+            )
+
+            // THEN nothing can be proven to be assigned to me
+            kept.shouldBeEmpty()
+        }
+
+        @Test
+        fun `apply - should combine with the approved-by-me and drafts exclusions`() {
+            // GIVEN assigned rows, one of which is a draft, one approved by me, and one plain assigned row
+            val entries = listOf(
+                listEntry(id = 1, source = PullRequestListingSource.ProjectOpen, reviewers = listOf(reviewerOf(uuid = CURRENT_USER)), isDraft = true),
+                listEntry(
+                    id = 2,
+                    source = PullRequestListingSource.ProjectOpen,
+                    reviewers = listOf(reviewerOf(uuid = CURRENT_USER)),
+                    approverUuids = setOf(CURRENT_USER)
+                ),
+                listEntry(id = 3, source = PullRequestListingSource.ProjectOpen, reviewers = listOf(reviewerOf(uuid = CURRENT_USER)))
+            )
+
+            // WHEN Assigned to me is combined with both exclusions
+            val kept = PullRequestListFiltering.apply(
+                entries = entries,
+                filter = PullRequestListFilter(
+                    excludeResolved = false,
+                    excludeApprovedByMe = true,
+                    excludeDrafts = true,
+                    userScope = PullRequestUserScope.AssignedToMe
+                ),
+                currentUserUuid = CURRENT_USER
+            )
+
+            // THEN only the plain assigned row survives
+            kept.map { it.pullRequest.summary.id } shouldContainExactly listOf(3L)
         }
     }
 

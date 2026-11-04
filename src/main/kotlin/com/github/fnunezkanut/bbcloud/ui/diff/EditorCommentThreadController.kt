@@ -17,6 +17,7 @@ import com.github.fnunezkanut.bbcloud.review.PullRequestViewedThreadKey
 import com.github.fnunezkanut.bbcloud.ui.main.AuthorAvatarCache
 import com.github.fnunezkanut.bbcloud.ui.main.CommentComposerViewModel
 import com.github.fnunezkanut.bbcloud.ui.main.CommentInput
+import com.github.fnunezkanut.bbcloud.ui.main.CommentMentionSource
 import com.github.fnunezkanut.bbcloud.ui.main.CommentThreadCardHost
 import com.github.fnunezkanut.bbcloud.ui.main.ComposerDraftCache
 import com.github.fnunezkanut.bbcloud.ui.main.ConversationComposerKind
@@ -51,8 +52,11 @@ internal class EditorCommentThreadController(
             ConversationComposerKind.Reply -> replyInput(commentId = target.commentId)
             ConversationComposerKind.Edit -> editInput(comment = comment)
         }
-        CommentComposerViewModel(input = input, startsExpanded = true)
+        CommentComposerViewModel(input = input, startsExpanded = true, mentionSource = context.mentionSource, initialMentionNames = context.mentionNames)
     }
+
+    override val mentionSource: CommentMentionSource
+        get() = context.mentionSource
 
     override var openComposer: ConversationComposerTarget? by mutableStateOf(null)
         private set

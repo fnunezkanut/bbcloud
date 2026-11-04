@@ -155,7 +155,7 @@ object BitbucketPullRequestResponseParser {
             .addQueryParameter(name = "pagelen", value = COUNT_PAGE_LEN.toString())
             .addQueryParameter(
                 name = "fields",
-                value = "next,values.user.uuid,values.user.display_name,values.user.nickname,values.user.links.avatar.href"
+                value = "next,values.user.uuid,values.user.account_id,values.user.display_name,values.user.nickname,values.user.links.avatar.href"
             )
             .build()
             .toString()
@@ -337,6 +337,7 @@ object BitbucketPullRequestResponseParser {
         val isChangesRequested = currentUserUuid != null &&
             entry.participants.any { participant -> participant.state == CHANGES_REQUESTED_STATE && participant.user?.uuid == currentUserUuid }
         val authorUuid = entry.author?.uuid?.takeIf { it.isNotBlank() }
+        val participants = buildDetailParticipants(entries = entry.participants, authorUuid = authorUuid)
         return PullRequestDetails(
             summary = summary,
             isApprovedByCurrentUser = isApproved,
@@ -344,8 +345,30 @@ object BitbucketPullRequestResponseParser {
             authorUuid = authorUuid,
             description = entry.descriptionMarkdown(),
             isChangesRequestedByCurrentUser = isChangesRequested,
-            isAuthoredByCurrentUser = currentUserUuid != null && authorUuid == currentUserUuid
+            isAuthoredByCurrentUser = currentUserUuid != null && authorUuid == currentUserUuid,
+            participants = participants
         )
+    }
+
+    /**
+     * Maps the detail payload's participant users to mention candidates, dropping the author and de-duplicating by
+     * uuid; an entry with no display name or nickname is dropped.
+     */
+    private fun buildDetailParticipants(entries: List<ParticipantEntry>, authorUuid: String?): List<ActivityUser> {
+        val seenUuids = mutableSetOf<String>()
+        val participants = mutableListOf<ActivityUser>()
+        for (entry in entries) {
+            val user = entry.user?.toActivityUser() ?: continue
+            val userUuid = user.uuid
+            if (userUuid != null && userUuid == authorUuid) {
+                continue
+            }
+            if (userUuid != null && !seenUuids.add(userUuid)) {
+                continue
+            }
+            participants.add(user)
+        }
+        return participants
     }
 
     fun buildDraftUpdateBody(title: String, isDraft: Boolean): String {
@@ -934,7 +957,8 @@ object BitbucketPullRequestResponseParser {
                 reviewers = participants
                     .mapNotNull { participant -> participant.toListingReviewer() }
                     .filterNot { reviewer -> reviewer.uuid == author?.uuid }
-                    .distinctBy { reviewer -> reviewer.uuid }
+                    .distinctBy { reviewer -> reviewer.uuid },
+                authorAccountId = author?.accountId?.takeIf { it.isNotBlank() }
             )
         }
     }
@@ -948,6 +972,8 @@ object BitbucketPullRequestResponseParser {
     @Serializable
     private data class AuthorEntry(
         val uuid: String? = null,
+        @SerialName("account_id")
+        val accountId: String? = null,
         @SerialName("display_name")
         val displayName: String? = null,
         val links: AvatarLinks? = null
@@ -970,7 +996,8 @@ object BitbucketPullRequestResponseParser {
                 uuid = reviewerUuid,
                 displayName = displayName?.takeIf { it.isNotBlank() } ?: nickname?.takeIf { it.isNotBlank() } ?: "Unknown",
                 avatarUrl = links?.avatar?.href?.takeIf { it.isNotBlank() },
-                status = reviewerStatusOf(participant = participant)
+                status = reviewerStatusOf(participant = participant),
+                accountId = accountId?.takeIf { it.isNotBlank() }
             )
         }
 
@@ -979,7 +1006,8 @@ object BitbucketPullRequestResponseParser {
             return ActivityUser(
                 uuid = uuid?.takeIf { it.isNotBlank() },
                 displayName = name,
-                avatarUrl = links?.avatar?.href?.takeIf { it.isNotBlank() }
+                avatarUrl = links?.avatar?.href?.takeIf { it.isNotBlank() },
+                accountId = accountId?.takeIf { it.isNotBlank() }
             )
         }
 
@@ -990,7 +1018,8 @@ object BitbucketPullRequestResponseParser {
                 uuid = candidateUuid,
                 displayName = name,
                 nickname = nickname?.takeIf { it.isNotBlank() },
-                avatarUrl = links?.avatar?.href?.takeIf { it.isNotBlank() }
+                avatarUrl = links?.avatar?.href?.takeIf { it.isNotBlank() },
+                accountId = accountId?.takeIf { it.isNotBlank() }
             )
         }
     }
@@ -1016,7 +1045,8 @@ object BitbucketPullRequestResponseParser {
                     ?: "Unknown",
                 avatarUrl = AvatarUrlUpgrader.upgrade(url = user.links?.avatar?.href?.takeIf { it.isNotBlank() }),
                 status = reviewerStatusOf(participant = this),
-                participatedOn = parseInstant(participatedOn)
+                participatedOn = parseInstant(participatedOn),
+                accountId = user.accountId?.takeIf { it.isNotBlank() }
             )
         }
     }
@@ -1024,11 +1054,23 @@ object BitbucketPullRequestResponseParser {
     @Serializable
     private data class ParticipantUser(
         val uuid: String? = null,
+        @SerialName("account_id")
+        val accountId: String? = null,
         @SerialName("display_name")
         val displayName: String? = null,
         val nickname: String? = null,
         val links: AvatarLinks? = null
-    )
+    ) {
+        fun toActivityUser(): ActivityUser? {
+            val name = displayName?.takeIf { it.isNotBlank() } ?: nickname?.takeIf { it.isNotBlank() } ?: return null
+            return ActivityUser(
+                uuid = uuid?.takeIf { it.isNotBlank() },
+                displayName = name,
+                avatarUrl = AvatarUrlUpgrader.upgrade(url = links?.avatar?.href?.takeIf { it.isNotBlank() }),
+                accountId = accountId?.takeIf { it.isNotBlank() }
+            )
+        }
+    }
 
     @Serializable
     private data class CurrentUserEntry(val uuid: String? = null, val links: AvatarLinks? = null)

@@ -34,16 +34,20 @@ import com.github.fnunezkanut.bbcloud.project.PullRequestWorktreeResolution
 import com.github.fnunezkanut.bbcloud.project.WatchedProjectMapping
 import com.github.fnunezkanut.bbcloud.project.WatchedProjectWorktreeRow
 import com.github.fnunezkanut.bbcloud.project.WatchedProjectsDiscoveryResult
+import com.github.fnunezkanut.bbcloud.project.WatchedWorktreeRemovalOutcome
 import com.github.fnunezkanut.bbcloud.project.WorktreePruneAction
 import com.github.fnunezkanut.bbcloud.project.WorktreePruneDecision
 import com.github.fnunezkanut.bbcloud.project.WorktreePruneSummary
+import com.github.fnunezkanut.bbcloud.review.BbCloudKnownUsersCache
 import com.github.fnunezkanut.bbcloud.settings.PullRequestListScope
 import com.github.fnunezkanut.bbcloud.ui.components.NotConfiguredContent
+import com.github.fnunezkanut.bbcloud.ui.pullrequest.decline.BbCloudPullRequestDeclineCoordinator
 import com.github.fnunezkanut.bbcloud.ui.pullrequest.help.BbCloudWorktreesHelpEditorOpener
 import com.github.fnunezkanut.bbcloud.ui.pullrequests.PullRequestExcludeCheckboxes
 import com.github.fnunezkanut.bbcloud.ui.pullrequests.PullRequestListingSource
 import com.github.fnunezkanut.bbcloud.ui.pullrequests.PullRequestsListingBody
 import com.github.fnunezkanut.bbcloud.ui.pullrequests.PullRequestsViewModel
+import com.github.fnunezkanut.bbcloud.ui.pullrequests.mentionPeopleByWorkspace
 import com.github.fnunezkanut.bbcloud.ui.worktree.PullRequestWorktreeOpener
 import com.github.fnunezkanut.bbcloud.ui.worktree.WorktreeBranchCollisionDialog
 import com.github.fnunezkanut.bbcloud.ui.worktree.WorktreeBranchCollisionResolver
@@ -53,6 +57,7 @@ import com.intellij.notification.NotificationAction
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.EDT
 import com.intellij.openapi.components.service
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.project.Project
@@ -68,6 +73,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.jetbrains.jewel.bridge.compose
 import java.nio.file.Path
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.swing.JComponent
 import kotlin.coroutines.cancellation.CancellationException
@@ -113,6 +119,9 @@ class BbCloudOtherProjectsPanel(
     /** Prevents repeated prune requests for all watched projects while the first request is running. */
     private val pruneAllInProgress = AtomicBoolean(false)
 
+    /** Work tree paths with a removal in progress, so a second click on the same row is ignored. */
+    private val watchedWorktreesBeingRemoved = ConcurrentHashMap.newKeySet<Path>()
+
     // The one merged Workspace view model (sources WorkspaceAuthored and WorkspaceAssigned).
     private val workspacePullRequestsViewModel = PullRequestsViewModel(
         logName = "Workspace",
@@ -126,7 +135,12 @@ class BbCloudOtherProjectsPanel(
         onOpenTitleCallback = { entry -> startOpenPullRequestInWorktree(pullRequest = entry.pullRequest) },
         onOpenPrOnWebCallback = { entry -> openPrOnWebForPullRequest(entry.pullRequest) },
         onOpenRepositoryCallback = { entry -> openRepositoryForPullRequest(entry.pullRequest) },
-        onCountsChanged = { openCount, card -> workspaceHeaderViewModel.setOpenCount(openCount = openCount, card = card) }
+        onCountsChanged = { openCount, card -> workspaceHeaderViewModel.setOpenCount(openCount = openCount, card = card) },
+        seedKnownUsers = { entries ->
+            mentionPeopleByWorkspace(entries = entries).forEach { (workspace, people) ->
+                BbCloudKnownUsersCache.getInstance().record(workspace = workspace, candidates = people)
+            }
+        }
     )
     private val watchedProjectsViewModel = WatchedProjectsViewModel(
         coroutineScope = coroutineScope,
@@ -152,6 +166,7 @@ class BbCloudOtherProjectsPanel(
         },
         onOpenLocalProjectCallback = ::openLocalCheckoutProject,
         onOpenWorktreeCallback = ::openWatchedPrWorktree,
+        onRemoveWorktreeCallback = ::confirmAndRemoveWatchedWorktree,
         onPruneWorktreesCallback = ::pruneAllWatchedWorktrees,
         onOpenWorktreesHelpCallback = ::openWorktreesHelp,
         onGoToWorkspaceCallback = onGoToWorkspace
@@ -986,41 +1001,172 @@ class BbCloudOtherProjectsPanel(
             ).notify(project)
     }
 
+    /**
+     * The "Remove work tree" action of a failed open balloon. The user already chose the action, so no confirmation is
+     * shown. The removal still closes an IDE window open on the work tree first.
+     */
     private fun removeWatchedWorktree(mapping: WatchedProjectMapping, worktree: WatchedProjectWorktreeRow, prNumber: Long) {
-        val workTreeDirectory = configurationService.workTreeDirectoryOrNull()
-        val sourceCheckoutPath = Path.of(mapping.localFolderPath)
-        coroutineScope.launch {
-            val result = worktreeService.removeWorktree(
-                sourceCheckoutRoot = sourceCheckoutPath,
-                worktreePath = worktree.worktreePath,
-                workTreeDirectory = workTreeDirectory?.let { Path.of(it) } ?: return@launch
+        LOG.debug("Removing the work tree of PR #$prNumber from the failed open balloon")
+        launchWatchedWorktreeRemoval(mapping = mapping, worktree = worktree, askForConfirmation = false)
+    }
+
+    /**
+     * The remove button of a Watched Projects work tree row. It asks first, and warns when the work tree has uncommitted
+     * or untracked changes, then removes the work tree like [removeWatchedWorktree].
+     */
+    private fun confirmAndRemoveWatchedWorktree(mapping: WatchedProjectMapping, worktree: WatchedProjectWorktreeRow) {
+        launchWatchedWorktreeRemoval(mapping = mapping, worktree = worktree, askForConfirmation = true)
+    }
+
+    /**
+     * Shared start of both removal paths, called on the EDT. It refuses while pruning runs or the work tree is being
+     * opened, and it ignores a second request for a work tree that is already being removed.
+     */
+    private fun launchWatchedWorktreeRemoval(mapping: WatchedProjectMapping, worktree: WatchedProjectWorktreeRow, askForConfirmation: Boolean) {
+        val prNumber = worktree.prNumber
+        if (pruneAllInProgress.get()) {
+            LOG.info("Cannot remove the work tree of PR #$prNumber: pruning is running")
+            showWorktreeRemovalNotification(
+                contentKey = "workspace.watchedProjects.worktree.remove.pruneBusy",
+                contentArgs = emptyArray(),
+                type = NotificationType.WARNING
             )
-            ApplicationManager.getApplication().invokeLater {
-                when (result) {
-                    is WorktreeRemovalResult.Success -> {
-                        LOG.info("Removed worktree for PR #$prNumber")
-                        NotificationGroupManager.getInstance()
-                            .getNotificationGroup(NOTIFICATION_GROUP_ID)
-                            .createNotification(
-                                title = "",
-                                content = BbCloudBundle.message("workspace.watchedProjects.worktree.open.removed", prNumber),
-                                type = NotificationType.INFORMATION
-                            ).notify(project)
-                    }
-                    is WorktreeRemovalResult.Failed -> {
-                        LOG.warn("Could not remove worktree for PR #$prNumber: ${result.output}", result.cause)
-                        NotificationGroupManager.getInstance()
-                            .getNotificationGroup(NOTIFICATION_GROUP_ID)
-                            .createNotification(
-                                title = "",
-                                content = BbCloudBundle.message("workspace.watchedProjects.worktree.open.removeFailed", prNumber),
-                                type = NotificationType.ERROR
-                            ).notify(project)
-                    }
+            return
+        }
+        if (worktree.worktreePath in worktreeOpener.worktreesBeingOpened()) {
+            LOG.info("Cannot remove the work tree of PR #$prNumber: it is being opened")
+            showWorktreeRemovalNotification(
+                contentKey = "workspace.watchedProjects.worktree.remove.inUse",
+                contentArgs = arrayOf<Any>(prNumber),
+                type = NotificationType.WARNING
+            )
+            return
+        }
+        val workTreeDirectory = configurationService.workTreeDirectoryOrNull()
+        if (workTreeDirectory == null) {
+            LOG.info("Cannot remove the work tree of PR #$prNumber: no projects directory")
+            showWorktreeRemovalNotification(
+                contentKey = "workspace.watchedProjects.worktree.open.removeFailed",
+                contentArgs = arrayOf<Any>(prNumber),
+                type = NotificationType.ERROR
+            )
+            return
+        }
+        if (!watchedWorktreesBeingRemoved.add(worktree.worktreePath)) {
+            LOG.info("Ignoring a repeated remove request for the work tree of PR #$prNumber")
+            return
+        }
+        coroutineScope.launch {
+            var removalStarted = false
+            try {
+                if (askForConfirmation && !askToRemoveWatchedWorktree(worktree = worktree)) {
+                    LOG.info("User cancelled removal of the work tree of PR #$prNumber")
+                    return@launch
                 }
-                rescanWatchedProjects()
+                LOG.info("User confirmed removal of the work tree of PR #$prNumber")
+                removalStarted = true
+                startWatchedWorktreeRemoval(
+                    mapping = mapping,
+                    worktree = worktree,
+                    workTreeDirectory = Path.of(workTreeDirectory)
+                )
+            } finally {
+                if (!removalStarted) {
+                    watchedWorktreesBeingRemoved.remove(worktree.worktreePath)
+                }
             }
         }
+    }
+
+    /**
+     * Asks whether to remove [worktree]. The dialog is shown on the EDT. Returns true when the user chooses Remove.
+     */
+    private suspend fun askToRemoveWatchedWorktree(worktree: WatchedProjectWorktreeRow): Boolean {
+        return withContext(Dispatchers.EDT) {
+            Messages.showYesNoDialog(
+                project,
+                BbCloudBundle.message("workspace.watchedProjects.worktree.remove.confirm.message", worktree.worktreePath.toString()),
+                BbCloudBundle.message("workspace.watchedProjects.worktree.remove.confirm.title"),
+                BbCloudBundle.message("workspace.watchedProjects.worktree.remove.confirm.yes"),
+                BbCloudBundle.message("workspace.watchedProjects.worktree.remove.confirm.no"),
+                Messages.getWarningIcon()
+            ) == Messages.YES
+        }
+    }
+
+    /**
+     * Starts the removal of the work tree and returns without waiting. The coordinator closes the IDE window on the work
+     * tree, if one is open, and removes it. The modal closes after a fixed timeout while the removal keeps running on the
+     * application scope. The work tree guard is released when the removal completes, so a second click is still ignored
+     * until then. If the start itself throws, the guard is released here.
+     */
+    private fun startWatchedWorktreeRemoval(mapping: WatchedProjectMapping, worktree: WatchedProjectWorktreeRow, workTreeDirectory: Path) {
+        try {
+            BbCloudPullRequestDeclineCoordinator.getInstance().launchWatchedWorktreeRemoval(
+                project = project,
+                sourceCheckoutRoot = Path.of(mapping.localFolderPath),
+                worktreePath = worktree.worktreePath,
+                workTreeDirectory = workTreeDirectory,
+                onCompleted = { outcome ->
+                    watchedWorktreesBeingRemoved.remove(worktree.worktreePath)
+                    ApplicationManager.getApplication().invokeLater {
+                        finishWatchedWorktreeRemoval(worktree = worktree, outcome = outcome)
+                    }
+                }
+            )
+        } catch (exception: Exception) {
+            watchedWorktreesBeingRemoved.remove(worktree.worktreePath)
+            throw exception
+        }
+    }
+
+    /**
+     * Reports the outcome of a removal on the EDT and refreshes the work tree rows. When the project has already closed
+     * there is no window to notify, so only the log entry is written.
+     */
+    private fun finishWatchedWorktreeRemoval(worktree: WatchedProjectWorktreeRow, outcome: WatchedWorktreeRemovalOutcome) {
+        val prNumber = worktree.prNumber
+        if (project.isDisposed) {
+            LOG.info("Work tree removal of PR #$prNumber finished after the project closed")
+            return
+        }
+        when (outcome) {
+            WatchedWorktreeRemovalOutcome.Removed -> {
+                LOG.info("Removed the work tree of PR #$prNumber")
+                showWorktreeRemovalNotification(
+                    contentKey = "workspace.watchedProjects.worktree.open.removed",
+                    contentArgs = arrayOf<Any>(prNumber),
+                    type = NotificationType.INFORMATION
+                )
+            }
+            WatchedWorktreeRemovalOutcome.CloseFailed -> {
+                LOG.warn("Could not close the IDE window of PR #$prNumber, so its work tree was not removed")
+                showWorktreeRemovalNotification(
+                    contentKey = "workspace.watchedProjects.worktree.remove.closeFailed",
+                    contentArgs = arrayOf<Any>(prNumber),
+                    type = NotificationType.WARNING
+                )
+            }
+            is WatchedWorktreeRemovalOutcome.RemovalFailed -> {
+                LOG.warn("Could not remove the work tree of PR #$prNumber: ${outcome.output}", outcome.cause)
+                showWorktreeRemovalNotification(
+                    contentKey = "workspace.watchedProjects.worktree.open.removeFailed",
+                    contentArgs = arrayOf<Any>(prNumber),
+                    type = NotificationType.ERROR
+                )
+            }
+        }
+        watchedProjectsViewModel.reloadWorktrees()
+    }
+
+    private fun showWorktreeRemovalNotification(contentKey: String, contentArgs: Array<Any>, type: NotificationType) {
+        NotificationGroupManager.getInstance()
+            .getNotificationGroup(NOTIFICATION_GROUP_ID)
+            .createNotification(
+                title = "",
+                content = BbCloudBundle.message(contentKey, *contentArgs),
+                type = type
+            ).notify(project)
     }
 
     companion object {
@@ -1062,6 +1208,14 @@ private class ConfigurationWatchedProjectsDataSource(private val configurationSe
 
     override fun setAllWatched(watched: Boolean) {
         configurationService.setAllWatched(watched = watched)
+    }
+
+    override fun showOnlyWatched(): Boolean {
+        return configurationService.watchedProjectsShowOnlyWatched()
+    }
+
+    override fun setShowOnlyWatched(showOnlyWatched: Boolean) {
+        configurationService.saveWatchedProjectsShowOnlyWatched(showOnlyWatched = showOnlyWatched)
     }
 
     override suspend fun rescan(clearFirst: Boolean): WatchedProjectsDiscoveryResult {

@@ -33,12 +33,15 @@ data class WatchedProjectsUiState(
     val masterToggle: ToggleableState = ToggleableState.Off,
     val avatarRevision: Int = 0,
     /** Session-only filter text for the table; [rows] stays complete and [visibleRows] applies this query. */
-    val searchQuery: String = ""
+    val searchQuery: String = "",
+    /** Persisted "Show only watched" checkbox; seeded by the ViewModel from the data source. */
+    val showOnlyWatched: Boolean = false
 ) {
-    /** The rows that match [searchQuery], in the same order as [rows]. */
+    /** The rows that are watched (when [showOnlyWatched]) and match [searchQuery], in the same order as [rows]. */
     val visibleRows: List<WatchedProjectRow>
         get() {
-            return filterWatchedProjectRows(rows = rows, query = searchQuery)
+            val candidates = if (showOnlyWatched) rows.filter { row -> row.mapping.watched } else rows
+            return filterWatchedProjectRows(rows = candidates, query = searchQuery)
         }
 }
 

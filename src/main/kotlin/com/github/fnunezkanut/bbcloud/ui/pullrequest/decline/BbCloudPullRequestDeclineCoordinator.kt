@@ -8,10 +8,13 @@ import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestDeclineResult
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestSummary
 import com.github.fnunezkanut.bbcloud.config.BbCloudConfigurationService
 import com.github.fnunezkanut.bbcloud.git.BbCloudWorktreeService
+import com.github.fnunezkanut.bbcloud.git.OpenProjectLocatorImpl
 import com.github.fnunezkanut.bbcloud.git.WorktreeRemovalResult
 import com.github.fnunezkanut.bbcloud.project.PullRequestWorktreeMatch
 import com.github.fnunezkanut.bbcloud.project.PullRequestWorktreeResolution
 import com.github.fnunezkanut.bbcloud.project.PullRequestWorktreeResolver
+import com.github.fnunezkanut.bbcloud.project.WatchedWorktreeRemovalOutcome
+import com.github.fnunezkanut.bbcloud.project.WatchedWorktreeRemover
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.Disposable
@@ -544,9 +547,40 @@ class BbCloudPullRequestDeclineCoordinator : Disposable {
         scope = scope,
         cleanupOrchestrator = cleanupOrchestrator
     )
+    private val watchedWorktreeRemover = WatchedWorktreeRemover(
+        openProjectLocator = OpenProjectLocatorImpl(),
+        projectCloser = projectCloser,
+        removeWorktree = BbCloudWorktreeService.getInstance()::removeWorktree
+    )
+    private val watchedWorktreeRemovalOrchestrator = WatchedWorktreeRemovalOrchestrator(
+        scope = scope,
+        remover = watchedWorktreeRemover,
+        modal = WatchedWorktreeProgressModal
+    )
 
     internal fun launch(request: PullRequestDeclineRequest, onCompleted: (PullRequestDeclineCompletion) -> Unit) {
         orchestrator.launch(request = request, onCompleted = onCompleted)
+    }
+
+    /**
+     * Closes the IDE window open on [worktreePath], if there is one, and then removes the work tree. The modal shown for
+     * the removal closes after a fixed timeout, while the work keeps running on the application [scope]. [onCompleted]
+     * runs on that scope with the terminal outcome, including after an unexpected failure. This returns without waiting.
+     */
+    internal fun launchWatchedWorktreeRemoval(
+        project: Project,
+        sourceCheckoutRoot: Path,
+        worktreePath: Path,
+        workTreeDirectory: Path,
+        onCompleted: (WatchedWorktreeRemovalOutcome) -> Unit
+    ) {
+        watchedWorktreeRemovalOrchestrator.launch(
+            project = project,
+            sourceCheckoutRoot = sourceCheckoutRoot,
+            worktreePath = worktreePath,
+            workTreeDirectory = workTreeDirectory,
+            onCompleted = onCompleted
+        )
     }
 
     internal fun launchClosedPullRequestWorktreeCleanup(
@@ -561,6 +595,8 @@ class BbCloudPullRequestDeclineCoordinator : Disposable {
     }
 
     companion object {
+        private val LOG = logger<BbCloudPullRequestDeclineCoordinator>()
+
         fun getInstance(): BbCloudPullRequestDeclineCoordinator {
             return ApplicationManager.getApplication().service()
         }

@@ -99,8 +99,7 @@ internal fun PullRequestActivityFeedScreen(
 private fun TopLevelCommentComposer(conversationViewModel: PullRequestConversationViewModel) {
     val conversationState by conversationViewModel.state
     val pullRequestId = conversationViewModel.currentPullRequestId()
-    val input = remember(pullRequestId) { conversationViewModel.topLevelCommentInput() }
-    val composerViewModel = remember(pullRequestId) { CommentComposerViewModel(input = input) }
+    val composerViewModel = remember(pullRequestId) { conversationViewModel.newTopLevelComposer() }
     CommentComposerScreen(
         viewModel = composerViewModel,
         avatarIcon = conversationViewModel.avatarIconFor(conversationState.currentUserAvatarUrl),

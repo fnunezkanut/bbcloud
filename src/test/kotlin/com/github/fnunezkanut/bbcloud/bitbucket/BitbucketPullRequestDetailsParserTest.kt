@@ -292,12 +292,75 @@ class BitbucketPullRequestDetailsParserTest {
         }
 
         @Test
+        fun `parsePullRequestDetails - should read the account id of each reviewer`() {
+            // GIVEN
+            val json = pullRequestJson(
+                participants = """{ "user": { "uuid": "$currentUserUuid", "account_id": "712020:aaaa-bbbb" }, "role": "REVIEWER" }""",
+                reviewers = """{ "uuid": "$currentUserUuid", "account_id": "712020:aaaa-bbbb", "display_name": "John Smith" }"""
+            )
+
+            // WHEN
+            val details = BitbucketPullRequestResponseParser.parsePullRequestDetails(responseBody = json, currentUserUuid = currentUserUuid)
+
+            // THEN
+            details?.reviewers?.single()?.accountId shouldBe "712020:aaaa-bbbb"
+        }
+
+        @Test
+        fun `parsePullRequestDetails - should list non-reviewer participants with their account ids`() {
+            // GIVEN a reviewer, a plain commenter, a duplicate of the commenter, and the author
+            val json = pullRequestJson(
+                participants = listOf(
+                    """{ "user": { "uuid": "$currentUserUuid", "account_id": "712020:aaaa-bbbb", "display_name": "John Smith" }, "role": "REVIEWER" }""",
+                    """{ "user": { "uuid": "$otherUserUuid", "account_id": "712020:cccc-dddd", "display_name": "Jane Doe" }, "role": "PARTICIPANT" }""",
+                    """{ "user": { "uuid": "$otherUserUuid", "account_id": "712020:cccc-dddd", "display_name": "Jane Doe" }, "role": "PARTICIPANT" }""",
+                    """{ "user": { "uuid": "$AUTHOR_UUID", "account_id": "712020:ffff-0000", "display_name": "John Smith" }, "role": "PARTICIPANT" }"""
+                ).joinToString(separator = ",")
+            )
+
+            // WHEN
+            val details = BitbucketPullRequestResponseParser.parsePullRequestDetails(responseBody = json, currentUserUuid = null)
+
+            // THEN the author is excluded and duplicates dropped, while account ids survive
+            details.shouldNotBeNull()
+            assertSoftly(details) {
+                participants.map { participant -> participant.uuid } shouldBe listOf(currentUserUuid, otherUserUuid)
+                participants.map { participant -> participant.accountId } shouldBe listOf("712020:aaaa-bbbb", "712020:cccc-dddd")
+            }
+        }
+
+        @Test
         fun `buildReviewersUpdateBody - should include title and reviewer uuids`() {
             // WHEN
             val body = BitbucketPullRequestResponseParser.buildReviewersUpdateBody(title = "ABC-663 test", reviewerUuids = listOf("{a}", "{b}"))
 
             // THEN
             body shouldBe """{"title":"ABC-663 test","reviewers":[{"uuid":"{a}"},{"uuid":"{b}"}]}"""
+        }
+
+        @Test
+        fun `buildWorkspaceMembersUrl - should request the account id of each member`() {
+            // WHEN
+            val url = BitbucketPullRequestResponseParser.buildWorkspaceMembersUrl(workspace = "my-workspace")
+
+            // THEN
+            url.toHttpUrl().queryParameter("fields") shouldBe
+                "next,values.user.uuid,values.user.account_id,values.user.display_name,values.user.nickname,values.user.links.avatar.href"
+        }
+
+        @Test
+        fun `parseWorkspaceMembersPage - should read the account id of a member`() {
+            // GIVEN
+            val json =
+                """
+                { "values": [ { "user": { "uuid": "{a}", "account_id": "712020:aaaa-bbbb", "display_name": "Anna Lee" } } ] }
+                """.trimIndent()
+
+            // WHEN
+            val page = BitbucketPullRequestResponseParser.parseWorkspaceMembersPage(json)
+
+            // THEN
+            page.members.single().accountId shouldBe "712020:aaaa-bbbb"
         }
 
         @Test
