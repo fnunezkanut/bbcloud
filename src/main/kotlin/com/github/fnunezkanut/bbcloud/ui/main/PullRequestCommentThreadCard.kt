@@ -43,6 +43,8 @@ import com.github.fnunezkanut.bbcloud.BbCloudBundle
 import com.github.fnunezkanut.bbcloud.bitbucket.CommentChange
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestComment
 import com.github.fnunezkanut.bbcloud.bitbucket.TimelineEntry
+import com.github.fnunezkanut.bbcloud.ui.air.AirChatBridge
+import com.github.fnunezkanut.bbcloud.ui.air.AirCommentSender
 import com.github.fnunezkanut.bbcloud.ui.components.BbCloudCompactOutlinedIconButton
 import com.github.fnunezkanut.bbcloud.ui.components.BbCloudPluginIcons
 import com.github.fnunezkanut.bbcloud.ui.components.RoundedBadge
@@ -384,8 +386,12 @@ private fun CardMetaActions(comment: PullRequestComment, headlineKind: Conversat
         headlineKind = headlineKind,
         currentUserUuid = host.currentUserUuid
     )
-    if (actions.isEmpty()) return
+    val sendToAirAvailable = remember { AirChatBridge.isAvailable() }
+    if (actions.isEmpty() && !sendToAirAvailable) return
     Row(horizontalArrangement = Arrangement.spacedBy(CARD_ACTION_GAP), verticalAlignment = Alignment.CenterVertically) {
+        if (sendToAirAvailable) {
+            CardSendToAirButton(comment = comment, host = host)
+        }
         actions.forEach { action ->
             val tooltip = CommentThreadActionVisibility.tooltip(action = action)
             Tooltip(tooltip = { Text(text = tooltip) }) {
@@ -426,6 +432,28 @@ private fun CardMetaActions(comment: PullRequestComment, headlineKind: Conversat
                 )
             }
         }
+    }
+}
+
+/** Sends the comment to the JetBrains Air chat. It is offered on every comment, and only when the Air plugin is available. */
+@Composable
+private fun CardSendToAirButton(comment: PullRequestComment, host: CommentThreadCardHost) {
+    val label = BbCloudBundle.message("main.branch.comments.actions.sendToAir")
+    Tooltip(tooltip = { Text(text = label) }) {
+        BbCloudCompactOutlinedIconButton(
+            icon = BbCloudPluginIcons.sendToAir,
+            contentDescription = label,
+            outlineColor = ActionButtonOutlines.blue(),
+            enabled = !comment.isDeleted && !host.isUpdating(commentId = comment.id),
+            onClick = {
+                AirCommentSender.send(
+                    project = host.project(),
+                    comment = comment,
+                    pullRequestId = host.currentPullRequestId(),
+                    mentions = host.mentions
+                )
+            }
+        )
     }
 }
 

@@ -3,6 +3,7 @@ package com.github.fnunezkanut.bbcloud.ui.pullrequest.create
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.fileEditor.FileEditorManager
+import com.intellij.openapi.fileEditor.FileEditorOpenRequest
 import com.intellij.openapi.project.Project
 
 /** Opens or focuses the single `new.pr` create-pull-request tab for one project and repository. */
@@ -16,12 +17,18 @@ class BbCloudNewPullRequestEditorOpener(private val project: Project) {
         }
         if (existing != null) {
             LOG.debug("Focusing the existing new pull request tab for ${context.workspace}/${context.repositorySlug}")
-            fileManager.openFile(existing, true)
+            fileManager.requestOpenFile(
+                existing,
+                FileEditorOpenRequest.withFocus(requestFocus = true)
+            )
             return true
         }
         LOG.debug("Opening a new pull request tab for ${context.workspace}/${context.repositorySlug}")
         val file = BbCloudNewPullRequestVirtualFile(project = project, context = context)
-        fileManager.openFile(file, true)
+        fileManager.requestOpenFile(
+            file,
+            FileEditorOpenRequest.withFocus(requestFocus = true)
+        )
         return true
     }
 

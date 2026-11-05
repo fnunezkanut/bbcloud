@@ -80,6 +80,8 @@ internal class PullRequestReviewBar internal constructor(
          * The [action] is the action of the [surface]; it is absent when there is nothing to open, and the bar then
          * shows no button at all.
          *
+         * The [renderedDiffAction] opens the rendered Markdown diff; it is null for files that are not Markdown.
+         *
          * The [navigator] reads the chain of a diff, so the bar can offer previous and next unviewed-file buttons. It is
          * null on the normal-file surface, and the bar then shows no navigation buttons.
          */
@@ -91,6 +93,7 @@ internal class PullRequestReviewBar internal constructor(
             revision: String?,
             surface: ReviewBarSurface,
             action: ReviewBarAction?,
+            renderedDiffAction: ReviewBarAction? = null,
             onAddComment: () -> Unit,
             project: Project,
             navigator: ReviewBarDiffChainNavigator?
@@ -139,6 +142,7 @@ internal class PullRequestReviewBar internal constructor(
                     lineCount = lineCount,
                     surface = surface,
                     action = action,
+                    renderedDiffAction = renderedDiffAction,
                     navigation = navigation,
                     onViewedToggled = { checked ->
                         viewedFiles.setViewed(

@@ -8,7 +8,7 @@ import javax.swing.JComponent
 
 /**
  * Hides the tool window name the platform draws to the left of the header tabs, so the Bitbucket Cloud PR Review header shows only the
- * Current Projects, Other Projects and Settings tabs. The PR Changes tool window uses the same helper, so its header shows only the
+ * Current Project, Workspace, Watched Projects, Recent Projects and Settings tabs. The PR Changes tool window uses the same helper, so its header shows only the
  * `source > destination` content tab.
  *
  * The platform evaluates this only while rebuilding the header, and it walks up from the tool window content component

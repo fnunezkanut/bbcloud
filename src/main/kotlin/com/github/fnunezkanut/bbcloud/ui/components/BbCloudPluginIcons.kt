@@ -18,4 +18,11 @@ internal object BbCloudPluginIcons {
         newUiPath = "icons/expui/toolwindow/prToolWindow.svg",
         iconClass = BbCloudPluginIcons::class.java
     )
+
+    /** The Send to Air glyph. It is drawn for this plugin and is not copied from the JetBrains Air plugin. */
+    val sendToAir: IntelliJIconKey = IntelliJIconKey(
+        oldUiPath = "icons/sendToAir.svg",
+        newUiPath = "icons/sendToAir.svg",
+        iconClass = BbCloudPluginIcons::class.java
+    )
 }

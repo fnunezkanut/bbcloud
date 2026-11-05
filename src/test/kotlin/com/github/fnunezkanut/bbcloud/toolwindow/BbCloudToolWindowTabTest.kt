@@ -7,12 +7,13 @@ import org.junit.jupiter.api.Test
 @Tag("unit")
 class BbCloudToolWindowTabTest {
     @Test
-    fun `entries - should list the four tabs in header order`() {
+    fun `entries - should list the five tabs in header order`() {
         // GIVEN
         val expected = listOf(
             BbCloudToolWindowTab.ProjectPrs,
             BbCloudToolWindowTab.WorkspacePrs,
             BbCloudToolWindowTab.WorkspaceWatchedProjects,
+            BbCloudToolWindowTab.RecentProjects,
             BbCloudToolWindowTab.Settings
         )
 

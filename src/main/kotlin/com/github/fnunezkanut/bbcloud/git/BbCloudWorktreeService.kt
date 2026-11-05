@@ -1,6 +1,8 @@
 package com.github.fnunezkanut.bbcloud.git
 
+import com.github.fnunezkanut.bbcloud.BbCloudBundle
 import com.github.fnunezkanut.bbcloud.project.PullRequestWorktreeLayout
+import com.github.fnunezkanut.bbcloud.project.PullRequestWorktreeRecentProjects
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.service
 import com.intellij.openapi.diagnostic.logger
@@ -35,6 +37,11 @@ import kotlin.coroutines.coroutineContext
  * Git commands run on [Dispatchers.IO]. When a project is already open for the source clone its [GitLineHandler] path
  * is used for consistency with the rest of the plugin; otherwise the commands run through a direct process invocation
  * so worktree creation works even when no source-clone project is open.
+ *
+ * After the worktree is ready, the source and destination branches are fetched and fast-forwarded when that is safe
+ * (see [PrBranchSyncEngine]). "Without mutating the shared source clone" stays true: the automatic mode never touches a
+ * branch that is checked out in another work tree, and it only moves an unchecked-out `refs/heads/<destination>` by
+ * fast-forward.
  */
 class BbCloudWorktreeService {
     // The git runner and project locator are seams injected only in tests via the internal factory below. They are not
@@ -43,6 +50,9 @@ class BbCloudWorktreeService {
     // BbCloudServiceConstructorTest).
     private var gitRunner: GitCommandRunner = PlatformGitCommandRunner()
     private var openProjectLocator: OpenProjectLocator = OpenProjectLocatorImpl()
+    private var recentProjects: PullRequestWorktreeRecentProjects = PullRequestWorktreeRecentProjects.getInstance()
+    private var refreshVfs: (Path) -> Unit = ::refreshWorktreeInVfs
+    private var syncEngine: PrBranchSyncEngine = PrBranchSyncEngine(gitRunner = gitRunner, openProjectLocator = openProjectLocator)
 
     /** Serializes git writes per source checkout so concurrent clicks on two pull requests of the same repo do not contend on the index lock. */
     private val sourceLocks = ConcurrentHashMap<Path, Mutex>()
@@ -69,6 +79,27 @@ class BbCloudWorktreeService {
             parameters = listOf("--porcelain", "--untracked-files=normal")
         )
         return if (result.success) GitStatusOutput.hasUncommittedChanges(result.combinedOutput) else null
+    }
+
+    /**
+     * Returns the paths of all worktrees registered in [sourceCheckoutRoot] (`git worktree list --porcelain`), or an
+     * empty list when git fails.
+     */
+    suspend fun registeredWorktrees(sourceCheckoutRoot: Path): List<Path> {
+        val normalizedSource = sourceCheckoutRoot.toAbsolutePath().normalize()
+        return withContext(Dispatchers.IO) {
+            val result = runGit(
+                project = findOpenProjectForPath(normalizedSource),
+                workingDir = normalizedSource,
+                command = GitCommand.WORKTREE,
+                parameters = listOf("list", "--porcelain")
+            )
+            if (!result.success) {
+                LOG.debug("Could not list registered worktrees of $normalizedSource")
+                return@withContext emptyList()
+            }
+            WorktreeListOutput.registeredPaths(porcelainOutput = result.combinedOutput)
+        }
     }
 
     suspend fun removeWorktree(sourceCheckoutRoot: Path, worktreePath: Path, workTreeDirectory: Path): WorktreeRemovalResult {
@@ -105,10 +136,11 @@ class BbCloudWorktreeService {
                     command = GitCommand.WORKTREE,
                     parameters = listOf("prune")
                 )
-                refreshWorktreeInVfs(worktreePath = normalizedWorktree)
+                refreshVfs(normalizedWorktree)
                 if (!pruneResult.success) {
                     WorktreeRemovalResult.Failed(output = pruneResult.combinedOutput)
                 } else {
+                    forgetInRecentProjects(worktreePath = normalizedWorktree)
                     LOG.debug("Removed or reconciled declined pull request worktree at $normalizedWorktree")
                     WorktreeRemovalResult.Success
                 }
@@ -116,7 +148,14 @@ class BbCloudWorktreeService {
         }
     }
 
-    suspend fun ensureWorktree(sourceCheckoutRoot: Path, worktreePath: Path, remoteUrl: String?, prNumber: Long, sourceBranch: String): WorktreeSetupResult {
+    suspend fun ensureWorktree(
+        sourceCheckoutRoot: Path,
+        worktreePath: Path,
+        remoteUrl: String?,
+        prNumber: Long,
+        sourceBranch: String,
+        destinationBranch: String?
+    ): WorktreeSetupResult {
         val normalizedSource = sourceCheckoutRoot.toAbsolutePath().normalize()
         val normalizedWorktree = worktreePath.toAbsolutePath().normalize()
         val lock = sourceLocks.getOrPut(normalizedSource) { Mutex() }
@@ -127,7 +166,8 @@ class BbCloudWorktreeService {
                     worktreePath = normalizedWorktree,
                     remoteUrl = remoteUrl,
                     prNumber = prNumber,
-                    sourceBranch = sourceBranch
+                    sourceBranch = sourceBranch,
+                    destinationBranch = destinationBranch
                 )
             }
         }
@@ -138,7 +178,8 @@ class BbCloudWorktreeService {
         worktreePath: Path,
         remoteUrl: String?,
         prNumber: Long,
-        sourceBranch: String
+        sourceBranch: String,
+        destinationBranch: String?
     ): WorktreeSetupResult {
         val sourceProject = findOpenProjectForPath(sourceCheckoutRoot)
         // The worktree is always put on a local branch named exactly like the pull request source branch (the branch
@@ -226,12 +267,42 @@ class BbCloudWorktreeService {
             throw exception
         }
 
-        refreshWorktreeInVfs(worktreePath = worktreePath)
+        syncBranchesBestEffort(
+            worktreePath = worktreePath,
+            remoteUrl = remoteUrl,
+            sourceBranch = branchName,
+            destinationBranch = destinationBranch
+        )
+        refreshVfs(worktreePath)
         LOG.debug(
             "Prepared worktree at $worktreePath on branch ${reconcileOutcome.branchName} " +
                 "(createdByUs=${reconcileOutcome.createdByUs})"
         )
         return WorktreeSetupResult.Success(worktreePath = worktreePath)
+    }
+
+    /**
+     * Fetches the pull request source and destination branches and fast-forwards the local branches when that is safe.
+     * Best-effort: a failure here is logged and never changes the result of preparing the worktree. A blank destination
+     * syncs only the source branch (the engine de-duplicates the equal names).
+     */
+    private fun syncBranchesBestEffort(worktreePath: Path, remoteUrl: String, sourceBranch: String, destinationBranch: String?) {
+        try {
+            syncEngine.sync(
+                project = findOpenProjectForPath(worktreePath),
+                prWorktreePath = worktreePath,
+                remoteName = REMOTE_NAME,
+                remoteUrl = remoteUrl,
+                sourceBranch = sourceBranch,
+                destinationBranch = destinationBranch?.takeIf { branch -> branch.isNotBlank() } ?: sourceBranch,
+                mode = PrBranchSyncMode.Automatic,
+                fetch = true
+            )
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            LOG.debug("Syncing the branches of the worktree at $worktreePath failed", exception)
+        }
     }
 
     private sealed interface ReconcileOutcome {
@@ -493,6 +564,18 @@ class BbCloudWorktreeService {
         }
     }
 
+    /**
+     * Removes the deleted worktree from Recent Projects so the Welcome screen does not keep a broken entry. Called only
+     * after git has removed the worktree, so a failed removal keeps the entry.
+     */
+    private fun forgetInRecentProjects(worktreePath: Path) {
+        LOG.debug("Forgetting removed pull request worktree ${worktreePath.fileName} in recent projects")
+        recentProjects.forget(
+            worktreePath = worktreePath,
+            groupName = BbCloudBundle.message("recentProjects.group.name")
+        )
+    }
+
     private fun findOpenProjectForPath(path: Path): Project? {
         return openProjectLocator.findOpenProjectForPath(path)
     }
@@ -520,6 +603,7 @@ class BbCloudWorktreeService {
 
     companion object {
         private val LOG = logger<BbCloudWorktreeService>()
+        private const val REMOTE_NAME = "origin"
 
         fun getInstance(): BbCloudWorktreeService {
             return ApplicationManager.getApplication().service()
@@ -530,10 +614,18 @@ class BbCloudWorktreeService {
          * use [getInstance] so the platform owns the single application-service instance and the real implementations
          * are used.
          */
-        internal fun forTesting(gitRunner: GitCommandRunner, openProjectLocator: OpenProjectLocator): BbCloudWorktreeService {
+        internal fun forTesting(
+            gitRunner: GitCommandRunner,
+            openProjectLocator: OpenProjectLocator,
+            recentProjects: PullRequestWorktreeRecentProjects = PullRequestWorktreeRecentProjects.getInstance(),
+            refreshVfs: (Path) -> Unit = {}
+        ): BbCloudWorktreeService {
             return BbCloudWorktreeService().apply {
                 this.gitRunner = gitRunner
                 this.openProjectLocator = openProjectLocator
+                this.recentProjects = recentProjects
+                this.refreshVfs = refreshVfs
+                this.syncEngine = PrBranchSyncEngine(gitRunner = gitRunner, openProjectLocator = openProjectLocator)
             }
         }
     }

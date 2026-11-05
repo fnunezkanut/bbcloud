@@ -7,14 +7,14 @@ plugins {
     kotlin("jvm") version "2.4.20"
     kotlin("plugin.serialization") version "2.4.20"
     id("org.jetbrains.kotlin.plugin.compose") version "2.4.20"
-    // Compose MP 1.12.0 matches Jewel 0.41, the Jewel release whose min IJP is 2026.2.3.
-    id("org.jetbrains.compose") version "1.12.0"
-    id("org.jetbrains.intellij.platform") version "2.19.0"
+    // Compose MP 1.12.1 matches Jewel 0.42, the first Jewel release whose min IJP is 2026.3.
+    id("org.jetbrains.compose") version "1.12.1"
+    id("org.jetbrains.intellij.platform") version "2.20.0"
     id("org.jmailen.kotlinter") version "5.7.0"
 }
 
 group = "com.github.fnunezkanut"
-version = "1.7.0"
+version = "1.8.0"
 
 val isLocalBuild = providers.environmentVariable("CI").orNull.isNullOrEmpty()
 
@@ -28,7 +28,7 @@ repositories {
 
 dependencies {
     intellijPlatform {
-        intellijIdea("2026.2.3")
+        intellijIdea("2026.3")
         bundledPlugin("Git4Idea")
         bundledModule("intellij.libraries.compose.foundation.desktop")
         bundledModule("intellij.libraries.skiko")
@@ -45,8 +45,8 @@ dependencies {
         bundledModule("intellij.platform.vcs.impl.shared")
     }
     // Compose runtime is compile-only because IntelliJ's bundled Jewel/Compose modules provide it at runtime.
-    compileOnly("org.jetbrains.compose.runtime:runtime:1.12.0")
-    testCompileOnly("org.jetbrains.compose.runtime:runtime:1.12.0")
+    compileOnly("org.jetbrains.compose.runtime:runtime:1.12.1")
+    testCompileOnly("org.jetbrains.compose.runtime:runtime:1.12.1")
     // The test compiler also applies the Compose compiler plugin, so it needs the API on its compile classpath.
 
     implementation("com.squareup.okhttp3:okhttp:5.4.0") {
@@ -88,7 +88,7 @@ intellijPlatform {
         id = "com.github.fnunezkanut.bbcloud"
         name = "Bitbucket Cloud PR Review"
         ideaVersion {
-            sinceBuild = "262.10968.63"
+            sinceBuild = "263.7307.200"
             untilBuild = "263.*"
         }
     }

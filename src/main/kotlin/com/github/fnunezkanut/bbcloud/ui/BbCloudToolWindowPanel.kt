@@ -16,6 +16,7 @@ import com.github.fnunezkanut.bbcloud.toolwindow.BbCloudToolWindowTab
 import com.github.fnunezkanut.bbcloud.toolwindow.BbCloudToolWindowTabResolver
 import com.github.fnunezkanut.bbcloud.ui.main.BbCloudMainPanel
 import com.github.fnunezkanut.bbcloud.ui.otherprojects.BbCloudOtherProjectsPanel
+import com.github.fnunezkanut.bbcloud.ui.recentprojects.RecentProjectsPanel
 import com.github.fnunezkanut.bbcloud.ui.setup.BbCloudSettingsScreen
 import com.github.fnunezkanut.bbcloud.ui.setup.BbCloudSettingsViewModel
 import com.github.fnunezkanut.bbcloud.ui.setup.chooseWorkspaceWithDialog
@@ -45,7 +46,7 @@ import javax.swing.Icon
 import javax.swing.JComponent
 
 /**
- * Owns the four tool window tabs and the panels behind them. The Current Project tab opens by default once a
+ * Owns the five tool window tabs and the panels behind them. The Current Project tab opens by default once a
  * Bitbucket workspace and API token exist, otherwise the Settings tab opens. Tabs are never redirected: while the plugin
  * is unconfigured, the other tabs offer a link to the Settings tab instead.
  */
@@ -80,19 +81,26 @@ class BbCloudToolWindowPanel(private val project: Project) {
         onRefreshRequested = { refreshWorkspace() }
     )
 
+    private val recentProjectsPanel = RecentProjectsPanel(
+        project = project,
+        coroutineScope = coroutineScope,
+        isPruneInProgress = { otherProjectsPanel.isPruneInProgress() }
+    )
+
     /** Set by the async configuration check; null while it is still in flight. */
     private var isConfigured: Boolean? = null
     private var contentManager: ContentManager? = null
     private var isProgrammaticSelection = false
     private var contentByTab: Map<BbCloudToolWindowTab, Content> = emptyMap()
 
-    /** Non-closeable components for each of the four tabs; wired from coordinators. */
+    /** Non-closeable components for each of the five tabs; wired from coordinators. */
     val projectPrsComponent: JComponent = mainPanel.projectPrsTabComponent
     val workspacePrsComponent: JComponent = otherProjectsPanel.workspacePrsTabComponent
     val workspaceWatchedProjectsComponent: JComponent = otherProjectsPanel.watchedProjectsTabComponent
+    val recentProjectsComponent: JComponent = recentProjectsPanel.component
     val settingsComponent: JComponent = settingsComposeComponent
 
-    /** Builds the four non-closeable tabs, in header order. */
+    /** Builds the five non-closeable tabs, in header order. */
     fun createContents(): List<Content> {
         val contentFactory = ContentFactory.getInstance()
         val contents = BbCloudToolWindowTab.entries.map { tab ->
@@ -147,6 +155,14 @@ class BbCloudToolWindowPanel(private val project: Project) {
         contentManager ?: return false
         contentByTab[BbCloudToolWindowTab.WorkspaceWatchedProjects] ?: return false
         selectTab(tab = BbCloudToolWindowTab.WorkspaceWatchedProjects)
+        return true
+    }
+
+    /** Selects the Recent Projects tab. Returns false if the tab or its content is unavailable. */
+    fun showRecentProjectsTab(): Boolean {
+        contentManager ?: return false
+        contentByTab[BbCloudToolWindowTab.RecentProjects] ?: return false
+        selectTab(tab = BbCloudToolWindowTab.RecentProjects)
         return true
     }
 
@@ -209,6 +225,7 @@ class BbCloudToolWindowPanel(private val project: Project) {
             BbCloudToolWindowTab.ProjectPrs -> refreshProjectPrs()
             BbCloudToolWindowTab.WorkspacePrs -> refreshWorkspacePrs()
             BbCloudToolWindowTab.WorkspaceWatchedProjects -> refreshWorkspaceWatchedProjects()
+            BbCloudToolWindowTab.RecentProjects -> refreshRecentProjects()
             BbCloudToolWindowTab.Settings -> bindSettingsState()
         }
     }
@@ -267,6 +284,12 @@ class BbCloudToolWindowPanel(private val project: Project) {
         }
     }
 
+    /** Recent Projects is local IDE data, so this tab never checks whether Bitbucket is configured. */
+    private fun refreshRecentProjects() {
+        LOG.debug("Refreshing the Recent Projects tab")
+        recentProjectsPanel.reload()
+    }
+
     /** Reloads the Settings tab from the stored state: the token outline, OAuth status, and projects-directory status. */
     private fun bindSettingsState() {
         coroutineScope.launch {
@@ -294,6 +317,7 @@ class BbCloudToolWindowPanel(private val project: Project) {
                 // resetAll already wiped the persisted avatar-URL map; also drop the in-memory decoded repository
                 // avatars so the Watched Projects tab shows placeholders until the next Sync repopulates them.
                 otherProjectsPanel.resetWatchedProjectsAvatars()
+                recentProjectsPanel.resetAvatars()
                 selectTab(tab = BbCloudToolWindowTab.Settings)
             }
         }
@@ -318,6 +342,7 @@ class BbCloudToolWindowPanel(private val project: Project) {
             BbCloudToolWindowTab.ProjectPrs -> projectPrsComponent
             BbCloudToolWindowTab.WorkspacePrs -> workspacePrsComponent
             BbCloudToolWindowTab.WorkspaceWatchedProjects -> workspaceWatchedProjectsComponent
+            BbCloudToolWindowTab.RecentProjects -> recentProjectsComponent
             BbCloudToolWindowTab.Settings -> settingsComposeComponent
         }
     }
@@ -327,6 +352,7 @@ class BbCloudToolWindowPanel(private val project: Project) {
             BbCloudToolWindowTab.ProjectPrs -> "toolwindow.tab.projectPrs"
             BbCloudToolWindowTab.WorkspacePrs -> "toolwindow.tab.workspacePrs"
             BbCloudToolWindowTab.WorkspaceWatchedProjects -> "toolwindow.tab.workspaceWatchedProjects"
+            BbCloudToolWindowTab.RecentProjects -> "toolwindow.tab.recentProjects"
             BbCloudToolWindowTab.Settings -> "toolwindow.tab.settings"
         }
     }
@@ -336,6 +362,7 @@ class BbCloudToolWindowPanel(private val project: Project) {
             BbCloudToolWindowTab.ProjectPrs -> AllIcons.Nodes.IdeaProject
             BbCloudToolWindowTab.WorkspacePrs -> AllIcons.Nodes.ModuleGroup
             BbCloudToolWindowTab.WorkspaceWatchedProjects -> AllIcons.Actions.Show
+            BbCloudToolWindowTab.RecentProjects -> AllIcons.Vcs.History
             BbCloudToolWindowTab.Settings -> AllIcons.General.Settings
         }
     }
@@ -404,6 +431,7 @@ class BbCloudToolWindowPanel(private val project: Project) {
     fun disposePanel() {
         LOG.debug("Disposing Bitbucket Cloud PR Review tool window panel for project ${project.name}")
         coroutineScope.cancel()
+        Disposer.dispose(recentProjectsPanel)
     }
 
     companion object {

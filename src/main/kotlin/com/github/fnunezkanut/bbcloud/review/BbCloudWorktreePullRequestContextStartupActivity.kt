@@ -17,7 +17,7 @@ class BbCloudWorktreePullRequestContextStartupActivity : ProjectActivity {
             return
         }
         LOG.debug("Resolving the work tree pull request context of the opened project")
-        BbCloudWorktreePullRequestContext.getInstance(project).reload(reason = "project opened")
+        BbCloudWorktreePullRequestContext.getInstance(project).reload(reason = "project opened", syncBranches = true)
     }
 
     companion object {

@@ -3,6 +3,7 @@ package com.github.fnunezkanut.bbcloud.ui.pullrequest.editor
 import com.github.fnunezkanut.bbcloud.bitbucket.BitbucketRepositoryUrls
 import com.github.fnunezkanut.bbcloud.config.BbCloudConfigurationService
 import com.github.fnunezkanut.bbcloud.project.LocalRepositoryProjectOpener
+import com.github.fnunezkanut.bbcloud.review.PageReloadRequest
 import com.github.fnunezkanut.bbcloud.review.WorktreePullRequestPageReloader
 import com.github.fnunezkanut.bbcloud.review.WorktreeTodoBannerUiState
 import com.github.fnunezkanut.bbcloud.ui.pullrequest.projectView.BbCloudPullRequestVirtualFiles
@@ -10,6 +11,7 @@ import com.intellij.ide.BrowserUtil
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.fileEditor.FileEditorManager
+import com.intellij.openapi.fileEditor.FileEditorOpenRequest
 import com.intellij.openapi.project.Project
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -121,13 +123,16 @@ internal object WorktreeTodoBannerActions {
             "User clicked open PR page on the worktree banner for pull request #${state.pullRequestId} in " +
                 "repository ${state.repoSlug}"
         )
-        FileEditorManager.getInstance(project).openFile(file, true)
+        FileEditorManager.getInstance(project).requestOpenFile(
+            file,
+            FileEditorOpenRequest.withFocus(requestFocus = true)
+        )
     }
 
     /** Reloads the pull request page through the shared reloader. */
     fun refresh(project: Project, state: WorktreeTodoBannerUiState) {
         LOG.info("User clicked refresh on the worktree banner for pull request #${state.pullRequestId} in repository ${state.repoSlug}")
-        WorktreePullRequestPageReloader.getInstance(project).requestReload()
+        WorktreePullRequestPageReloader.getInstance(project).requestReload(PageReloadRequest(syncBranches = true))
     }
 
     private fun browseRepository(project: Project, repoSlug: String, pullRequestId: Long) {

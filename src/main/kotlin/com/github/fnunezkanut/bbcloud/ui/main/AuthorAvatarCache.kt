@@ -57,6 +57,11 @@ class AuthorAvatarCache(private val avatarClient: BitbucketAvatarClient = Bitbuc
         return url?.let { icons[it] } ?: fallback
     }
 
+    /** The decoded icon for [url], or null while the image has not loaded. */
+    fun cachedIconOrNull(url: String): Icon? {
+        return icons[url]
+    }
+
     /**
      * Empties the decoded-icon cache and the in-flight download set, so subsequent [iconFor] calls return the
      * placeholder until the images are prefetched again. Used by the Reset Plugin flow to drop stale icons; it is

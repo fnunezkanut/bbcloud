@@ -42,6 +42,8 @@ private val REVIEW_BAR_PADDING = 4.dp
 /**
  * The content of the review bar. Comment threads and composers render in editor inlays, not in this bar.
  *
+ * The [renderedDiffAction] adds a "View Rendered Diff" button right after the surface action; it is null for files that are not Markdown.
+ *
  * The previous and next unviewed-file buttons show only on the [ReviewBarSurface.Diff] surface and only when a
  * [navigation] is given. [navigation] is null when the chain of the diff cannot be found, or when the chain has one file.
  */
@@ -51,6 +53,7 @@ internal fun PullRequestReviewBarContent(
     lineCount: FileLineCount?,
     surface: ReviewBarSurface,
     action: ReviewBarAction?,
+    renderedDiffAction: ReviewBarAction?,
     navigation: ReviewBarFileNavigationState?,
     onViewedToggled: (Boolean) -> Unit,
     onAddComment: () -> Unit,
@@ -73,6 +76,16 @@ internal fun PullRequestReviewBarContent(
                     outlineColor = ActionButtonOutlines.blue(),
                     enabled = true,
                     onClick = action.onClick
+                )
+            }
+            if (renderedDiffAction != null) {
+                BbCloudOutlinedActionButton(
+                    text = BbCloudBundle.message("editor.reviewBar.renderedDiff"),
+                    icon = AllIconsKeys.Actions.Preview,
+                    outlineColor = reviewBarPurple(),
+                    enabled = true,
+                    onClick = renderedDiffAction.onClick,
+                    modifier = Modifier.padding(start = REVIEW_BAR_CONTROL_GAP)
                 )
             }
             if (lineCount != null && !lineCount.isBinary) {

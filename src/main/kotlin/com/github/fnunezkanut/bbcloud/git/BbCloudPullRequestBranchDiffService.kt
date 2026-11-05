@@ -6,7 +6,6 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.vcs.VcsException
 import com.intellij.openapi.vcs.changes.Change
 import com.intellij.openapi.vcs.changes.ChangesUtil
-import com.intellij.openapi.vfs.LocalFileSystem
 import git4idea.changes.GitChangeUtils
 import git4idea.commands.Git
 import git4idea.commands.GitCommand
@@ -14,35 +13,33 @@ import git4idea.commands.GitHandlerInputProcessorUtil
 import git4idea.commands.GitLineHandler
 import git4idea.repo.GitRemote
 import git4idea.repo.GitRepository
-import git4idea.repo.GitRepositoryManager
 import java.nio.charset.StandardCharsets
-import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.TimeSource
 
 class BbCloudPullRequestBranchDiffService {
     fun loadPullRequestChanges(project: Project, destinationBranch: String, sourceBranch: String): BranchDiffResult {
-        val repository = awaitRepository(project) ?: run {
+        val repository = ProjectGitRepositoryLookup.awaitRepository(project) ?: run {
             LOG.info("Cannot load pull request file changes: no Git repository for project ${project.name}")
             return BranchDiffResult.NoRepository
         }
 
-        val destinationRef = resolveBranchRef(repository = repository, branchName = destinationBranch)
-        if (destinationRef == null) {
-            fetchBranch(project = project, repository = repository, branchName = destinationBranch)
-            repository.update()
-        }
-        val resolvedDestination = resolveBranchRef(repository = repository, branchName = destinationBranch)
+        val resolvedDestination = resolveBranchRefFetchingIfMissing(
+            project = project,
+            repository = repository,
+            branchName = destinationBranch,
+            preferRemote = true
+        )
         if (resolvedDestination == null) {
             LOG.info("Cannot resolve destination branch '$destinationBranch' in ${repository.root.path}")
             return BranchDiffResult.BranchNotFound(branchName = destinationBranch)
         }
 
-        val sourceRef = resolveBranchRef(repository = repository, branchName = sourceBranch)
-        if (sourceRef == null) {
-            fetchBranch(project = project, repository = repository, branchName = sourceBranch)
-            repository.update()
-        }
-        val resolvedSource = resolveBranchRef(repository = repository, branchName = sourceBranch)
+        val resolvedSource = resolveBranchRefFetchingIfMissing(
+            project = project,
+            repository = repository,
+            branchName = sourceBranch,
+            preferRemote = false
+        )
         if (resolvedSource == null) {
             LOG.info("Cannot resolve source branch '$sourceBranch' in ${repository.root.path}")
             return BranchDiffResult.BranchNotFound(branchName = sourceBranch)
@@ -76,7 +73,7 @@ class BbCloudPullRequestBranchDiffService {
      * viewed-file tracking).
      */
     fun loadPullRequestFileRevisions(project: Project, sourceRef: String, changes: Collection<Change>): Map<String, String> {
-        val repository = awaitRepository(project) ?: run {
+        val repository = ProjectGitRepositoryLookup.awaitRepository(project) ?: run {
             LOG.debug("Skipping file revision lookup: no Git repository for project ${project.name}")
             return emptyMap()
         }
@@ -140,28 +137,28 @@ class BbCloudPullRequestBranchDiffService {
     }
 
     fun loadPullRequestLineTotals(project: Project, destinationBranch: String, sourceBranch: String): BranchDiffLineTotals? {
-        val repository = awaitRepository(project) ?: run {
+        val repository = ProjectGitRepositoryLookup.awaitRepository(project) ?: run {
             LOG.info("Cannot load pull request line totals: no Git repository for project ${project.name}")
             return null
         }
 
-        val destinationRef = resolveBranchRef(repository = repository, branchName = destinationBranch)
-        if (destinationRef == null) {
-            fetchBranch(project = project, repository = repository, branchName = destinationBranch)
-            repository.update()
-        }
-        val resolvedDestination = resolveBranchRef(repository = repository, branchName = destinationBranch)
+        val resolvedDestination = resolveBranchRefFetchingIfMissing(
+            project = project,
+            repository = repository,
+            branchName = destinationBranch,
+            preferRemote = true
+        )
         if (resolvedDestination == null) {
             LOG.info("Cannot resolve destination branch '$destinationBranch' in ${repository.root.path}")
             return null
         }
 
-        val sourceRef = resolveBranchRef(repository = repository, branchName = sourceBranch)
-        if (sourceRef == null) {
-            fetchBranch(project = project, repository = repository, branchName = sourceBranch)
-            repository.update()
-        }
-        val resolvedSource = resolveBranchRef(repository = repository, branchName = sourceBranch)
+        val resolvedSource = resolveBranchRefFetchingIfMissing(
+            project = project,
+            repository = repository,
+            branchName = sourceBranch,
+            preferRemote = false
+        )
         if (resolvedSource == null) {
             LOG.info("Cannot resolve source branch '$sourceBranch' in ${repository.root.path}")
             return null
@@ -206,28 +203,28 @@ class BbCloudPullRequestBranchDiffService {
      * repository and Git command are resolved and must be called on [kotlinx.coroutines.Dispatchers.IO].
      */
     fun loadPullRequestFileLineCounts(project: Project, destinationBranch: String, sourceBranch: String): Map<String, FileLineCount> {
-        val repository = awaitRepository(project) ?: run {
+        val repository = ProjectGitRepositoryLookup.awaitRepository(project) ?: run {
             LOG.info("Cannot load pull request file line counts: no Git repository for project ${project.name}")
             return emptyMap()
         }
 
-        val destinationRef = resolveBranchRef(repository = repository, branchName = destinationBranch)
-        if (destinationRef == null) {
-            fetchBranch(project = project, repository = repository, branchName = destinationBranch)
-            repository.update()
-        }
-        val resolvedDestination = resolveBranchRef(repository = repository, branchName = destinationBranch)
+        val resolvedDestination = resolveBranchRefFetchingIfMissing(
+            project = project,
+            repository = repository,
+            branchName = destinationBranch,
+            preferRemote = true
+        )
         if (resolvedDestination == null) {
             LOG.info("Cannot resolve destination branch '$destinationBranch' in ${repository.root.path}")
             return emptyMap()
         }
 
-        val sourceRef = resolveBranchRef(repository = repository, branchName = sourceBranch)
-        if (sourceRef == null) {
-            fetchBranch(project = project, repository = repository, branchName = sourceBranch)
-            repository.update()
-        }
-        val resolvedSource = resolveBranchRef(repository = repository, branchName = sourceBranch)
+        val resolvedSource = resolveBranchRefFetchingIfMissing(
+            project = project,
+            repository = repository,
+            branchName = sourceBranch,
+            preferRemote = false
+        )
         if (resolvedSource == null) {
             LOG.info("Cannot resolve source branch '$sourceBranch' in ${repository.root.path}")
             return emptyMap()
@@ -274,7 +271,7 @@ class BbCloudPullRequestBranchDiffService {
      * This function blocks while the repository is resolved and must be called on [kotlinx.coroutines.Dispatchers.IO].
      */
     fun readHead(project: Project): WorktreeHead? {
-        val repository = awaitRepository(project) ?: run {
+        val repository = ProjectGitRepositoryLookup.awaitRepository(project) ?: run {
             LOG.info("Cannot read work tree HEAD: no Git repository for project ${project.name}")
             return null
         }
@@ -300,7 +297,7 @@ class BbCloudPullRequestBranchDiffService {
             LOG.debug("Cannot check revision ancestry: revision is blank")
             return false
         }
-        val repository = awaitRepository(project) ?: run {
+        val repository = ProjectGitRepositoryLookup.awaitRepository(project) ?: run {
             LOG.info("Cannot check revision ancestry: no Git repository for project ${project.name}")
             return false
         }
@@ -331,62 +328,6 @@ class BbCloudPullRequestBranchDiffService {
     }
 
     /**
-     * Evaluates whether the local pull-request branch is behind `origin/<sourceBranch>`.
-     *
-     * Fetches the source branch (so the remote ref is current), gates on the work tree being checked out on the pull
-     * request source branch (decision 3b), then counts the commits `origin/<sourceBranch>` carries that the local HEAD
-     * does not (decision 4a). Any failure along the way — no repository, no remote ref, a failing git command — yields
-     * [LocalBehindRemoteDecision.Hidden] so no stale "behind" state is shown (decision 5a).
-     *
-     * This function blocks while the repository, the fetch, and the git commands run and must be called on
-     * [kotlinx.coroutines.Dispatchers.IO].
-     */
-    fun evaluateLocalBehindRemote(project: Project, sourceBranch: String): LocalBehindRemoteDecision {
-        val repository = awaitRepository(project) ?: run {
-            LOG.info("Cannot evaluate local-behind-remote: no Git repository for project ${project.name}")
-            return LocalBehindRemoteDecision.Hidden
-        }
-        val currentBranchName = repository.currentBranchName
-        val localRevision = repository.currentRevision
-
-        // Fetch the source branch so origin/<sourceBranch> reflects the remote before counting (decision 8b triggers
-        // call this repeatedly; the fetch keeps the comparison honest).
-        fetchBranch(project = project, repository = repository, branchName = sourceBranch)
-        repository.update()
-
-        val remoteRef = resolveRemoteSourceRef(repository = repository, sourceBranch = sourceBranch)
-        if (remoteRef == null) {
-            LOG.debug("Cannot evaluate local-behind-remote: no remote ref for source branch '$sourceBranch' in ${repository.root.path}")
-            return LocalBehindRemoteDecision.Hidden
-        }
-        val remoteRevision = resolveRevision(project = project, refName = remoteRef)
-        if (remoteRevision.isNullOrBlank()) {
-            LOG.debug("Cannot evaluate local-behind-remote: '$remoteRef' did not resolve to a revision in ${repository.root.path}")
-            return LocalBehindRemoteDecision.Hidden
-        }
-        if (localRevision.isNullOrBlank()) {
-            LOG.debug("Cannot evaluate local-behind-remote: the work tree HEAD has no revision in ${repository.root.path}")
-            return LocalBehindRemoteDecision.Hidden
-        }
-        val commitsBehindRemote = countCommitsBetween(
-            project = project,
-            fromRevision = localRevision,
-            toRevision = remoteRevision
-        )
-        val decision = LocalPrBranchBehindRemoteCheck.evaluate(
-            currentBranchName = currentBranchName,
-            sourceBranch = sourceBranch,
-            localRevision = localRevision,
-            commitsBehindRemote = commitsBehindRemote
-        )
-        LOG.debug(
-            "Evaluated local-behind-remote for '$sourceBranch' in ${repository.root.path}: " +
-                "branch=$currentBranchName, behind=$commitsBehindRemote, decision=$decision"
-        )
-        return decision
-    }
-
-    /**
      * Resolves a single revision for [refName] by running `git rev-parse --verify <refName>`.
      *
      * Returns the resolved revision, or null when the ref does not exist, is blank, the project has no Git repository,
@@ -399,7 +340,7 @@ class BbCloudPullRequestBranchDiffService {
             LOG.debug("Cannot resolve revision: ref name is blank")
             return null
         }
-        val repository = awaitRepository(project) ?: run {
+        val repository = ProjectGitRepositoryLookup.awaitRepository(project) ?: run {
             LOG.info("Cannot resolve revision: no Git repository for project ${project.name}")
             return null
         }
@@ -440,7 +381,7 @@ class BbCloudPullRequestBranchDiffService {
             LOG.debug("Cannot count commits: a revision is blank")
             return null
         }
-        val repository = awaitRepository(project) ?: run {
+        val repository = ProjectGitRepositoryLookup.awaitRepository(project) ?: run {
             LOG.info("Cannot count commits: no Git repository for project ${project.name}")
             return null
         }
@@ -468,59 +409,28 @@ class BbCloudPullRequestBranchDiffService {
     }
 
     /**
-     * Resolves the first existing `origin/<sourceBranch>` candidate ref after a fetch, so the count compares the local
-     * HEAD against the remote tracking branch rather than the local branch tip.
+     * Resolves [branchName] to a ref, fetching it first when no candidate exists yet. With [preferRemote] the remote
+     * tracking ref wins over the local branch, so a stale local branch cannot skew the diff (the destination is
+     * compared the way Bitbucket does, against the remote).
      */
-    private fun resolveRemoteSourceRef(repository: GitRepository, sourceBranch: String): String? {
-        val remoteName = selectRemote(repository)?.name ?: GitRemote.ORIGIN
-        val shortName = sourceBranch.substringAfterLast('/')
-        for (candidate in GitBranchRefCandidates.candidates(branchName = shortName, remoteName = remoteName)) {
-            if (candidate.startsWith("$remoteName/") && repository.branches.findBranchByName(candidate) != null) {
-                return candidate
-            }
+    private fun resolveBranchRefFetchingIfMissing(project: Project, repository: GitRepository, branchName: String, preferRemote: Boolean): String? {
+        val existing = resolveBranchRef(repository = repository, branchName = branchName, preferRemote = preferRemote)
+        if (existing != null) {
+            return existing
         }
-        return null
+        fetchBranch(project = project, repository = repository, branchName = branchName)
+        repository.update()
+        return resolveBranchRef(repository = repository, branchName = branchName, preferRemote = preferRemote)
     }
 
-    /**
-     * Resolves the project's Git repository, tolerating the short window after a work tree project is first opened
-     * during which [GitRepositoryManager] has not yet registered the repository.
-     *
-     * When a pull request is opened in a freshly created work tree, the editor binds (and requests line totals) before
-     * Git4Idea finishes registering the repository, so [findRepository] returns `null` on the very first attempt. A
-     * manual refresh works only because enough time has passed for registration to complete. Polling briefly here gives
-     * the repository a chance to register so the indicator renders on initial open too. Callers run this on a
-     * background dispatcher, so the short blocking wait never touches the EDT.
-     */
-    private fun awaitRepository(project: Project): GitRepository? {
-        val deadline = TimeSource.Monotonic.markNow() + REPOSITORY_WAIT_TIMEOUT
-        var attempt = 0
-        while (true) {
-            val repository = findRepository(project)
-            if (repository != null) {
-                if (attempt > 0) {
-                    LOG.debug("Resolved Git repository for project ${project.name} after $attempt retries")
-                }
-                return repository
-            }
-            if (project.isDisposed || deadline.hasPassedNow()) {
-                return null
-            }
-            attempt += 1
-            Thread.sleep(REPOSITORY_WAIT_POLL_INTERVAL.inWholeMilliseconds)
-        }
-    }
-
-    private fun findRepository(project: Project): GitRepository? {
-        val repositoryManager = GitRepositoryManager.getInstance(project)
-        val basePath = project.basePath
-        val baseDirectory = basePath?.let { path -> LocalFileSystem.getInstance().findFileByPath(path) }
-        val repositoryAtBase = baseDirectory?.let { directory -> repositoryManager.getRepositoryForRootQuick(directory) }
-        return repositoryAtBase ?: repositoryManager.repositories.singleOrNull()
-    }
-
-    private fun resolveBranchRef(repository: GitRepository, branchName: String): String? {
-        for (candidate in GitBranchRefCandidates.candidates(branchName = branchName)) {
+    private fun resolveBranchRef(repository: GitRepository, branchName: String, preferRemote: Boolean): String? {
+        val remoteName = ProjectGitRepositoryLookup.selectRemote(repository)?.name ?: GitRemote.ORIGIN
+        val candidates = GitBranchRefCandidates.candidates(
+            branchName = branchName,
+            remoteName = remoteName,
+            preferRemote = preferRemote
+        )
+        for (candidate in candidates) {
             if (repository.branches.findBranchByName(candidate) != null) {
                 return candidate
             }
@@ -529,14 +439,14 @@ class BbCloudPullRequestBranchDiffService {
     }
 
     private fun fetchBranch(project: Project, repository: GitRepository, branchName: String) {
-        val remote = selectRemote(repository) ?: run {
+        val remote = ProjectGitRepositoryLookup.selectRemote(repository) ?: run {
             LOG.debug("Repository ${repository.root.path} has no remotes; skipping fetch of branch '$branchName'")
             return
         }
-        val shortName = branchName.substringAfterLast('/')
+        val normalizedName = GitBranchNames.normalize(branchName = branchName, remoteName = remote.name)
         val fetchHandler = GitLineHandler(project, repository.root, GitCommand.FETCH).apply {
             setUrls(remote.urls)
-            addParameters(remote.name, shortName)
+            addParameters(remote.name, normalizedName)
         }
         val commandLine = fetchHandler.printableCommandLine()
         LOG.debug("Running $commandLine")
@@ -545,16 +455,7 @@ class BbCloudPullRequestBranchDiffService {
         LOG.debug("Finished $commandLine: exitCode=${result.exitCode} in ${started.elapsedNow().inWholeMilliseconds} ms")
     }
 
-    private fun selectRemote(repository: GitRepository): GitRemote? {
-        val remotes = repository.remotes
-        return remotes.firstOrNull { remote -> remote.name == GitRemote.ORIGIN } ?: remotes.firstOrNull()
-    }
-
     companion object {
         private val LOG = logger<BbCloudPullRequestBranchDiffService>()
-
-        // Give Git4Idea time to register a freshly opened work tree's repository before giving up (see awaitRepository).
-        private val REPOSITORY_WAIT_TIMEOUT = 5_000.milliseconds
-        private val REPOSITORY_WAIT_POLL_INTERVAL = 150.milliseconds
     }
 }

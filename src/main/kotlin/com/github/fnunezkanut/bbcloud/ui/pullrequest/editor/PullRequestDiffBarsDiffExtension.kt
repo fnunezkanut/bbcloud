@@ -6,9 +6,11 @@ import com.github.fnunezkanut.bbcloud.review.BbCloudWorktreePullRequestContext
 import com.github.fnunezkanut.bbcloud.ui.diff.BbCloudPullRequestDiffCommentService
 import com.github.fnunezkanut.bbcloud.ui.diff.PullRequestReviewCommentTarget
 import com.github.fnunezkanut.bbcloud.ui.main.PullRequestCommentFileOpener
+import com.github.fnunezkanut.bbcloud.ui.markdowndiff.MarkdownDiffFromDiffRequest
 import com.intellij.diff.DiffContext
 import com.intellij.diff.DiffExtension
 import com.intellij.diff.FrameDiffTool
+import com.intellij.diff.requests.ContentDiffRequest
 import com.intellij.diff.requests.DiffRequest
 import com.intellij.diff.util.DiffNotificationProvider
 import com.intellij.diff.util.DiffUtil
@@ -98,6 +100,7 @@ class PullRequestDiffBarsDiffExtension : DiffExtension() {
                 project = project,
                 viewer = viewer,
                 diffContext = diffContext,
+                request = request,
                 relativePath = relativePath,
                 pullRequestId = pullRequestId,
                 lineCount = lineCount,
@@ -111,6 +114,7 @@ class PullRequestDiffBarsDiffExtension : DiffExtension() {
         project: Project,
         viewer: FrameDiffTool.DiffViewer?,
         diffContext: DiffContext,
+        request: DiffRequest,
         relativePath: String,
         pullRequestId: Long,
         lineCount: FileLineCount?,
@@ -128,6 +132,7 @@ class PullRequestDiffBarsDiffExtension : DiffExtension() {
             revision = revision,
             surface = ReviewBarSurface.Diff,
             action = openFileAction(project = project, relativePath = relativePath),
+            renderedDiffAction = renderedDiffAction(project = project, request = request),
             onAddComment = addCommentAction(
                 project = project,
                 viewer = viewer,
@@ -142,6 +147,17 @@ class PullRequestDiffBarsDiffExtension : DiffExtension() {
             bar.dispose()
         }
         return bar.component
+    }
+
+    /** The action that opens the rendered Markdown diff of [request], or null when the request does not compare Markdown. */
+    private fun renderedDiffAction(project: Project, request: DiffRequest): ReviewBarAction? {
+        if (request !is ContentDiffRequest || MarkdownDiffFromDiffRequest.markdownContentsOf(request = request) == null) {
+            return null
+        }
+        return ReviewBarAction {
+            LOG.info("User clicked 'View Rendered Diff' in the review bar of the diff")
+            MarkdownDiffFromDiffRequest.open(project = project, request = request)
+        }
     }
 
     private fun addCommentAction(

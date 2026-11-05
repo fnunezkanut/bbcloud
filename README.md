@@ -17,8 +17,10 @@ Helps you review Bitbucket Cloud pull requests without leaving your Jetbrains ID
 * 📂 The **Current Project** tab shows open and completed PRs for the repo in your IDE, with repo links, open-PR counts, reviewer avatars, refresh, and persistent **Exclude** filters and a **Created by** dropdown with an **Assigned to me** option.
 * 🧭 The **Workspace** tab merges PRs you opened and review assignments from watched projects into one newest-first list across your Bitbucket workspace.
 * 👀 **Watched Projects** controls which repositories contribute to the workspace queue, with search by slug, folder, PR number, or branch and a master checkbox for matching rows.
+* 🕘 **Recent Projects** lists the IDE recent projects and their groups, with search, the project icon, path, and current branch; click a project to open or focus it. Each row has a button to remove it from the list, and PR work trees also have a button that removes the work tree.
 * 📋 Each PR gets a dedicated **`<prNum>.pr`** tab plus a blue header stripe with line-change stats, refresh, file changes, and merge, approve, draft, or decline actions.
 * 🕐 The PR **Activity** timeline mixes commits, approvals, tasks, builds, and file or inline comment threads in time order, with a box to add PR-scoped comments and reply in threads.
+* 🤖 Every comment box has a **Send this comment to Air** button (needs the JetBrains Air plugin). It puts the file location and the comment into the Air chat input, ready to send.
 * 📁 The **PR Changes** tool window lists every file in the diff; picking a file opens it in the editor or diff view driven from the stripe’s **Show pull request file changes** button.
 * ✏️ **Modified File View** and **Diff View** surface existing comments and let you add line-level feedback from the gutter or context menu, view add/remove counts, and mark files reviewed.
 * 🚀 **Create Pull Request** walks you through title, description, source and destination branches, reviewers (including defaults), remote cleanup after merge, then opens the new PR in a work tree window.
@@ -56,6 +58,7 @@ One page which merges the PRs you opened across your bitbucket workspace and the
 Page which lets you opt into which projects you want to "Watch"; only watched projects contribute PRs to the "Workspace" tab's review queue. A search field above the table filters the projects by slug, local folder, PR number, or branch name; the master checkbox then watches or unwatches only the matching projects.
 * Due to Bitbucket API limitations you have to opt into which project you want to "Watch", opting into too many projects may result in hitting api rate limits.
 * Each PR work tree listed beside a project has a red delete button. After you confirm, the plugin closes that PR's IDE window if one is open, then removes the work tree.
+* When the Current Project tab loads, work trees of merged or declined PRs are removed in the background: the IDE window of such a work tree is closed and any uncommitted changes in it are discarded.
 
 ### PR View
 Each pull request opens in its own git work tree, so not to interfere with any other reviews or your work.
@@ -95,9 +98,9 @@ In some cases Atlassian *public* apis are lacking so feature parity with web ver
 
 ### Requirements
 
-- **JDK 25.** The build uses `jvmToolchain(25)`, matching the JetBrains Runtime bundled with IntelliJ IDEA 2026.2. [`.sdkmanrc`](.sdkmanrc) pins `java=25.0.4-amzn`; run `sdk env` to switch to it.
+- **JDK 25.** The build uses `jvmToolchain(25)`, matching the JetBrains Runtime bundled with IntelliJ IDEA 2026.3. [`.sdkmanrc`](.sdkmanrc) pins `java=25.0.4-amzn`; run `sdk env` to switch to it.
 - **Gradle 9.8.2.** Provided by the Gradle wrapper (`./gradlew`), so no separate install is needed. It is also pinned in `.sdkmanrc`.
-- **IntelliJ IDEA 2026.2.3 (build `262.10968.63`) and newer**
+- **IntelliJ IDEA 2026.3 (build `263.7307.200`) and newer**
 
 ### Build
 
@@ -107,11 +110,11 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for how the source is organized.
 ./gradlew build
 ```
 
-Unit tests use **JUnit Jupiter 6.1.3** and Kotest assertions, with the `@Tag("unit")` annotation—not JUnit 4. `./gradlew build` runs them through Gradle’s `check` lifecycle (after the formatter on local machines) and runs `buildPlugin`, which produces the installable plugin at `build/distributions/bbcloud-<version>.zip`. The first build downloads IntelliJ IDEA 2026.2.3 into the Gradle cache, so it takes a while.
+Unit tests use **JUnit Jupiter 6.1.3** and Kotest assertions, with the `@Tag("unit")` annotation—not JUnit 4. `./gradlew build` runs them through Gradle’s `check` lifecycle (after the formatter on local machines) and runs `buildPlugin`, which produces the installable plugin at `build/distributions/bbcloud-<version>.zip`. The first build downloads IntelliJ IDEA 2026.3 into the Gradle cache, so it takes a while.
 
 `./gradlew buildPlugin` is equivalent to the packaging step alone if you only need the ZIP after a prior compile.
 
-To check binary compatibility with 2026.2.3 and newer IDE releases (including EAPs), run the JetBrains Plugin Verifier:
+To check binary compatibility with 2026.3 and newer IDE releases (including EAPs), run the JetBrains Plugin Verifier:
 
 ```bash
 ./gradlew verifyPlugin
@@ -143,5 +146,5 @@ Always install the zip, not a jar from `build/libs`. The jars there contain only
 
 ### Troubleshooting
 
-The sandbox IDE's log is at `.intellijPlatform/sandbox/bbcloud/IU-2026.2.3/log_runIde/idea.log` (in your own IDE, use **Help > Show Log in Finder**).
+The sandbox IDE's log is at `.intellijPlatform/sandbox/bbcloud/IU-2026.3/log_runIde/idea.log` (in your own IDE, use **Help > Show Log in Finder**).
 

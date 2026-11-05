@@ -1,5 +1,17 @@
 # CHANGELOG
 
+## *1.8.0* - 2026-11-05
+* Changed: requires IntelliJ IDEA 2026.3 or newer; updated to Jewel 0.42 and Compose Multiplatform 1.12.1
+* Added: a "Send this comment to Air" button on every comment box, shown when the JetBrains Air plugin is installed; it puts the comment's file location and text into the Air chat input 
+* Added: PR work trees are listed under a "PR work trees" group in Recent Projects and the Welcome screen; deleting a work tree removes it from that list
+* Added: a Recent Projects tab between Watched Projects and Settings lists the IDE recent projects and their groups, with search, icon, path, and current branch; click a project to open or focus it
+* Added: Recent Projects rows show the Bitbucket repository icon and a "Remove from Recent Projects" button; PR work trees also get a red "Remove work tree" button that closes the window and deletes the work tree
+* Added: a "View Rendered Diff" button in the PR review bar of Markdown files opens the rendered Markdown diff
+* Changed: the remove work tree confirmation warns about uncommitted or untracked changes
+* Added: opening a PR work tree window or clicking refresh on the blue bar fetches the PR source and destination branches and fast-forwards the local branches when safe; a missing local branch is created from its Bitbucket counterpart
+* Changed: the red warning on the PR page covers both branches, explains why a branch was not updated, and has one link to update both
+* Fixed: PR diff and line counts compare against the remote destination branch, so a stale local branch no longer inflates them
+
 ## *1.7.0* - 2026-11-04
 * Added: a red delete button beside each PR work tree on Watched Projects removes that work tree after confirmation, and closes its IDE window first if one is open; the progress dialog closes after 5 seconds while the removal keeps running in the background
 * Added: @mention users in comments and replies

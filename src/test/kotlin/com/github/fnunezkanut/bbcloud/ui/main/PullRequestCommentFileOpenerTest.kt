@@ -153,4 +153,33 @@ class PullRequestCommentFileOpenerTest {
             }
         }
     }
+
+    @Nested
+    inner class JoinPathTests {
+        @Test
+        fun `joinPath - should join with exactly one slash`() {
+            // GIVEN
+            val basePath = "/work/repo/"
+            val relativePath = "src/App.kt"
+
+            // WHEN
+            val result = PullRequestCommentFileOpener.joinPath(basePath = basePath, relativePath = relativePath)
+
+            // THEN
+            result shouldBe "/work/repo/src/App.kt"
+        }
+
+        @Test
+        fun `joinPath - should add the slash when the base path has none`() {
+            // GIVEN
+            val basePath = "/work/repo"
+            val relativePath = "README.md"
+
+            // WHEN
+            val result = PullRequestCommentFileOpener.joinPath(basePath = basePath, relativePath = relativePath)
+
+            // THEN
+            result shouldBe "/work/repo/README.md"
+        }
+    }
 }

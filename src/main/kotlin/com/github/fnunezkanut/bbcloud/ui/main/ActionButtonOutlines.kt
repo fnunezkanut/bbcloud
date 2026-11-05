@@ -22,6 +22,10 @@ object ActionButtonOutlines {
         return retrieveColor(key = "Blue", default = Color(0xFF3574F0))
     }
 
+    fun neutral(): Color {
+        return retrieveColor(key = "Component.borderColor", default = Color(0xFF8C8C8C))
+    }
+
     fun green(): Color {
         return retrieveColor(key = "Green", default = Color(0xFF59A869))
     }

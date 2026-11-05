@@ -52,6 +52,23 @@ internal object PullRequestCommentFileOpener {
         return normalized
     }
 
+    /**
+     * The absolute path of the file an inline comment points at. When the file is not in the work tree, the path is built from
+     * the project base path so the prompt still names the file. Null when the path is blank, escapes the project root, or the
+     * project has no base path.
+     */
+    fun absolutePath(project: Project, inlinePath: String): String? {
+        val relativePath = projectRelativePath(inlinePath = inlinePath) ?: return null
+        val basePath = project.basePath ?: return null
+        val file = resolve(project = project, inlinePath = inlinePath)
+        return file?.path ?: joinPath(basePath = basePath, relativePath = relativePath)
+    }
+
+    /** Joins a base path and a repository-relative path with exactly one slash between them. */
+    internal fun joinPath(basePath: String, relativePath: String): String {
+        return "${basePath.trimEnd('/')}/$relativePath"
+    }
+
     /** Clamps to the first line so a stale comment line never points past the end of the file. */
     internal fun targetEditorLine(fileLine: Int?, lineCount: Int): Int {
         val editorLine = (fileLine ?: return 0) - 1

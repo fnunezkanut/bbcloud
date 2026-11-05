@@ -212,9 +212,9 @@ class CheckedOutBranchPanel(
         detailViewModel.setRefreshEnabled(enabled)
     }
 
-    /** Shows the red local-behind-remote banner for [commitsBehind] commits (decision 10a + count). */
-    fun showLocalBehindRemote(commitsBehind: Int, isTruncated: Boolean = false) {
-        headerViewModel.showLocalBehindRemote(commitsBehind = commitsBehind, isTruncated = isTruncated)
+    /** Shows the red warning that the local source and/or destination branch is behind Bitbucket. */
+    fun showLocalBehindRemote(warning: HeaderLocalBehindRemote) {
+        headerViewModel.showLocalBehindRemote(warning = warning)
     }
 
     /** Hides the red local-behind-remote banner (decisions 3b/5a: branch mismatch, check failure, or up to date). */
