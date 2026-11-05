@@ -321,7 +321,7 @@ internal fun ApiTokenSection(state: SettingsUiState, tokenFieldValue: TextFieldV
             modifier = Modifier.width(300.dp),
             enabled = !state.isBusy,
             outline = if (state.hasStoredToken) {
-                // Jewel 0.41 has no success outline; Outline.None preserves the native field while the placeholder
+                // Jewel 0.42 has no success outline; Outline.None preserves the native field while the placeholder
                 // and status affordance communicate that the stored token is available.
                 Outline.None
             } else {

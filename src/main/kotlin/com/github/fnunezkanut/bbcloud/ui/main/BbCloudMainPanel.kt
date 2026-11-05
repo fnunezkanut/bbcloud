@@ -31,6 +31,7 @@ import com.github.fnunezkanut.bbcloud.git.BbCloudWorktreeService
 import com.github.fnunezkanut.bbcloud.git.BranchCheckoutResult
 import com.github.fnunezkanut.bbcloud.git.CommitMessageParser
 import com.github.fnunezkanut.bbcloud.git.LastCommitMessageReader
+import com.github.fnunezkanut.bbcloud.git.OpenProjectLocatorImpl
 import com.github.fnunezkanut.bbcloud.git.ParsedCommitMessage
 import com.github.fnunezkanut.bbcloud.project.LocalRepositoryProjectOpener
 import com.github.fnunezkanut.bbcloud.project.ProjectRepositoryResolver
@@ -38,7 +39,9 @@ import com.github.fnunezkanut.bbcloud.project.PullRequestWorktreeListing
 import com.github.fnunezkanut.bbcloud.project.PullRequestWorktreeResolution
 import com.github.fnunezkanut.bbcloud.project.PullRequestWorktreeResolver
 import com.github.fnunezkanut.bbcloud.project.ResolvedProjectRepository
-import com.github.fnunezkanut.bbcloud.project.StaleWorktreePruneSelection
+import com.github.fnunezkanut.bbcloud.project.ResolvedWorktreeCleaner
+import com.github.fnunezkanut.bbcloud.project.ResolvedWorktreeCleanupSelection
+import com.github.fnunezkanut.bbcloud.project.WatchedWorktreeRemover
 import com.github.fnunezkanut.bbcloud.review.BbCloudKnownUsersCache
 import com.github.fnunezkanut.bbcloud.settings.PullRequestListScope
 import com.github.fnunezkanut.bbcloud.ui.components.CenteredContent
@@ -46,6 +49,7 @@ import com.github.fnunezkanut.bbcloud.ui.components.NotConfiguredContent
 import com.github.fnunezkanut.bbcloud.ui.otherprojects.toComposeImageBitmap
 import com.github.fnunezkanut.bbcloud.ui.pullrequest.create.BbCloudNewPullRequestEditorOpener
 import com.github.fnunezkanut.bbcloud.ui.pullrequest.create.NewPullRequestContext
+import com.github.fnunezkanut.bbcloud.ui.pullrequest.decline.IntelliJProjectCloser
 import com.github.fnunezkanut.bbcloud.ui.pullrequests.PullRequestExcludeCheckboxes
 import com.github.fnunezkanut.bbcloud.ui.pullrequests.PullRequestListEntry
 import com.github.fnunezkanut.bbcloud.ui.pullrequests.PullRequestListingSource
@@ -78,6 +82,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.jetbrains.jewel.bridge.compose
 import org.jetbrains.jewel.ui.component.Text
+import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.swing.JComponent
@@ -479,7 +484,7 @@ class BbCloudMainPanel(
                     currentUserUuid = currentUserUuid,
                     coroutineScope = coroutineScope
                 )
-                pruneStaleWorktrees()
+                cleanResolvedWorktrees(resolvedPrNumbers = listing.closed.map { summary -> summary.id }.toSet())
             }
             is PullRequestListResult.Failed -> {
                 if (result.cause != null) {
@@ -815,21 +820,21 @@ class BbCloudMainPanel(
         notification.notify(project)
     }
 
-    private fun pruneStaleWorktrees() {
+    private fun cleanResolvedWorktrees(resolvedPrNumbers: Set<Long>) {
         val project = boundProject
         val coroutineScope = boundCoroutineScope
         if (project == null || coroutineScope == null) {
-            LOG.info("Cannot prune stale worktrees: the main panel is not bound to a project")
+            LOG.info("Cannot clean resolved worktrees: the main panel is not bound to a project")
             return
         }
         val workTreeDirectory = configurationService.workTreeDirectoryOrNull()
         val organizationUrl = configurationService.organizationUrlOrNull()
         if (workTreeDirectory == null || organizationUrl == null) {
-            LOG.info("Cannot prune stale worktrees: work tree directory or organization URL is unavailable")
+            LOG.info("Cannot clean resolved worktrees: work tree directory or organization URL is unavailable")
             return
         }
         if (!pruneInProgress.compareAndSet(false, true)) {
-            LOG.debug("Stale worktree pruning is already in progress")
+            LOG.debug("Resolved worktree cleanup is already in progress")
             return
         }
         coroutineScope.launch {
@@ -838,79 +843,66 @@ class BbCloudMainPanel(
                     projectBasePath = project.basePath,
                     organizationUrl = organizationUrl
                 )
-                if (openResult is PullRequestListResult.Failed) {
-                    LOG.info("Skipping stale worktree pruning because the complete open pull-request listing failed")
-                    return@launch
+                val completeOpenPrNumbers = (openResult as? PullRequestListResult.Success)
+                    ?.pullRequests
+                    ?.map { summary -> summary.id }
+                    ?.toSet()
+                if (completeOpenPrNumbers == null) {
+                    LOG.info("The complete open pull-request listing failed; cleaning only the resolved pull requests already loaded")
                 }
                 val repository = resolveCurrentRepository(project = project)
                 if (repository == null) {
-                    LOG.info("Skipping stale worktree pruning because the current repository could not be resolved")
+                    LOG.info("Skipping resolved worktree cleanup because the current repository could not be resolved")
                     return@launch
                 }
                 val workTreePath = try {
                     Path.of(workTreeDirectory)
                 } catch (exception: Exception) {
-                    LOG.info("Skipping stale worktree pruning because the work tree directory is invalid", exception)
+                    LOG.info("Skipping resolved worktree cleanup because the work tree directory is invalid", exception)
                     return@launch
                 }
-                val discovered = withContext(Dispatchers.IO) {
-                    PullRequestWorktreeListing.worktreesForRepo(
-                        workTreeDirectory = workTreePath,
-                        repoSlug = repository.repoSlug
-                    )
-                }
-                val openPrNumbers = (openResult as PullRequestListResult.Success).pullRequests.map { summary -> summary.id }.toSet()
-                val inProgress = worktreeOpener.worktreesBeingOpened()
-                val stale = StaleWorktreePruneSelection.worktreesToPrune(
-                    discovered = discovered,
-                    openPrNumbers = openPrNumbers
-                )
-                val candidates = stale.filterNot { worktree -> worktree.worktreePath in inProgress }
-                val resolution = PullRequestWorktreeResolver.resolve(
+                val sourceCheckoutPath = PullRequestWorktreeResolver.resolveSourceCheckout(
                     mappings = configurationService.watchedProjectsForCurrentWorkspaceWithLocalPaths(),
-                    workTreeDirectory = workTreeDirectory,
                     projectsDirectory = configurationService.projectsDirectoryOrNull(),
                     workspace = repository.workspace,
                     repoSlug = repository.repoSlug,
-                    prNumber = candidates.firstOrNull()?.prNumber ?: return@launch
+                    isDirectory = { path -> Files.isDirectory(path) }
                 )
-                val sourceCheckoutPath = when (resolution) {
-                    is PullRequestWorktreeResolution.Resolved -> {
-                        resolution.sourceCheckoutPath
-                    }
-                    PullRequestWorktreeResolution.WorkTreeDirMissing,
-                    PullRequestWorktreeResolution.SourceCheckoutMissing -> {
-                        LOG.info("Skipping stale worktree pruning because the source checkout could not be resolved")
-                        return@launch
-                    }
+                if (sourceCheckoutPath == null) {
+                    LOG.info("Skipping resolved worktree cleanup because the source checkout could not be resolved")
+                    return@launch
                 }
-                var removed = 0
-                var failed = 0
-                var skipped = discovered.size - candidates.size
-                for (worktree in candidates) {
-                    if (worktreeService.hasUncommittedChanges(worktreePath = worktree.worktreePath)) {
-                        skipped++
-                        LOG.info("Keeping stale worktree ${worktree.worktreePath}: it has uncommitted changes")
-                        continue
-                    }
-                    when (
-                        val removal = worktreeService.removeWorktree(
-                            sourceCheckoutRoot = sourceCheckoutPath,
-                            worktreePath = worktree.worktreePath,
-                            workTreeDirectory = workTreePath
-                        )
-                    ) {
-                        com.github.fnunezkanut.bbcloud.git.WorktreeRemovalResult.Success -> {
-                            removed++
-                            LOG.debug("Pruned stale worktree ${worktree.worktreePath}")
-                        }
-                        is com.github.fnunezkanut.bbcloud.git.WorktreeRemovalResult.Failed -> {
-                            failed++
-                            LOG.warn("Could not prune stale worktree ${worktree.worktreePath}: ${removal.output}")
-                        }
-                    }
+                val candidates = withContext(Dispatchers.IO) {
+                    ResolvedWorktreeCleanupSelection.candidates(
+                        repoSlug = repository.repoSlug,
+                        workTreeDirectory = workTreePath,
+                        discoveredDirectories = PullRequestWorktreeListing.worktreesForRepo(
+                            workTreeDirectory = workTreePath,
+                            repoSlug = repository.repoSlug
+                        ),
+                        registeredPaths = worktreeService.registeredWorktrees(sourceCheckoutRoot = sourceCheckoutPath),
+                        resolvedPrNumbers = resolvedPrNumbers,
+                        completeOpenPrNumbers = completeOpenPrNumbers
+                    )
                 }
-                LOG.debug("Stale worktree pruning completed: removed=$removed, failed=$failed, skipped=$skipped")
+                if (candidates.isEmpty()) {
+                    return@launch
+                }
+                val inProgress = worktreeOpener.worktreesBeingOpened()
+                val cleaner = ResolvedWorktreeCleaner(
+                    isOpenInProgress = { path -> path in inProgress },
+                    remover = WatchedWorktreeRemover(
+                        openProjectLocator = OpenProjectLocatorImpl(),
+                        projectCloser = IntelliJProjectCloser(),
+                        removeWorktree = worktreeService::removeWorktree
+                    )
+                )
+                val summary = cleaner.clean(
+                    sourceCheckoutRoot = sourceCheckoutPath,
+                    workTreeDirectory = workTreePath,
+                    candidates = candidates
+                )
+                LOG.debug("Resolved worktree cleanup completed: $summary")
             } finally {
                 pruneInProgress.set(false)
             }

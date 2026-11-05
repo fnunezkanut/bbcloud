@@ -17,6 +17,28 @@ object WorktreeListOutput {
         return registeredWorktreePaths(porcelainOutput).any { registered -> registered == target }
     }
 
+    /**
+     * Returns the normalized path of the first worktree whose block carries `branch refs/heads/<branchName>`, or null
+     * when the branch is not checked out in any worktree (detached and bare entries have no `branch` line).
+     */
+    fun worktreeForBranch(porcelainOutput: String, branchName: String): Path? {
+        val expectedBranchLine = "$BRANCH_PREFIX$HEADS_PREFIX$branchName"
+        val blocks = porcelainOutput.split(BLOCK_SEPARATOR)
+        for (block in blocks) {
+            val lines = block.lineSequence().map { line -> line.trim() }.toList()
+            val worktreeLine = lines.firstOrNull { line -> line.startsWith(WORKTREE_PREFIX) } ?: continue
+            if (lines.any { line -> line == expectedBranchLine }) {
+                return parseWorktreePath(worktreeLine)
+            }
+        }
+        return null
+    }
+
+    /** Returns the normalized absolute path of every worktree registered in [porcelainOutput]. */
+    fun registeredPaths(porcelainOutput: String): List<Path> {
+        return registeredWorktreePaths(porcelainOutput)
+    }
+
     private fun registeredWorktreePaths(porcelainOutput: String): List<Path> {
         return porcelainOutput.lineSequence()
             .map { line -> line.trim() }
@@ -38,4 +60,7 @@ object WorktreeListOutput {
     }
 
     private const val WORKTREE_PREFIX = "worktree "
+    private const val BRANCH_PREFIX = "branch "
+    private const val HEADS_PREFIX = "refs/heads/"
+    private val BLOCK_SEPARATOR = Regex("\\r?\\n\\s*\\r?\\n")
 }

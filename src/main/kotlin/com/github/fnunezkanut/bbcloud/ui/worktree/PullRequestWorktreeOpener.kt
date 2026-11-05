@@ -142,7 +142,8 @@ class PullRequestWorktreeOpener(private val coroutineScope: CoroutineScope) {
             worktreePath = resolved.worktreePath,
             remoteUrl = remoteUrl,
             prNumber = prNumber,
-            sourceBranch = summary.sourceBranch
+            sourceBranch = summary.sourceBranch,
+            destinationBranch = summary.destinationBranch
         )
         logSetupFailure(prNumber = prNumber, setup = setup)
         return WorktreeOpenMapping.setupOutcome(summary = summary, setup = setup)

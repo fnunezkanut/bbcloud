@@ -8,6 +8,7 @@ import com.intellij.ide.projectView.ViewSettings
 import com.intellij.ide.util.treeView.AbstractTreeNode
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.fileEditor.FileEditorManager
+import com.intellij.openapi.fileEditor.FileEditorOpenRequest
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
 
@@ -54,7 +55,10 @@ class BbCloudPullRequestProjectViewNode(project: Project, pullRequestFile: BbClo
     override fun navigate(requestFocus: Boolean) {
         val currentProject = project ?: return
         LOG.info("Opening pull request #${value.pullRequestPath.pullRequestId} from the Project View")
-        FileEditorManager.getInstance(currentProject).openFile(value, requestFocus)
+        FileEditorManager.getInstance(currentProject).requestOpenFile(
+            value,
+            FileEditorOpenRequest.withFocus(requestFocus = requestFocus)
+        )
     }
 
     companion object {

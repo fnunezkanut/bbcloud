@@ -42,9 +42,8 @@ import com.github.fnunezkanut.bbcloud.BbCloudBundle
 import com.github.fnunezkanut.bbcloud.project.WatchedProjectMapping
 import com.github.fnunezkanut.bbcloud.project.WatchedProjectWorktreeRow
 import com.github.fnunezkanut.bbcloud.ui.components.BbCloudCompactOutlinedIconButton
+import com.github.fnunezkanut.bbcloud.ui.components.REPOSITORY_ICON_SIZE
 import com.github.fnunezkanut.bbcloud.ui.main.ActionButtonOutlines
-import com.github.fnunezkanut.bbcloud.ui.main.CommentThreadAction
-import com.github.fnunezkanut.bbcloud.ui.main.CommentThreadActionVisibility
 import com.github.fnunezkanut.bbcloud.ui.main.MainPanelStatusSupport
 import com.intellij.ide.BrowserUtil
 import org.jetbrains.jewel.foundation.layout.BasicTableLayout
@@ -130,7 +129,6 @@ private enum class WatchedProjectsColumn {
 private val TABLE_COLUMNS = WatchedProjectsColumn.entries
 private const val COLUMN_COUNT = 4
 private val CHECKBOX_WIDTH = 36.dp
-private val AVATAR_SIZE = 32.dp
 private val CELL_BORDER_WIDTH = 8.dp
 
 // Below this width the "Show only watched" checkbox stacks above the search field instead of sharing the row.
@@ -507,7 +505,7 @@ private fun RemoteCell(row: WatchedProjectRow, viewModel: WatchedProjectsViewMod
             Image(
                 bitmap = icon,
                 contentDescription = "Repository avatar",
-                modifier = Modifier.size(AVATAR_SIZE),
+                modifier = Modifier.size(REPOSITORY_ICON_SIZE),
                 filterQuality = FilterQuality.High
             )
             Text(
@@ -597,7 +595,7 @@ private fun WorktreeEntry(mapping: WatchedProjectMapping, worktree: WatchedProje
             val removeTooltip = BbCloudBundle.message("workspace.watchedProjects.worktree.remove.tooltip")
             Tooltip(tooltip = { Text(text = removeTooltip) }) {
                 BbCloudCompactOutlinedIconButton(
-                    icon = CommentThreadActionVisibility.iconKey(action = CommentThreadAction.Delete),
+                    icon = AllIconsKeys.Actions.GC,
                     contentDescription = BbCloudBundle.message(
                         "workspace.watchedProjects.worktree.remove.contentDescription",
                         worktree.prNumber

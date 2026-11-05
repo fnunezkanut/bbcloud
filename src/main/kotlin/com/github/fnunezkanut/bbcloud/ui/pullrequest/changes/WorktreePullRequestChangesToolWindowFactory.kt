@@ -35,17 +35,19 @@ class WorktreePullRequestChangesToolWindowFactory :
         // it later leaves the tool window name in the header until an unrelated event rebuilds it.
         BbCloudToolWindowIdLabel.hide(toolWindow.component)
         val service = WorktreePullRequestChangesToolWindowService.getInstance(project)
+        // Resolve the context outside composition: if it were first created inside the composition snapshot, its
+        // Compose state objects would belong to that unapplied snapshot and reading them would throw.
+        val context = BbCloudWorktreePullRequestContext.getInstance(project)
         toolWindow.addComposeTab(
             tabDisplayName = BbCloudBundle.message("worktree.changesToolWindow.tabTitle.fallback"),
             isLockable = false,
             isCloseable = false
         ) {
             PullRequestChangesScreen(filesViewModel = service.viewModel)
-            CommentCountsEffect(project = project, service = service)
+            CommentCountsEffect(context = context, service = service)
         }
         // If the tool window is opened from its stripe button (not from the blue bar) and no branches are known yet,
         // seed it from the current binding, so the tree shows the files right away.
-        val context = BbCloudWorktreePullRequestContext.getInstance(project)
         val binding = context.binding
         if (binding != null) {
             service.showFor(
@@ -59,8 +61,7 @@ class WorktreePullRequestChangesToolWindowFactory :
     }
 
     @Composable
-    private fun CommentCountsEffect(project: Project, service: WorktreePullRequestChangesToolWindowService) {
-        val context = BbCloudWorktreePullRequestContext.getInstance(project)
+    private fun CommentCountsEffect(context: BbCloudWorktreePullRequestContext, service: WorktreePullRequestChangesToolWindowService) {
         val revision by context.commentsRevision
         LaunchedEffect(revision) {
             service.applyCommentCounts()

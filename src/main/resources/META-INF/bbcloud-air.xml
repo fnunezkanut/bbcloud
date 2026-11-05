@@ -1,0 +1,6 @@
+<idea-plugin>
+    <!--
+      Loaded only when the JetBrains Air plugin is installed. It registers nothing: the Air integration is resolved at runtime
+      by ui/air/AirChatBridge.kt, so this file keeps the optional dependency valid.
+    -->
+</idea-plugin>

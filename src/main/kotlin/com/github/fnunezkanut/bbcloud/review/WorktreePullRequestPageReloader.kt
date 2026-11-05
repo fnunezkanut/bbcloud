@@ -6,6 +6,9 @@ import com.intellij.openapi.components.service
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.project.Project
 
+/** What a page reload should do besides re-reading Bitbucket. */
+data class PageReloadRequest(val revealNewestActivity: Boolean = false, val syncBranches: Boolean = false)
+
 /**
  * The single entry point for reloading the whole pull request page of a work tree, callable from any editor tab.
  *
@@ -26,16 +29,16 @@ class WorktreePullRequestPageReloader(private val project: Project) {
      * manages the detail panel's own refresh-enabled state, so the handler is self-contained.
      */
     @Volatile
-    private var sessionReloadHandler: ((revealNewestActivity: Boolean) -> Unit)? = null
+    private var sessionReloadHandler: ((PageReloadRequest) -> Unit)? = null
 
     /** Registers the session's full-panel reload handler; the matching [unregisterSessionReloadHandler] clears it. */
-    fun registerSessionReloadHandler(handler: (revealNewestActivity: Boolean) -> Unit) {
+    fun registerSessionReloadHandler(handler: (PageReloadRequest) -> Unit) {
         sessionReloadHandler = handler
         LOG.debug("Registered the pull request page reload handler of the editor session")
     }
 
     /** Clears the session's reload handler, leaving the context-only fallback for later reloads. */
-    fun unregisterSessionReloadHandler(handler: (revealNewestActivity: Boolean) -> Unit) {
+    fun unregisterSessionReloadHandler(handler: (PageReloadRequest) -> Unit) {
         if (sessionReloadHandler === handler) {
             sessionReloadHandler = null
             LOG.debug("Unregistered the pull request page reload handler of the editor session")
@@ -46,20 +49,21 @@ class WorktreePullRequestPageReloader(private val project: Project) {
      * Reloads the pull request page. Delegates to the session handler when the `.pr` editor is open; otherwise reloads
      * the work tree context so the banner refreshes without requiring an open detail panel.
      *
-     * [revealNewestActivity] asks the session to scroll its left pane to the newest activity after the reload; the
-     * context-only fallback ignores it, because there is no detail panel to scroll.
+     * [PageReloadRequest.revealNewestActivity] asks the session to scroll its left pane to the newest activity after the
+     * reload; the context-only fallback ignores it, because there is no detail panel to scroll.
+     * [PageReloadRequest.syncBranches] also fetches and fast-forwards the local pull request branches.
      */
-    fun requestReload(revealNewestActivity: Boolean = false) {
+    fun requestReload(request: PageReloadRequest = PageReloadRequest()) {
         val handler = sessionReloadHandler
         if (handler != null) {
             LOG.info("Reloading the pull request page through the editor session")
-            handler(revealNewestActivity)
+            handler(request)
             return
         }
-        reloadContextOnly()
+        reloadContextOnly(request)
     }
 
-    private fun reloadContextOnly() {
+    private fun reloadContextOnly(request: PageReloadRequest) {
         if (!BbCloudPullRequestReviewBarRefresh.isPullRequestWorkTree(project.basePath)) {
             LOG.info("Skipping pull request page reload: the project is not a pull-request work tree")
             return
@@ -67,7 +71,7 @@ class WorktreePullRequestPageReloader(private val project: Project) {
         val bannerViewModel = WorktreeTodoBannerViewModel.getInstance(project)
         bannerViewModel.setRefreshEnabled(false)
         LOG.info("Reloading the pull request work tree context from the banner refresh")
-        BbCloudWorktreePullRequestContext.getInstance(project).reload(reason = "banner refresh")
+        BbCloudWorktreePullRequestContext.getInstance(project).reload(reason = "banner refresh", syncBranches = request.syncBranches)
         // The context reload runs off the EDT and republishes the binding when it finishes, which refreshes the
         // banner. The refresh button is re-enabled once the banner picks the new binding up; until then a short
         // re-enable keeps the button usable even when the reload resolves to no change (same binding, no republish).

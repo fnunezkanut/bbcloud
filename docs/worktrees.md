@@ -56,6 +56,32 @@ The plugin handles this for you. When the clone on the PR branch is this window'
 
 If your working tree has uncommitted or untracked changes, the plugin does not switch, so your work in progress is never disturbed. Instead it shows a warning asking you to commit or stash those changes first, then open the PR again. Any unpushed commits on the PR branch are kept: switching away leaves them on the local branch, and the work tree checks out that same branch.
 
+## Keeping branches up to date
+
+In a PR work tree window, bbcloud keeps the local source and destination branches of the pull request in line with
+Bitbucket. It fetches both branches and fast-forwards the local ones when the window opens, when the work tree is
+opened or focused again from the main window, and when you click refresh (blue bar or PR page).
+
+A branch is moved automatically only when that is safe:
+
+- A local branch that does not exist yet is created from its Bitbucket counterpart and tracks it.
+- A branch that is not checked out anywhere is fast-forwarded.
+- A branch checked out in the PR work tree is fast-forwarded when the work tree has no uncommitted changes.
+- A branch checked out in another work tree (usually `main` in your main clone) is never touched automatically.
+- A branch with local commits that are not on Bitbucket is never touched automatically.
+
+If a branch is still behind after that, the PR page shows a red warning with the branch, the number of commits it is
+behind, and the reason it was not updated. One link updates every branch that is behind. That link also fast-forwards a
+clean other work tree, and it pulls a diverged source branch into the PR work tree. The background poll only warns; it
+never moves a branch under you while you review.
+
+The diff, the line counts and the file list compare the source branch against `origin/<destination>`, the same way
+Bitbucket does, so a stale local destination branch cannot inflate them.
+
+## Automatic cleanup
+
+When the Current Project tab loads its pull request list, the work trees of merged or declined PRs are removed in the background, both the folder and its git link. No prompt is shown. The IDE window of such a work tree is closed first, and uncommitted changes in it are discarded. A work tree that is being opened is skipped. Results are logged in `idea.log`.
+
 ## References
 
 * [Beginners Guide](https://jonesrussell.github.io/blog/beginners-guide-git-worktrees/)

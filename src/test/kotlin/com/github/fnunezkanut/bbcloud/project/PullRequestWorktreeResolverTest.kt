@@ -171,4 +171,37 @@ class PullRequestWorktreeResolverTest {
         // THEN
         result shouldBe PullRequestWorktreeResolution.SourceCheckoutMissing
     }
+
+    @Test
+    fun `resolveSourceCheckout - returns the watched clone without needing a pull request number`() {
+        // GIVEN
+        val mappings = listOf(mapping(localFolderPath = watchedClonePath.toString()))
+
+        // WHEN
+        val result = PullRequestWorktreeResolver.resolveSourceCheckout(
+            mappings = mappings,
+            projectsDirectory = projectsDirectory,
+            workspace = workspace,
+            repoSlug = repoSlug,
+            isDirectory = { true }
+        )
+
+        // THEN
+        result shouldBe watchedClonePath
+    }
+
+    @Test
+    fun `resolveSourceCheckout - returns null when no clone exists`() {
+        // GIVEN / WHEN
+        val result = PullRequestWorktreeResolver.resolveSourceCheckout(
+            mappings = emptyList(),
+            projectsDirectory = projectsDirectory,
+            workspace = workspace,
+            repoSlug = repoSlug,
+            isDirectory = { false }
+        )
+
+        // THEN
+        result shouldBe null
+    }
 }

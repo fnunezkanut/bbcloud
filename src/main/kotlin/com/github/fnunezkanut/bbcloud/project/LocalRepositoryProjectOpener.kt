@@ -1,5 +1,6 @@
 package com.github.fnunezkanut.bbcloud.project
 
+import com.github.fnunezkanut.bbcloud.BbCloudBundle
 import com.intellij.ide.impl.OpenProjectTask
 import com.intellij.ide.impl.ProjectUtil
 import com.intellij.openapi.diagnostic.logger
@@ -21,20 +22,21 @@ object LocalRepositoryProjectOpener {
      *
      * The options use `forceOpenInNewFrame = true`, which always opens a new IDE frame rather than asking the platform
      * to attach to an already-open window. The `createOptionsToOpenDotIdeaOrCreateNewIfNotExists` helper from the
-     * platform is `@Internal` and suspend, so it is not usable from plugin code; the non-deprecated
-     * `OpenProjectTask.build()` factory is used instead.
+     * platform is `@Internal` and suspend, so it is not usable from plugin code; the `OpenProjectTask { ... }` builder
+     * is used instead.
      */
     suspend fun openOrFocus(repoSlug: String, checkoutPath: Path): OpenedProject? {
         LOG.info("Opening local repository $repoSlug at $checkoutPath")
         val existingProject = ProjectUtil.findAndFocusExistingProjectForPath(checkoutPath)
         if (existingProject != null) {
             LOG.info("Focused the open project for local repository $repoSlug")
+            addWorktreeToRecentProjectsGroup(checkoutPath = checkoutPath)
             return OpenedProject(
                 project = existingProject,
                 wasAlreadyOpen = true
             )
         }
-        val options = OpenProjectTask.build().withForceOpenInNewFrame(true)
+        val options = OpenProjectTask { forceOpenInNewFrame = true }
         val openedProject = ProjectUtil.openOrImportAsync(
             file = checkoutPath,
             options = options
@@ -42,9 +44,21 @@ object LocalRepositoryProjectOpener {
             LOG.warn("Could not open local repository $repoSlug at $checkoutPath")
             return null
         }
+        addWorktreeToRecentProjectsGroup(checkoutPath = checkoutPath)
         return OpenedProject(
             project = openedProject,
             wasAlreadyOpen = false
+        )
+    }
+
+    /**
+     * Groups the pull request worktrees in Recent Projects. Plain source clones are ignored by
+     * [PullRequestWorktreeRecentProjects.addToGroup], so this is safe for every checkout this object opens.
+     */
+    private fun addWorktreeToRecentProjectsGroup(checkoutPath: Path) {
+        PullRequestWorktreeRecentProjects.getInstance().addToGroup(
+            worktreePath = checkoutPath,
+            groupName = BbCloudBundle.message("recentProjects.group.name")
         )
     }
 }

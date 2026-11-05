@@ -6,6 +6,7 @@ import com.github.fnunezkanut.bbcloud.BbCloudBundle
 import com.github.fnunezkanut.bbcloud.bitbucket.ItemCount
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestState
 import com.github.fnunezkanut.bbcloud.git.BranchDiffLineTotals
+import com.github.fnunezkanut.bbcloud.git.PrBranchRole
 
 /**
  * Immutable state for the Jewel pull-request detail header. A null [commitsBehind] hides the corresponding affordance,
@@ -19,14 +20,23 @@ data class PullRequestHeaderUiState(val commitsBehind: HeaderCommitsBehind? = nu
 
 data class HeaderCommitsBehind(val text: String)
 
+/** One line of the red warning: the branch it is about and the already-formatted text. */
+data class LocalBranchBehindLine(val role: PrBranchRole, val text: String)
+
 /**
- * The red "local PR branch is behind remote" banner state.
+ * The red "local PR branches are behind Bitbucket" warning state.
  *
- * A non-null value shows the banner; [updateInProgress] disables the update link while a pull or a page reload runs
- * (decision 7a). [prefix] is the already-formatted text before the link, and [updateLinkText] the link label
- * (decision 10a).
+ * A non-null value shows the warning; [updateInProgress] disables the update link while an update or a page reload
+ * runs. All texts are already formatted: a [title], one line per behind branch, an [explanation], and the
+ * [updateLinkText] of the single link that updates every branch that is behind.
  */
-data class HeaderLocalBehindRemote(val prefix: String, val updateLinkText: String, val updateInProgress: Boolean = false)
+data class HeaderLocalBehindRemote(
+    val title: String,
+    val lines: List<LocalBranchBehindLine>,
+    val explanation: String,
+    val updateLinkText: String,
+    val updateInProgress: Boolean = false
+)
 
 data class HeaderLinesChanged(val emoji: String, val addedText: String, val removedText: String, val tooltip: String) {
     companion object {
@@ -94,29 +104,16 @@ class PullRequestHeaderViewModel {
     }
 
     /**
-     * Shows the red local-behind-remote banner for a count of [commitsBehind] commits (decision 10a + count). The
-     * count is rendered through `main.branch.count.truncated` when [isTruncated] is set, mirroring the orange line.
-     * Showing the banner resets the update-in-progress flag so a fresh check always re-enables the link.
+     * Shows the red local-behind-remote warning. Showing a fresh warning resets the update-in-progress flag so a new
+     * check always re-enables the link; an equal state is not written again, which avoids recomposition churn from
+     * the background poll.
      */
-    fun showLocalBehindRemote(commitsBehind: Int, isTruncated: Boolean = false) {
-        if (commitsBehind <= 0) {
-            clearLocalBehindRemote()
+    fun showLocalBehindRemote(warning: HeaderLocalBehindRemote) {
+        val fresh = warning.copy(updateInProgress = false)
+        if (state.value.localBehindRemote == fresh) {
             return
         }
-        val countText = if (isTruncated) {
-            BbCloudBundle.message("main.branch.count.truncated", commitsBehind)
-        } else {
-            commitsBehind.toString()
-        }
-        val prefix = BbCloudBundle.message("main.branch.localBehindRemote.prefix", countText, commitsBehind)
-        val updateLinkText = BbCloudBundle.message("main.branch.localBehindRemote.updateLink")
-        state.value = state.value.copy(
-            localBehindRemote = HeaderLocalBehindRemote(
-                prefix = prefix,
-                updateLinkText = updateLinkText,
-                updateInProgress = false
-            )
-        )
+        state.value = state.value.copy(localBehindRemote = fresh)
     }
 
     fun clearLocalBehindRemote() {

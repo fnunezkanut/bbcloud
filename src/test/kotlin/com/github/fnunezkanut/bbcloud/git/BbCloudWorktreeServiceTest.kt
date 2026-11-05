@@ -1,8 +1,13 @@
 package com.github.fnunezkanut.bbcloud.git
 
+import com.github.fnunezkanut.bbcloud.project.PullRequestWorktreeRecentProjects
+import com.github.fnunezkanut.bbcloud.project.RecentProjectsGateway
+import com.intellij.ide.ProjectGroup
 import com.intellij.openapi.project.Project
 import git4idea.commands.GitCommand
 import io.kotest.assertions.assertSoftly
+import io.kotest.matchers.collections.shouldBeEmpty
+import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
 import kotlinx.coroutines.runBlocking
@@ -11,6 +16,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
+import kotlin.io.path.invariantSeparatorsPathString
 
 /**
  * Drives [BbCloudWorktreeService] through its reconciliation logic by injecting a scripted [GitCommandRunner] and a
@@ -78,7 +84,8 @@ class BbCloudWorktreeServiceTest {
                 worktreePath = worktreePath,
                 remoteUrl = "https://example.invalid/clone.git",
                 prNumber = 9,
-                sourceBranch = prBranch
+                sourceBranch = prBranch,
+                destinationBranch = "main"
             )
         }
 
@@ -112,13 +119,59 @@ class BbCloudWorktreeServiceTest {
                 worktreePath = worktreePath,
                 remoteUrl = "https://example.invalid/clone.git",
                 prNumber = 9,
-                sourceBranch = prBranch
+                sourceBranch = prBranch,
+                destinationBranch = "main"
             )
         }
 
         // THEN
         val failed = result.shouldBeInstanceOf<WorktreeSetupResult.Failed>()
         failed.output shouldBe "some other git error"
+    }
+
+    @Test
+    fun `ensureWorktree - should still return Success when the branch sync after a successful add fails`() {
+        // GIVEN a fresh add that succeeds, while every git command of the branch sync fails or throws
+        val service = serviceWith { _, command, parameters ->
+            when {
+                command == GitCommand.FETCH && parameters.any { parameter -> parameter.startsWith("+refs/heads/") } -> {
+                    throw IllegalStateException("network down")
+                }
+                command == GitCommand.FETCH -> {
+                    success()
+                }
+                command == GitCommand.WORKTREE && parameters.firstOrNull() == "prune" -> {
+                    success()
+                }
+                command == GitCommand.WORKTREE && parameters.firstOrNull() == "list" -> {
+                    success()
+                }
+                command == GitCommand.REV_PARSE && parameters.contains("--verify") -> {
+                    failure("not a branch")
+                }
+                command == GitCommand.WORKTREE && parameters.firstOrNull() == "add" -> {
+                    success()
+                }
+                else -> {
+                    failure("unexpected command $command $parameters")
+                }
+            }
+        }
+
+        // WHEN
+        val result = runBlocking {
+            service.ensureWorktree(
+                sourceCheckoutRoot = sourceRoot,
+                worktreePath = worktreePath,
+                remoteUrl = "https://example.invalid/clone.git",
+                prNumber = 9,
+                sourceBranch = prBranch,
+                destinationBranch = "main"
+            )
+        }
+
+        // THEN the sync is best-effort and does not change the result
+        result.shouldBeInstanceOf<WorktreeSetupResult.Success>()
     }
 
     @Test
@@ -143,7 +196,8 @@ class BbCloudWorktreeServiceTest {
                 worktreePath = worktreePath,
                 remoteUrl = "https://example.invalid/clone.git",
                 prNumber = 9,
-                sourceBranch = prBranch
+                sourceBranch = prBranch,
+                destinationBranch = "main"
             )
         }
 
@@ -187,7 +241,8 @@ class BbCloudWorktreeServiceTest {
                 worktreePath = existingWorktree,
                 remoteUrl = "https://example.invalid/clone.git",
                 prNumber = 9,
-                sourceBranch = prBranch
+                sourceBranch = prBranch,
+                destinationBranch = "main"
             )
         }
 
@@ -197,5 +252,177 @@ class BbCloudWorktreeServiceTest {
             branchName shouldBe prBranch
             sourceCheckoutPath shouldBe source.toAbsolutePath().normalize()
         }
+    }
+
+    @Test
+    fun `removeWorktree - should forget the worktree in recent projects after a successful removal`(
+        @TempDir tempDir: Path
+    ) {
+        // GIVEN an existing pull request worktree folder, and git remove and prune that both succeed
+        val workTreeDirectory = tempDir.resolve(".worktrees")
+        val worktree = workTreeDirectory.resolve("clone--pr-9").also { Files.createDirectories(it) }
+        val gateway = RecordingRecentProjectsGateway()
+        val service = serviceWithRecentProjects(gateway = gateway) { _, command, parameters ->
+            if (command == GitCommand.WORKTREE && parameters.firstOrNull() in setOf("remove", "prune")) {
+                success()
+            } else {
+                failure("unexpected command $command $parameters")
+            }
+        }
+
+        // WHEN
+        val result = runBlocking {
+            service.removeWorktree(sourceCheckoutRoot = sourceRoot, worktreePath = worktree, workTreeDirectory = workTreeDirectory)
+        }
+
+        // THEN the removed worktree is forgotten
+        assertSoftly {
+            result shouldBe WorktreeRemovalResult.Success
+            gateway.removedPaths shouldContainExactly listOf(worktree.toAbsolutePath().normalize().invariantSeparatorsPathString)
+        }
+    }
+
+    @Test
+    fun `removeWorktree - should forget the worktree when the folder no longer exists`(
+        @TempDir tempDir: Path
+    ) {
+        // GIVEN a worktree folder that was already deleted by hand, and a prune that succeeds
+        val workTreeDirectory = tempDir.resolve(".worktrees")
+        val worktree = workTreeDirectory.resolve("clone--pr-9")
+        val gateway = RecordingRecentProjectsGateway()
+        val service = serviceWithRecentProjects(gateway = gateway) { _, command, parameters ->
+            if (command == GitCommand.WORKTREE && parameters.firstOrNull() == "prune") {
+                success()
+            } else {
+                failure("unexpected command $command $parameters")
+            }
+        }
+
+        // WHEN
+        val result = runBlocking {
+            service.removeWorktree(sourceCheckoutRoot = sourceRoot, worktreePath = worktree, workTreeDirectory = workTreeDirectory)
+        }
+
+        // THEN the stale entry is still forgotten
+        assertSoftly {
+            result shouldBe WorktreeRemovalResult.Success
+            gateway.removedPaths shouldContainExactly listOf(worktree.toAbsolutePath().normalize().invariantSeparatorsPathString)
+        }
+    }
+
+    @Test
+    fun `removeWorktree - should not forget the worktree when git removal fails`(
+        @TempDir tempDir: Path
+    ) {
+        // GIVEN an existing worktree folder where git remove fails
+        val workTreeDirectory = tempDir.resolve(".worktrees")
+        val worktree = workTreeDirectory.resolve("clone--pr-9").also { Files.createDirectories(it) }
+        val gateway = RecordingRecentProjectsGateway()
+        val service = serviceWithRecentProjects(gateway = gateway) { _, command, parameters ->
+            if (command == GitCommand.WORKTREE && parameters.firstOrNull() == "remove") {
+                failure("fatal: locked worktree")
+            } else {
+                success()
+            }
+        }
+
+        // WHEN
+        val result = runBlocking {
+            service.removeWorktree(sourceCheckoutRoot = sourceRoot, worktreePath = worktree, workTreeDirectory = workTreeDirectory)
+        }
+
+        // THEN the entry stays so the user can still reach the worktree
+        assertSoftly {
+            result.shouldBeInstanceOf<WorktreeRemovalResult.Failed>()
+            gateway.removedPaths.shouldBeEmpty()
+        }
+    }
+
+    @Test
+    fun `removeWorktree - should not forget anything for a refused unexpected path`(
+        @TempDir tempDir: Path
+    ) {
+        // GIVEN a folder that is not directly under the work tree root
+        val workTreeDirectory = tempDir.resolve(".worktrees")
+        val unexpectedWorktree = tempDir.resolve("elsewhere/clone--pr-9").also { Files.createDirectories(it) }
+        val gateway = RecordingRecentProjectsGateway()
+        val service = serviceWithRecentProjects(gateway = gateway) { _, _, _ -> success() }
+
+        // WHEN
+        val result = runBlocking {
+            service.removeWorktree(sourceCheckoutRoot = sourceRoot, worktreePath = unexpectedWorktree, workTreeDirectory = workTreeDirectory)
+        }
+
+        // THEN the removal is refused and Recent Projects is untouched
+        assertSoftly {
+            result.shouldBeInstanceOf<WorktreeRemovalResult.Failed>()
+            gateway.removedPaths.shouldBeEmpty()
+        }
+    }
+
+    private fun serviceWithRecentProjects(
+        gateway: RecentProjectsGateway,
+        script: (Path, GitCommand, List<String>) -> GitCommandResult
+    ): BbCloudWorktreeService {
+        return BbCloudWorktreeService.forTesting(
+            gitRunner = ScriptedGitRunner(script = script),
+            openProjectLocator = noProjectLocator,
+            recentProjects = PullRequestWorktreeRecentProjects(gateway = gateway)
+        )
+    }
+
+    /** Records the paths removed from Recent Projects. These tests never create groups, so group lookups find nothing. */
+    private class RecordingRecentProjectsGateway : RecentProjectsGateway {
+        val removedPaths = mutableListOf<String>()
+
+        override fun findGroup(name: String): ProjectGroup? {
+            return null
+        }
+
+        override fun addGroup(group: ProjectGroup) {
+            throw IllegalStateException("addGroup is not expected in removal tests")
+        }
+
+        override fun removeGroup(group: ProjectGroup) {
+            throw IllegalStateException("removeGroup is not expected without a group")
+        }
+
+        override fun moveProjectToGroup(path: String, group: ProjectGroup) {
+            throw IllegalStateException("moveProjectToGroup is not expected in removal tests")
+        }
+
+        override fun removePath(path: String) {
+            removedPaths.add(path)
+        }
+    }
+
+    @Test
+    fun `registeredWorktrees - should parse registered paths from porcelain output`() {
+        // GIVEN
+        val service = serviceWith { _, command, parameters ->
+            if (command == GitCommand.WORKTREE && parameters == listOf("list", "--porcelain")) {
+                success("worktree /tmp/clone\nHEAD abc\nbranch refs/heads/main\n\nworktree /tmp/.worktrees/clone--pr-9\nHEAD def\n")
+            } else {
+                failure("unexpected command $command $parameters")
+            }
+        }
+
+        // WHEN
+        val paths = runBlocking { service.registeredWorktrees(sourceCheckoutRoot = sourceRoot) }
+
+        // THEN
+        paths shouldContainExactly listOf(Path.of("/tmp/clone"), Path.of("/tmp/.worktrees/clone--pr-9"))
+    }
+
+    @Test
+    fun `registeredWorktrees - should return an empty list when git fails`() {
+        // GIVEN
+        val service = serviceWith { _, _, _ -> failure("fatal: not a git repository") }
+
+        // WHEN
+        val paths = runBlocking { service.registeredWorktrees(sourceCheckoutRoot = sourceRoot) }
+
+        // THEN
+        paths.shouldBeEmpty()
     }
 }

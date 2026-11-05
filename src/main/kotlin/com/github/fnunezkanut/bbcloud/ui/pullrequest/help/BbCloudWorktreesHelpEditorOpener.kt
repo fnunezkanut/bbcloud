@@ -3,6 +3,7 @@ package com.github.fnunezkanut.bbcloud.ui.pullrequest.help
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.fileEditor.FileEditorManager
+import com.intellij.openapi.fileEditor.FileEditorOpenRequest
 import com.intellij.openapi.project.Project
 
 /** Opens the single `help.pr` Work Trees help tab for one project, or focuses the tab when it is already open. */
@@ -13,11 +14,17 @@ class BbCloudWorktreesHelpEditorOpener(private val project: Project) {
         val existing = fileManager.openFiles.filterIsInstance<BbCloudWorktreesHelpVirtualFile>().firstOrNull()
         if (existing != null) {
             LOG.debug("Focusing the existing Work Trees help tab")
-            fileManager.openFile(existing, true)
+            fileManager.requestOpenFile(
+                existing,
+                FileEditorOpenRequest.withFocus(requestFocus = true)
+            )
             return
         }
         LOG.debug("Opening a new Work Trees help tab")
-        fileManager.openFile(BbCloudWorktreesHelpVirtualFile(project = project), true)
+        fileManager.requestOpenFile(
+            BbCloudWorktreesHelpVirtualFile(project = project),
+            FileEditorOpenRequest.withFocus(requestFocus = true)
+        )
     }
 
     companion object {

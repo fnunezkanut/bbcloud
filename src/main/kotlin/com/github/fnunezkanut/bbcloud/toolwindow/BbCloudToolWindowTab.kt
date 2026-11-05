@@ -1,7 +1,7 @@
 package com.github.fnunezkanut.bbcloud.toolwindow
 
-/** The four permanent tabs of the Bitbucket Cloud PR Review tool window, in header order. */
-enum class BbCloudToolWindowTab { ProjectPrs, WorkspacePrs, WorkspaceWatchedProjects, Settings }
+/** The five permanent tabs of the Bitbucket Cloud PR Review tool window, in header order. */
+enum class BbCloudToolWindowTab { ProjectPrs, WorkspacePrs, WorkspaceWatchedProjects, RecentProjects, Settings }
 
 object BbCloudToolWindowTabResolver {
     /**

@@ -15,6 +15,7 @@ import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.FileEditorManagerEvent
 import com.intellij.openapi.fileEditor.FileEditorManagerListener
+import com.intellij.openapi.fileEditor.FileEditorOpenRequest
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.ui.EditorNotifications
@@ -70,15 +71,20 @@ class BbCloudPullRequestEditorOpener(private val project: Project) : Disposable 
         managedFile.putUserData(BbCloudPullRequestVirtualFile.BRANCH_NAME_KEY, branchName)
         managedFile.putUserData(BbCloudPullRequestVirtualFile.ORGANIZATION_URL_KEY, resolvedFile.organizationUrl)
         val fileManager = FileEditorManager.getInstance(project)
-        fileManager.openFile(managedFile, true)
-        fileManager.updateFilePresentation(managedFile)
+        fileManager.requestOpenFile(
+            managedFile,
+            FileEditorOpenRequest.withFocus(requestFocus = true)
+        ).thenRun { fileManager.updateFilePresentation(managedFile) }
         // The platform may select a restored editor after this open call; re-select the PR tab on the next EDT cycle.
         // This focus re-assertion is verified manually in the sandbox IDE because it is a platform interaction.
         ApplicationManager.getApplication().invokeLater {
             if (project.isDisposed) {
                 return@invokeLater
             }
-            FileEditorManager.getInstance(project).openFile(managedFile, true)
+            FileEditorManager.getInstance(project).requestOpenFile(
+                managedFile,
+                FileEditorOpenRequest.withFocus(requestFocus = true)
+            )
         }
         LOG.debug("Opened pull request editor for #${summary.id}")
         return true
@@ -103,7 +109,10 @@ class BbCloudPullRequestEditorOpener(private val project: Project) : Disposable 
                     openFile.pullRequestPath.projectHash == project.locationHash
             }
         if (alreadyOpen != null) {
-            fileManager.openFile(alreadyOpen, true)
+            fileManager.requestOpenFile(
+                alreadyOpen,
+                FileEditorOpenRequest.withFocus(requestFocus = true)
+            )
             LOG.info("Selected the already-open page of pull request #$pullRequestId")
             return PullRequestPageOpenResult.SelectedExisting
         }
@@ -113,8 +122,10 @@ class BbCloudPullRequestEditorOpener(private val project: Project) : Disposable 
         }
         // The summary is not set here on purpose: the session's restored-editor path fetches the details and binds the
         // page, which loads the conversation with the new comment and forces a scroll to the top.
-        fileManager.openFile(resolvedFile.file, true)
-        fileManager.updateFilePresentation(resolvedFile.file)
+        fileManager.requestOpenFile(
+            resolvedFile.file,
+            FileEditorOpenRequest.withFocus(requestFocus = true)
+        ).thenRun { fileManager.updateFilePresentation(resolvedFile.file) }
         LOG.info("Opened the page of pull request #$pullRequestId")
         return PullRequestPageOpenResult.OpenedNew
     }

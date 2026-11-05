@@ -17,7 +17,9 @@ import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestDetails
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestInlineCommentIndex
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestPathMatcher
 import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestState
+import com.github.fnunezkanut.bbcloud.bitbucket.PullRequestSummary
 import com.github.fnunezkanut.bbcloud.config.BbCloudConfigurationService
+import com.github.fnunezkanut.bbcloud.git.BbCloudPrBranchSyncService
 import com.github.fnunezkanut.bbcloud.git.BbCloudPullRequestBranchDiffService
 import com.github.fnunezkanut.bbcloud.git.BranchDiffResult
 import com.github.fnunezkanut.bbcloud.git.FileLineCount
@@ -106,6 +108,12 @@ class BbCloudWorktreePullRequestContext(private val project: Project, private va
     private val reloadLock = Any()
     private val commentLoadLock = Any()
     private var reloadJob: Job? = null
+
+    /**
+     * Whether the next resolution must also sync the pull request branches. Sticky under [reloadLock], so a later
+     * reload that cancels a pending sync reload does not lose the sync.
+     */
+    private var pendingSyncBranches = false
     private var commentLoadJob: Job? = null
 
     /** Looks up the mentions that the last comment load could not name from memory. */
@@ -547,20 +555,34 @@ class BbCloudWorktreePullRequestContext(private val project: Project, private va
      * The reload of a running one is cancelled, so the last call wins, and the resolution runs off the EDT because
      * it waits for Bitbucket and for git.
      */
-    fun reload(reason: String) {
+    fun reload(reason: String, syncBranches: Boolean = false) {
         if (project.isDisposed) {
             return
         }
         synchronized(reloadLock) {
+            pendingSyncBranches = pendingSyncBranches || syncBranches
             reloadJob?.cancel()
             reloadJob = coroutineScope.launch {
                 delay(RELOAD_DEBOUNCE)
-                resolve(reason = reason)
+                val shouldSyncBranches = synchronized(reloadLock) {
+                    val pending = pendingSyncBranches
+                    pendingSyncBranches = false
+                    pending
+                }
+                try {
+                    resolve(reason = reason, syncBranches = shouldSyncBranches)
+                } catch (exception: CancellationException) {
+                    // A reload that replaced this one must still sync, so hand the request on.
+                    if (shouldSyncBranches) {
+                        synchronized(reloadLock) { pendingSyncBranches = true }
+                    }
+                    throw exception
+                }
             }
         }
     }
 
-    private suspend fun resolve(reason: String) {
+    private suspend fun resolve(reason: String, syncBranches: Boolean) {
         // Forget the previous PR's people; updatePullRequestPeople refills them once a fresh details load succeeds.
         pullRequestPeople = emptyList()
         try {
@@ -609,6 +631,9 @@ class BbCloudWorktreePullRequestContext(private val project: Project, private va
             // The resolve reached a successful Open summary (draft pull requests are Open too), so the blue bar may
             // show even if the binding below stays null because the HEAD is not part of the pull request (decision 3a).
             setPullRequestStatus(known = true, open = true)
+            if (syncBranches) {
+                syncPullRequestBranches(summary = summary, reason = reason)
+            }
             val head = withContext(Dispatchers.IO) { branchDiffService.readHead(project) }
             if (head == null) {
                 LOG.info("Review bar context unavailable for #$pullRequestId: the work tree HEAD could not be read")
@@ -778,6 +803,21 @@ class BbCloudWorktreePullRequestContext(private val project: Project, private va
                 destinationBranch = destinationBranch,
                 sourceBranch = sourceBranch
             )
+        }
+    }
+
+    /** Best-effort: a failed sync must never prevent the binding, so every failure is logged at debug and dropped. */
+    private suspend fun syncPullRequestBranches(summary: PullRequestSummary, reason: String) {
+        try {
+            BbCloudPrBranchSyncService.getInstance(project).syncAutomatically(
+                sourceBranch = summary.sourceBranch,
+                destinationBranch = summary.destinationBranch,
+                reason = reason
+            )
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            LOG.debug("Syncing the pull request branches failed ($reason)", exception)
         }
     }
 

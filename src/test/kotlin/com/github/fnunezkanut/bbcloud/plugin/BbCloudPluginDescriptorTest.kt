@@ -44,10 +44,12 @@ class BbCloudPluginDescriptorTest {
                 "com.github.fnunezkanut.bbcloud.review.BbCloudWorktreePullRequestContext",
                 "com.github.fnunezkanut.bbcloud.review.WorktreeTodoBannerViewModel",
                 "com.github.fnunezkanut.bbcloud.review.WorktreePullRequestPageReloader",
+                "com.github.fnunezkanut.bbcloud.git.BbCloudPrBranchSyncService",
                 "com.github.fnunezkanut.bbcloud.ui.diff.BbCloudPullRequestDiffCommentService",
                 "com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.BbCloudPullRequestEditorOpener",
                 "com.github.fnunezkanut.bbcloud.ui.pullrequest.create.BbCloudNewPullRequestEditorOpener",
                 "com.github.fnunezkanut.bbcloud.ui.pullrequest.help.BbCloudWorktreesHelpEditorOpener",
+                "com.github.fnunezkanut.bbcloud.ui.markdowndiff.BbCloudMarkdownDiffEditorOpener",
                 "com.github.fnunezkanut.bbcloud.ui.BbCloudToolWindowPanel"
             )
         }
@@ -80,10 +82,12 @@ class BbCloudPluginDescriptorTest {
                 "com.github.fnunezkanut.bbcloud.review.BbCloudWorktreePullRequestContext",
                 "com.github.fnunezkanut.bbcloud.review.WorktreeTodoBannerViewModel",
                 "com.github.fnunezkanut.bbcloud.review.WorktreePullRequestPageReloader",
+                "com.github.fnunezkanut.bbcloud.git.BbCloudPrBranchSyncService",
                 "com.github.fnunezkanut.bbcloud.ui.diff.BbCloudPullRequestDiffCommentService",
                 "com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.BbCloudPullRequestEditorOpener",
                 "com.github.fnunezkanut.bbcloud.ui.pullrequest.create.BbCloudNewPullRequestEditorOpener",
                 "com.github.fnunezkanut.bbcloud.ui.pullrequest.help.BbCloudWorktreesHelpEditorOpener",
+                "com.github.fnunezkanut.bbcloud.ui.markdowndiff.BbCloudMarkdownDiffEditorOpener",
                 "com.github.fnunezkanut.bbcloud.ui.BbCloudToolWindowPanel"
             )
         }
@@ -131,7 +135,8 @@ class BbCloudPluginDescriptorTest {
             fileEditorProviders.map { it.getAttribute("implementationClass") } shouldContainExactly listOf(
                 "com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.BbCloudPullRequestFileEditorProvider",
                 "com.github.fnunezkanut.bbcloud.ui.pullrequest.create.BbCloudNewPullRequestFileEditorProvider",
-                "com.github.fnunezkanut.bbcloud.ui.pullrequest.help.BbCloudWorktreesHelpFileEditorProvider"
+                "com.github.fnunezkanut.bbcloud.ui.pullrequest.help.BbCloudWorktreesHelpFileEditorProvider",
+                "com.github.fnunezkanut.bbcloud.ui.markdowndiff.BbCloudMarkdownDiffFileEditorProvider"
             )
             titleProviders.map { it.getAttribute("implementationClass") } shouldContainExactly listOf(
                 "com.github.fnunezkanut.bbcloud.ui.pullrequest.editor.BbCloudPullRequestEditorTabTitleProvider"

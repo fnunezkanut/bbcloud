@@ -71,7 +71,7 @@ object PullRequestWorktreeResolver {
      * The existing source clone directory, or null when none exists. The watched mapping's folder wins when it exists;
      * otherwise the conventional `$projectsDirectory/$repoSlug` directory is used when it exists on disk.
      */
-    private fun resolveSourceCheckout(
+    fun resolveSourceCheckout(
         mappings: List<WatchedProjectMapping>,
         projectsDirectory: String?,
         workspace: String,

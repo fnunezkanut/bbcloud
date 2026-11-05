@@ -1,5 +1,6 @@
 package com.github.fnunezkanut.bbcloud.ui.pullrequest.editor
 
+import com.github.fnunezkanut.bbcloud.review.PageReloadRequest
 import com.github.fnunezkanut.bbcloud.review.WorktreePullRequestPageReloader
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
@@ -25,7 +26,7 @@ class BbCloudPullRequestPageRevealer(private val project: Project) {
             LOG.info("Revealing the newest activity of pull request #$pullRequestId after adding a comment from a deleted file")
             when (project.service<BbCloudPullRequestEditorOpener>().openById(pullRequestId = pullRequestId)) {
                 PullRequestPageOpenResult.SelectedExisting -> {
-                    WorktreePullRequestPageReloader.getInstance(project).requestReload(revealNewestActivity = true)
+                    WorktreePullRequestPageReloader.getInstance(project).requestReload(PageReloadRequest(revealNewestActivity = true))
                 }
                 PullRequestPageOpenResult.OpenedNew -> {
                     // The first load of the freshly opened page already includes the new comment and scrolls to the top.
